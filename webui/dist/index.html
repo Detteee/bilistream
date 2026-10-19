@@ -1305,28 +1305,28 @@
           </article>
         </div>
 
-        <!-- Holodex ---------------------------------------------------- -->
-        <section class="panel is-foldable" id="holodex-section">
+        <!-- 直播与预告 -------------------------------------------------- -->
+        <section class="panel is-foldable" id="streams-section">
           <div class="panel__head">
-            <h2 class="panel__title" id="holodex-heading">
+            <h2 class="panel__title" id="streams-heading">
               <img class="panel__title-mark" src="icon-blue.png" alt="" width="20" height="20">
               直播与预告
             </h2>
             <div class="panel__actions">
-              <button id="refreshHolodexBtn" class="btn-ghost icon-btn compact-btn" type="button" title="刷新"
+              <button id="refreshStreamsBtn" class="btn-ghost icon-btn compact-btn" type="button" title="刷新"
                 aria-label="刷新">
-                <svg class="btn-icon" id="refreshHolodexIcon" aria-hidden="true"><use href="#i-refresh" /></svg>
+                <svg class="btn-icon" id="refreshStreamsIcon" aria-hidden="true"><use href="#i-refresh" /></svg>
               </button>
-              <button id="holodexFoldBtn" class="btn-ghost icon-btn compact-btn panel__fold-btn" type="button"
-                title="折叠" aria-label="折叠" aria-expanded="true" aria-controls="holodex-container">
+              <button id="streamsFoldBtn" class="btn-ghost icon-btn compact-btn panel__fold-btn" type="button"
+                title="折叠" aria-label="折叠" aria-expanded="true" aria-controls="streams-container">
                 <svg class="btn-icon" aria-hidden="true"><use href="#i-chevron" /></svg>
               </button>
             </div>
           </div>
 
-          <div class="panel__body" id="holodex-container">
+          <div class="panel__body" id="streams-container">
 
-            <div id="holodex-init-hint" class="empty-state">正在读取 Holodex 配置...</div>
+            <div id="streams-init-hint" class="empty-state">正在读取配置...</div>
 
             <div id="holodex-api-config" class="holodex-api-config">
               <h3 class="holodex-api-title">配置 Holodex API Key</h3>
@@ -1352,8 +1352,8 @@
               </div>
             </div>
 
-            <div id="holodex-streams-section">
-              <div id="holodex-toolbar" class="holodex-toolbar">
+            <div id="streams-list-section">
+              <div id="streams-toolbar" class="streams-toolbar">
                 <div id="holodex-auth-bar" class="holodex-auth-bar">
                   <button type="button" id="holodex-favorites-btn" class="holodex-favorites-btn" title="使用 Holodex 收藏夹">
                     <span class="holodex-heart-icon" aria-hidden="true">
@@ -1379,8 +1379,8 @@
                 </button>
               </div>
 
-              <div id="holodex-status" class="holodex-status">加载中...</div>
-              <div id="holodex-streams" class="holodex-streams-grid"></div>
+              <div id="streams-status" class="streams-status">加载中...</div>
+              <div id="streams-list" class="streams-grid"></div>
             </div>
           </div>
         </section>

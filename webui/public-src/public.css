@@ -278,25 +278,25 @@ html.light-theme {
 
 /* Why 切换 is greyed: a keyword block names the words, other reasons just
    say so. Muted so it sits with the meta line rather than shouting. */
-.holodex-stream-note {
+.stream-note {
   color: var(--text-mute);
   font-size: var(--fs-sm);
 }
 
 /* The 切换 button is present but inert when a stream cannot be requested, so
    viewers can see the difference between "not offered" and "not there". */
-.holodex-stream-btn:disabled,
-.holodex-stream-btn[aria-disabled="true"] {
+.stream-btn:disabled,
+.stream-btn[aria-disabled="true"] {
   filter: grayscale(1);
   opacity: 0.5;
   cursor: not-allowed;
 }
 
-.holodex-stream-watch svg {
+.stream-watch svg {
   fill: currentColor;
 }
 
-.holodex-stream-btn svg {
+.stream-btn svg {
   fill: none;
   stroke: currentColor;
 }

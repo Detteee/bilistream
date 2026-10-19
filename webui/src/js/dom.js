@@ -38,7 +38,7 @@ function createStreamThumbnail(src) {
   image.decoding = 'async';
   image.addEventListener('error', () => {
     const placeholder = document.createElement('div');
-    placeholder.className = 'holodex-stream-thumb-placeholder';
+    placeholder.className = 'stream-thumb-placeholder';
     placeholder.textContent = '封面暂时不可用';
     image.replaceWith(placeholder);
   }, { once: true });

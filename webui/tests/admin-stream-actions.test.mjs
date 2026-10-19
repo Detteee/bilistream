@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { toCardModel } from '../src/js/stream-model.js';
 import {
   buildHolodexAddChannelPayload,
-  createHolodexSwitchPayload,
+  createSwitchPayload,
   hasConfiguredChannel,
   parseTwitchLoginFromLink,
   sameChannelCandidate,
@@ -46,7 +46,7 @@ globalThis.document = {
   addEventListener() {}, getElementById() { return null; }, querySelector() { return null; },
   createElement: element, createElementNS: element,
 };
-const { createStreamCard, readHolodexStreamActionData } = await import('../src/js/overview.js');
+const { createStreamCard, readStreamActionData } = await import('../src/js/overview.js');
 
 const fixtures = [
   ['youtube', false, 'https://www.youtube.com/watch?v=example_video_001', null],
@@ -70,17 +70,17 @@ for (const legacy of [false, true]) {
     test(`${legacy ? 'legacy' : 'current'} ${platform} card carries switch and crop action data`, () => {
       const model = toCardModel(rowFor(platform, placeholder, link, legacy));
       const card = createStreamCard(model);
-      const action = readHolodexStreamActionData(card.querySelector('.switch-button'));
+      const action = readStreamActionData(card.querySelector('.switch-button'));
       const expected = {
         channel_id: 'UC_EXAMPLE_001', area_id: 371, title: '示例直播 001',
         topic_id: 'singing', status: 'live', platform,
         twitch_channel_id: twitchId, external_link: link,
       };
-      assert.deepEqual(createHolodexSwitchPayload(toAdminStreamAction(model), 371), expected);
-      assert.deepEqual(createHolodexSwitchPayload({ ...action, twitchId: action.twitchChannelId }, action.suggestedAreaId), expected);
+      assert.deepEqual(createSwitchPayload(toAdminStreamAction(model), 371), expected);
+      assert.deepEqual(createSwitchPayload({ ...action, twitchId: action.twitchChannelId }, action.suggestedAreaId), expected);
       const crop = card.querySelector('.crop-switch-button');
       if (platform === 'niconico') assert.equal(crop, null);
-      else assert.deepEqual(readHolodexStreamActionData(crop), action);
+      else assert.deepEqual(readStreamActionData(crop), action);
     });
   }
 }
@@ -95,8 +95,8 @@ for (const legacy of [false, true]) {
     assert.equal(action.suggestedAreaId, '');
     const card = createStreamCard(model);
     assert.equal(card.querySelector('.crop-switch-button'), null);
-    assert.equal(readHolodexStreamActionData(card.querySelector('.switch-button')).suggestedAreaId, null);
-    assert.deepEqual(createHolodexSwitchPayload(action, 235), {
+    assert.equal(readStreamActionData(card.querySelector('.switch-button')).suggestedAreaId, null);
+    assert.deepEqual(createSwitchPayload(action, 235), {
       channel_id: 'UC_EXAMPLE_001', area_id: 235, title: null,
       topic_id: 'singing', status: 'upcoming', platform: 'twitch',
       twitch_channel_id: 'example_channel_001',
@@ -123,7 +123,7 @@ for (const legacy of [false, true]) {
 }
 
 test('absent action fields serialize as the existing optional POST values', () => {
-  assert.deepEqual(createHolodexSwitchPayload(toAdminStreamAction(toCardModel({})), 235), {
+  assert.deepEqual(createSwitchPayload(toAdminStreamAction(toCardModel({})), 235), {
     channel_id: '', area_id: 235, title: null, topic_id: null, status: null,
     platform: 'youtube', twitch_channel_id: null, external_link: null,
   });

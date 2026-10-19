@@ -547,7 +547,7 @@ mod tests {
         assert_eq!(response.status(), reqwest::StatusCode::OK);
         let body = response.text().await.unwrap();
 
-        assert!(body.contains("id=\"holodex-streams\""));
+        assert!(body.contains("id=\"streams-list\""));
         assert!(body.contains("id=\"cluster-node-list\""));
         // No dashboard chrome: no tab bar and no editing controls.
         assert!(!body.contains("data-view=\"settings\""));

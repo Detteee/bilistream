@@ -33,7 +33,7 @@ export function toAdminStreamAction(model) {
 }
 
 // POST names intentionally differ from the current list vocabulary.
-export function createHolodexSwitchPayload(action, areaId) {
+export function createSwitchPayload(action, areaId) {
   return {
     channel_id: action.channelId,
     area_id: areaId,

@@ -1,11 +1,15 @@
-// holodex.js — the Holodex panel, split out of overview.js.
+// stream-list.js — the 直播与预告 panel, split out of overview.js.
 //
-// Everything panel-specific lives here: its helpers, and the state they mutate.
-// The state is an exported object (`holodexState`) rather than module-level `let`s
-// because ESM imported bindings are read-only, so overview.js could not assign to
-// them. overview.js imports the declarations back, so its public surface is
-// unchanged. What still remains in overview.js is the part that also serves other
-// views (the status/warning wiring and the switch flow).
+// The list itself is the server's stream list (`stream_list`): discovery rows,
+// YouTube, and Holodex merged there. Nothing here fetches Holodex directly; the
+// only Holodex code is the optional account integration, which gates the
+// favorites list and the add-to-channels controls.
+//
+// The state is an exported object (`streamListState`) rather than module-level
+// `let`s because ESM imported bindings are read-only, so overview.js could not
+// assign to them. overview.js imports the declarations back, so its public
+// surface is unchanged. What remains in overview.js is the part that also serves
+// other views (the status/warning wiring and the switch flow).
 
 import {
   buildHolodexAddChannelPayload,
@@ -46,28 +50,22 @@ import {
   toCardModel,
 } from './stream-model.js';
 
-
-
-
-
-
-
-/// The Holodex panel's mutable state, in one place.
+/// The 直播与预告 panel's mutable state, in one place.
 ///
 /// ESM imported bindings are read-only, so the panel's state cannot stay as
 /// module-level `let`s in one file and be assigned from another. Both this module
 /// and `overview.js` therefore read and write it through this object.
-export const holodexState = {
-  holodexCurrentSource: 'channels',
+export const streamListState = {
+  currentSource: 'channels',
   holodexKeyConfigured: false,
-  holodexLastFetchMs: 0,
-  holodexKeepAliveId: null,
-  holodexRefreshGeneration: 0,
-  renderedHolodexCards: new Map(),
-  holodexScheduleDivider: null,
-  holodexOnAir: null,
-  lastHolodexLive: [],
-  lastHolodexScheduled: [],
+  lastFetchMs: 0,
+  keepAliveId: null,
+  refreshGeneration: 0,
+  renderedCards: new Map(),
+  scheduleDivider: null,
+  onAir: null,
+  lastLive: [],
+  lastScheduled: [],
   holodexAuthState: { logged_in: false, username: null, expired: false, skip_jwt_verify: false },
   holodexUseFavorites: false,
   holodexUseFavoritesInitialized: false,
@@ -75,31 +73,31 @@ export const holodexState = {
 
 // The server keeps a list for 10 min after the last request; SSE announces
 // its changes, so an open panel only has to renew that lease.
-const holodexKeepAliveMs = 4 * 60 * 1000;
-const holodexKeepAliveWithoutEventsMs = 60 * 1000;
-const holodexKeepAliveCheckMs = 60 * 1000;
+const streamListKeepAliveMs = 4 * 60 * 1000;
+const streamListKeepAliveWithoutEventsMs = 60 * 1000;
+const streamListKeepAliveCheckMs = 60 * 1000;
 
 // The overview is the visible view of a visible dashboard, and the panel is
 // open with its list shown.
-function isHolodexPanelOpen() {
+function isStreamListPanelOpen() {
   return isDashboardVisible()
     && isViewActive('overview')
-    && !document.getElementById('holodex-section')?.classList.contains('is-collapsed')
-    && !isElementHidden(document.getElementById('holodex-streams-section'));
+    && !document.getElementById('streams-section')?.classList.contains('is-collapsed')
+    && !isElementHidden(document.getElementById('streams-list-section'));
 }
 
-const HOLODEX_STATUS_STATE_CLASSES = [
-  'holodex-status-loading',
-  'holodex-status-warning',
-  'holodex-status-success',
-  'holodex-status-error'
+const STREAM_LIST_STATUS_STATE_CLASSES = [
+  'streams-status-loading',
+  'streams-status-warning',
+  'streams-status-success',
+  'streams-status-error'
 ];
 
-function stopHolodexDurationTicker() {
+function stopStreamListDurationTicker() {
   stopDurationTicker();
 }
 
-function createHolodexStreamSvg(pathData) {
+function createStreamSvg(pathData) {
   const svg = createSvgIcon('0 0 24 24', pathData);
   svg.setAttribute('width', '14');
   svg.setAttribute('height', '14');
@@ -121,7 +119,7 @@ function getHolodexChannelPhotoUrl(model) {
   if (!model.channelId) return '';
   return `https://holodex.net/statics/channelImg/${encodeURIComponent(model.channelId)}/50.png`;
 }
-async function refreshHolodexChannelsData() {
+async function refreshChannelsData() {
   const result = await managementRequest('/api/manage/channels');
   if (!result.success || !result.data) {
     throw new Error(result.message || 'Failed to load channels');
@@ -141,10 +139,10 @@ function createHolodexChannelAddIcon(pathData, title) {
   return button;
 }
 
-function createHolodexStreamActionButton(extraClasses, streamActionData, icon) {
+function createStreamActionButton(extraClasses, streamActionData, icon) {
   const button = document.createElement('button');
   button.type = 'button';
-  button.className = `holodex-stream-btn ${extraClasses}`;
+  button.className = `stream-btn ${extraClasses}`;
   button.dataset.platform = streamActionData.platform;
   button.dataset.channelId = streamActionData.channelId;
   button.dataset.twitchId = streamActionData.twitchId;
@@ -163,7 +161,7 @@ function createHolodexStreamActionButton(extraClasses, streamActionData, icon) {
   if (!crop) button.append(label);
   return button;
 }
-function readHolodexStreamActionData(button) {
+function readStreamActionData(button) {
   return {
     channelId: button.dataset.channelId || '',
     suggestedAreaId: button.dataset.suggestedAreaId ? parseInteger(button.dataset.suggestedAreaId, 0) || null : null,
@@ -176,7 +174,7 @@ function readHolodexStreamActionData(button) {
   };
 }
 
-async function cropAndSwitchToHolodexStream(channelId, suggestedAreaId, title, topicId, status, platform = 'youtube', twitchChannelId = '', externalLink = '') {
+async function cropAndSwitchToStream(channelId, suggestedAreaId, title, topicId, status, platform = 'youtube', twitchChannelId = '', externalLink = '') {
   // First, open crop modal and auto-capture
   const session = openCropConfig(platform, { autoCapture: false });
 
@@ -310,30 +308,30 @@ function setHolodexAddChannelButtonsDisabled(control, disabled) {
 
 // Renews the server's lease: every 4 min, or every minute while SSE is down
 // and can't announce changes.
-function holodexKeepAliveDue(sinceLastFetchMs, eventsHealthy) {
-  return sinceLastFetchMs >= (eventsHealthy ? holodexKeepAliveMs : holodexKeepAliveWithoutEventsMs);
+function streamListKeepAliveDue(sinceLastFetchMs, eventsHealthy) {
+  return sinceLastFetchMs >= (eventsHealthy ? streamListKeepAliveMs : streamListKeepAliveWithoutEventsMs);
 }
 
-function setHolodexStatus(statusDiv, message, stateClass) {
-  statusDiv.classList.remove(...HOLODEX_STATUS_STATE_CLASSES);
+function setStreamListStatus(statusDiv, message, stateClass) {
+  statusDiv.classList.remove(...STREAM_LIST_STATUS_STATE_CLASSES);
   statusDiv.classList.add(stateClass);
   statusDiv.style.display = 'block';
   statusDiv.textContent = message;
 }
 
-function hideHolodexStatus(statusDiv) {
-  statusDiv.classList.remove(...HOLODEX_STATUS_STATE_CLASSES);
+function hideStreamListStatus(statusDiv) {
+  statusDiv.classList.remove(...STREAM_LIST_STATUS_STATE_CLASSES);
   statusDiv.style.display = 'none';
   statusDiv.textContent = '';
 }
 
-function startHolodexDurationTicker() {
-  startDurationTicker(() => isHolodexPanelOpen());
+function startStreamListDurationTicker() {
+  startDurationTicker(() => isStreamListPanelOpen());
 }
 
 function createHolodexAddChannelControls(model) {
   const candidate = toAdminChannelCandidate(model);
-  if (holodexState.holodexCurrentSource !== 'favorites' || !candidate.name
+  if (streamListState.currentSource !== 'favorites' || !candidate.name
     || hasConfiguredChannel(candidate, state.channelsData?.channels)) {
     return null;
   }
@@ -381,13 +379,13 @@ function updateHolodexAuthBar() {
   const logoutBtn = document.getElementById('holodex-logout-btn');
 
   if (skipToggle) {
-    skipToggle.checked = !!holodexState.holodexAuthState.skip_jwt_verify;
+    skipToggle.checked = !!streamListState.holodexAuthState.skip_jwt_verify;
   }
   if (favoritesToggle) {
-    favoritesToggle.checked = !!holodexState.holodexUseFavorites;
+    favoritesToggle.checked = !!streamListState.holodexUseFavorites;
   }
 
-  const loggedIn = holodexState.holodexAuthState.logged_in && !holodexState.holodexAuthState.expired;
+  const loggedIn = streamListState.holodexAuthState.logged_in && !streamListState.holodexAuthState.expired;
   setElementDisplay(authBar, true, 'inline-flex');
   setElementDisplay(loginBtn, false);
   setElementDisplay(heartIcon, loggedIn, 'inline-flex');
@@ -396,12 +394,12 @@ function updateHolodexAuthBar() {
 
   if (loggedIn) {
     if (favoritesLabel) {
-      favoritesLabel.textContent = holodexState.holodexAuthState.username
-        ? `${holodexState.holodexAuthState.username}的收藏`
+      favoritesLabel.textContent = streamListState.holodexAuthState.username
+        ? `${streamListState.holodexAuthState.username}的收藏`
         : '收藏夹';
     }
     if (favoritesBtn) favoritesBtn.title = '管理 Holodex 登录';
-  } else if (holodexState.holodexAuthState.expired) {
+  } else if (streamListState.holodexAuthState.expired) {
     if (favoritesLabel) favoritesLabel.textContent = '⚠️ 重新登录';
     if (favoritesBtn) favoritesBtn.title = 'Holodex 登录已过期';
   } else {
@@ -410,7 +408,7 @@ function updateHolodexAuthBar() {
   }
 
   if (logoutBtn) {
-    logoutBtn.classList.toggle('hidden', !holodexState.holodexAuthState.logged_in);
+    logoutBtn.classList.toggle('hidden', !streamListState.holodexAuthState.logged_in);
   }
 }
 
@@ -418,7 +416,7 @@ function updateHolodexModalHint() {
   const hint = document.getElementById('holodex-modal-auth-hint');
   if (!hint) return;
 
-  if (holodexState.holodexAuthState.logged_in && !holodexState.holodexAuthState.expired) {
+  if (streamListState.holodexAuthState.logged_in && !streamListState.holodexAuthState.expired) {
     hint.classList.add('hidden');
     hint.classList.remove('warning');
     return;
@@ -426,7 +424,7 @@ function updateHolodexModalHint() {
 
   hint.classList.remove('hidden');
 
-  if (holodexState.holodexAuthState.expired) {
+  if (streamListState.holodexAuthState.expired) {
     hint.textContent = '⚠️ JWT 已过期，请重新登录 Holodex 并保存新的 token';
     hint.classList.add('warning');
   } else {
@@ -445,14 +443,14 @@ function markHolodexChannelAdded(channelData) {
   });
 }
 
-function setHolodexCollapsed(collapsed) {
-  const section = document.getElementById('holodex-section');
-  const button = document.getElementById('holodexFoldBtn');
+function setStreamListCollapsed(collapsed) {
+  const section = document.getElementById('streams-section');
+  const button = document.getElementById('streamsFoldBtn');
   if (!section) return;
 
   section.classList.toggle('is-collapsed', collapsed);
-  if (collapsed) stopHolodexDurationTicker();
-  else startHolodexDurationTicker();
+  if (collapsed) stopStreamListDurationTicker();
+  else startStreamListDurationTicker();
   if (button) {
     const label = collapsed ? '展开' : '折叠';
     button.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
@@ -505,22 +503,22 @@ async function confirmHolodexAddChannel(button) {
 }
 
 function createStreamCard(model) {
-  const onAirNow = streamIsOnAir(model, holodexState.holodexOnAir);
+  const onAirNow = streamIsOnAir(model, streamListState.onAir);
   const kind = model.isPlaceholder ? placeholderKind(model) : '';
   const href = watchUrl(model) || (model.id ? `https://www.youtube.com/watch?v=${model.id}` : '');
   const channelHref = getHolodexChannelUrl(model.channelId);
   const streamActionData = toAdminStreamAction(model);
 
   const secondary = document.createElement('div');
-  secondary.className = 'holodex-stream-secondary';
+  secondary.className = 'stream-secondary';
   if (href) {
     secondary.appendChild(createWatchLink(href));
   }
   if (model.isLive && kind !== 'niconico') {
-    secondary.prepend(createHolodexStreamActionButton(
-      'holodex-stream-btn-crop crop-switch-button',
+    secondary.prepend(createStreamActionButton(
+      'stream-btn-crop crop-switch-button',
       streamActionData,
-      createHolodexStreamSvg([
+      createStreamSvg([
         { d: 'M6.13 1L6 16a2 2 0 0 0 2 2h15' },
         { d: 'M1 6.13L16 6a2 2 0 0 1 2 2v15' }
       ])
@@ -530,10 +528,10 @@ function createStreamCard(model) {
   const card = renderCard(model, {
     actions: [
       secondary,
-      createHolodexStreamActionButton(
-        'holodex-stream-btn-switch switch-button',
+      createStreamActionButton(
+        'stream-btn-switch switch-button',
         streamActionData,
-        createHolodexStreamSvg([
+        createStreamSvg([
           { d: 'M22 12c0 6-4.39 10-9.806 10C7.792 22 4.24 19.665 3 16m-1-4C2 6 6.39 2 11.807 2C16.208 2 19.758 4.335 21 8' },
           { d: 'm7 17l-4-1l-1 4M17 7l4 1l1-4' }
         ])
@@ -559,41 +557,41 @@ async function loadHolodexAuthStatus() {
   try {
     const data = await getJson('/api/holodex/auth/status');
     if (!data.success) {
-      holodexState.holodexAuthState = { logged_in: false, username: null, expired: false, skip_jwt_verify: false };
-      holodexState.holodexUseFavorites = false;
-      holodexState.holodexUseFavoritesInitialized = false;
+      streamListState.holodexAuthState = { logged_in: false, username: null, expired: false, skip_jwt_verify: false };
+      streamListState.holodexUseFavorites = false;
+      streamListState.holodexUseFavoritesInitialized = false;
       updateHolodexLoginButton();
       updateHolodexModalHint();
       return;
     }
     const info = data.data || {};
-    holodexState.holodexAuthState = {
+    streamListState.holodexAuthState = {
       logged_in: !!info.logged_in,
       username: info.username || null,
       expired: !!info.expired,
       skip_jwt_verify: !!info.skip_jwt_verify
     };
-    if (holodexState.holodexAuthState.logged_in && !holodexState.holodexAuthState.expired) {
-      if (!holodexState.holodexUseFavoritesInitialized) {
-        holodexState.holodexUseFavorites = true;
-        holodexState.holodexUseFavoritesInitialized = true;
+    if (streamListState.holodexAuthState.logged_in && !streamListState.holodexAuthState.expired) {
+      if (!streamListState.holodexUseFavoritesInitialized) {
+        streamListState.holodexUseFavorites = true;
+        streamListState.holodexUseFavoritesInitialized = true;
       }
     } else {
-      holodexState.holodexUseFavorites = false;
-      holodexState.holodexUseFavoritesInitialized = false;
+      streamListState.holodexUseFavorites = false;
+      streamListState.holodexUseFavoritesInitialized = false;
     }
   } catch (error) {
-    holodexState.holodexAuthState = { logged_in: false, username: null, expired: false, skip_jwt_verify: false };
-    holodexState.holodexUseFavorites = false;
-    holodexState.holodexUseFavoritesInitialized = false;
+    streamListState.holodexAuthState = { logged_in: false, username: null, expired: false, skip_jwt_verify: false };
+    streamListState.holodexUseFavorites = false;
+    streamListState.holodexUseFavoritesInitialized = false;
   }
   updateHolodexLoginButton();
   updateHolodexModalHint();
 }
 
-function renderHolodexCards(container, live, scheduled) {
-  holodexState.lastHolodexLive = live;
-  holodexState.lastHolodexScheduled = scheduled;
+function renderStreamListCards(container, live, scheduled) {
+  streamListState.lastLive = live;
+  streamListState.lastScheduled = scheduled;
   const next = new Map();
   const occurrences = new Map();
   const elements = [];
@@ -603,10 +601,10 @@ function renderHolodexCards(container, live, scheduled) {
     occurrences.set(baseKey, occurrence + 1);
     const key = `${baseKey}:${occurrence}`;
     const { liveViewers, ...content } = stream;
-    const configured = holodexState.holodexCurrentSource === 'favorites' && holodexStreamHasConfiguredChannel(stream);
-    const onAirFlag = streamIsOnAir(stream, holodexState.holodexOnAir) ? '1' : '0';
-    const signature = JSON.stringify([content, holodexState.holodexCurrentSource, configured, onAirFlag]);
-    const previous = holodexState.renderedHolodexCards.get(key);
+    const configured = streamListState.currentSource === 'favorites' && holodexStreamHasConfiguredChannel(stream);
+    const onAirFlag = streamIsOnAir(stream, streamListState.onAir) ? '1' : '0';
+    const signature = JSON.stringify([content, streamListState.currentSource, configured, onAirFlag]);
+    const previous = streamListState.renderedCards.get(key);
     const element = previous?.signature === signature ? previous.element : createStreamCard(stream);
     updateViewerCount(element, liveViewers);
     next.set(key, { signature, element });
@@ -614,12 +612,12 @@ function renderHolodexCards(container, live, scheduled) {
   };
   live.forEach(stream => append(stream));
   if (live.length && scheduled.length) {
-    holodexState.holodexScheduleDivider ??= createScheduleDivider();
-    elements.push(holodexState.holodexScheduleDivider);
+    streamListState.scheduleDivider ??= createScheduleDivider();
+    elements.push(streamListState.scheduleDivider);
   }
   scheduled.forEach(stream => append(stream));
   reconcileChildren(container, elements);
-  holodexState.renderedHolodexCards = next;
+  streamListState.renderedCards = next;
 }
 
 // `force`: the refresh button; the server asks Holodex now instead of
@@ -633,16 +631,16 @@ function openHolodexLoginModal() {
   loadHolodexAuthStatus();
 }
 
-async function refreshHolodexStreams({ force = false } = {}) {
-  const generation = ++holodexState.holodexRefreshGeneration;
-  holodexState.holodexLastFetchMs = Date.now();
+async function refreshStreamList({ force = false } = {}) {
+  const generation = ++streamListState.refreshGeneration;
+  streamListState.lastFetchMs = Date.now();
   // Start continuous spinning animation
-  const button = document.getElementById('refreshHolodexBtn');
-  const icon = document.getElementById('refreshHolodexIcon');
+  const button = document.getElementById('refreshStreamsBtn');
+  const icon = document.getElementById('refreshStreamsIcon');
   setButtonLoading(button, icon, true);
 
-  const statusDiv = document.getElementById('holodex-status');
-  const streamsDiv = document.getElementById('holodex-streams');
+  const statusDiv = document.getElementById('streams-status');
+  const streamsDiv = document.getElementById('streams-list');
   if (!statusDiv || !streamsDiv) {
     setButtonLoading(button, icon, false);
     return;
@@ -651,32 +649,32 @@ async function refreshHolodexStreams({ force = false } = {}) {
   // Refreshing an existing list should not insert a banner above the cards.
   streamsDiv.setAttribute('aria-busy', 'true');
   if (!streamsDiv.childElementCount) {
-    setHolodexStatus(statusDiv, '⏳ 加载中...', 'holodex-status-loading');
+    setStreamListStatus(statusDiv, '⏳ 加载中...', 'streams-status-loading');
   }
 
   try {
-    const favoritesParam = holodexState.holodexUseFavorites ? 'true' : 'false';
+    const favoritesParam = streamListState.holodexUseFavorites ? 'true' : 'false';
     const forceParam = force ? '&force=true' : '';
     const data = await getJson(`/api/holodex/streams?favorites=${favoritesParam}${forceParam}`);
-    if (generation !== holodexState.holodexRefreshGeneration) return;
+    if (generation !== streamListState.refreshGeneration) return;
 
     if (!data.success) {
-      setHolodexStatus(statusDiv, `⚠️ ${data.message}`, 'holodex-status-warning');
+      setStreamListStatus(statusDiv, `⚠️ ${data.message}`, 'streams-status-warning');
       return;
     }
 
     const streams = (data.data || []).map(toCardModel);
     const isFavorites = data.source === 'favorites';
-    holodexState.holodexCurrentSource = data.source || (isFavorites ? 'favorites' : 'channels');
+    streamListState.currentSource = data.source || (isFavorites ? 'favorites' : 'channels');
 
     if (isFavorites) {
       try {
-        await refreshHolodexChannelsData();
-        if (generation !== holodexState.holodexRefreshGeneration) return;
+        await refreshChannelsData();
+        if (generation !== streamListState.refreshGeneration) return;
       } catch (error) {
-        if (generation !== holodexState.holodexRefreshGeneration) return;
+        if (generation !== streamListState.refreshGeneration) return;
         console.error('Failed to load channels.json for Holodex add controls:', error);
-        holodexState.holodexCurrentSource = 'channels';
+        streamListState.currentSource = 'channels';
         showNotification('加载 channels.json 失败，无法显示添加按钮', 'error');
       }
     }
@@ -684,18 +682,18 @@ async function refreshHolodexStreams({ force = false } = {}) {
     // Separate live and scheduled streams
     const liveStreams = streams.filter(s => s.status === 'live');
     const scheduledStreams = streams.filter(s => s.status !== 'live');
-    if (generation !== holodexState.holodexRefreshGeneration) return;
-    stopHolodexDurationTicker();
+    if (generation !== streamListState.refreshGeneration) return;
+    stopStreamListDurationTicker();
 
     if (streams.length === 0) {
       streamsDiv.replaceChildren();
-      holodexState.renderedHolodexCards.clear();
-      holodexState.lastHolodexLive = [];
-      holodexState.lastHolodexScheduled = [];
+      streamListState.renderedCards.clear();
+      streamListState.lastLive = [];
+      streamListState.lastScheduled = [];
       const emptyMessage = isFavorites
         ? '✅ 收藏夹 - 当前无直播或预告'
         : '当前无直播或预告';
-      setHolodexStatus(statusDiv, emptyMessage, 'holodex-status-success');
+      setStreamListStatus(statusDiv, emptyMessage, 'streams-status-success');
       return;
     }
 
@@ -706,17 +704,17 @@ async function refreshHolodexStreams({ force = false } = {}) {
       return timeA - timeB;
     });
 
-    hideHolodexStatus(statusDiv);
+    hideStreamListStatus(statusDiv);
 
-    renderHolodexCards(streamsDiv, liveStreams, scheduledStreams);
-    startHolodexDurationTicker();
+    renderStreamListCards(streamsDiv, liveStreams, scheduledStreams);
+    startStreamListDurationTicker();
 
   } catch (error) {
-    if (generation !== holodexState.holodexRefreshGeneration) return;
-    setHolodexStatus(statusDiv, `❌ 请求失败: ${error.message}`, 'holodex-status-error');
+    if (generation !== streamListState.refreshGeneration) return;
+    setStreamListStatus(statusDiv, `❌ 请求失败: ${error.message}`, 'streams-status-error');
   } finally {
     // Stop spinning animation when complete
-    if (generation === holodexState.holodexRefreshGeneration) {
+    if (generation === streamListState.refreshGeneration) {
       setButtonLoading(button, icon, false);
       streamsDiv.setAttribute('aria-busy', 'false');
     }
@@ -725,24 +723,24 @@ async function refreshHolodexStreams({ force = false } = {}) {
 
 // Every trigger (SSE, opening the panel, the tab coming back, the keep-alive)
 // refetches only while the panel is open; a closed one catches up on opening.
-function maybeLoadHolodexStreams() {
-  if (isHolodexPanelOpen()) {
-    refreshHolodexStreams();
+function maybeLoadStreamList() {
+  if (isStreamListPanelOpen()) {
+    refreshStreamList();
   }
 }
 
 async function toggleHolodexFavoritesMode() {
   const toggle = document.getElementById('holodex-use-favorites-toggle');
-  if (!holodexState.holodexAuthState.logged_in || holodexState.holodexAuthState.expired) {
+  if (!streamListState.holodexAuthState.logged_in || streamListState.holodexAuthState.expired) {
     if (toggle) toggle.checked = false;
     openHolodexLoginModal();
     return;
   }
 
-  holodexState.holodexUseFavorites = toggle ? toggle.checked : !holodexState.holodexUseFavorites;
-  holodexState.holodexUseFavoritesInitialized = true;
+  streamListState.holodexUseFavorites = toggle ? toggle.checked : !streamListState.holodexUseFavorites;
+  streamListState.holodexUseFavoritesInitialized = true;
   updateHolodexAuthBar();
-  await refreshHolodexStreams();
+  await refreshStreamList();
 }
 async function toggleHolodexSkipJwtVerify() {
   const toggle = document.getElementById('holodex-skip-jwt-verify');
@@ -751,10 +749,10 @@ async function toggleHolodexSkipJwtVerify() {
   try {
     const data = await postJsonApi('/api/config', { holodex_skip_jwt_verify: toggle.checked });
     if (data.success) {
-      holodexState.holodexAuthState.skip_jwt_verify = toggle.checked;
+      streamListState.holodexAuthState.skip_jwt_verify = toggle.checked;
       showNotification(toggle.checked ? '已跳过 JWT 校验' : '已启用 JWT 校验', 'success');
       await loadHolodexAuthStatus();
-      await refreshHolodexStreams();
+      await refreshStreamList();
     } else {
       toggle.checked = !toggle.checked;
       showNotification('更新失败: ' + (data.message || '未知错误'), 'error');
@@ -776,11 +774,11 @@ async function saveHolodexJwt() {
     if (data.success) {
       showNotification('Holodex 登录已保存', 'success');
       jwtInput.value = '';
-      holodexState.holodexUseFavorites = true;
-      holodexState.holodexUseFavoritesInitialized = true;
+      streamListState.holodexUseFavorites = true;
+      streamListState.holodexUseFavoritesInitialized = true;
       closeHolodexLoginModal();
       await loadHolodexAuthStatus();
-      await refreshHolodexStreams();
+      await refreshStreamList();
     } else {
       showNotification('保存失败: ' + (data.message || '未知错误'), 'error');
     }
@@ -793,12 +791,12 @@ async function logoutHolodexJwt() {
     const data = await postJsonApi('/api/config', { holodex_jwt: '' });
     if (data.success) {
       showNotification('已退出 Holodex 登录', 'success');
-      holodexState.holodexUseFavorites = false;
-      holodexState.holodexUseFavoritesInitialized = false;
+      streamListState.holodexUseFavorites = false;
+      streamListState.holodexUseFavoritesInitialized = false;
       document.getElementById('holodex-jwt-input').value = '';
       closeHolodexLoginModal();
       await loadHolodexAuthStatus();
-      await refreshHolodexStreams();
+      await refreshStreamList();
     } else {
       showNotification('退出失败: ' + (data.message || '未知错误'), 'error');
     }
@@ -860,121 +858,121 @@ function initHolodexLoginModalControls() {
 
 // The list shows with either key: Holodex rows, or what YouTube discovery
 // finds. Favorites and login need the Holodex key.
-function applyHolodexSectionVisibility(holodexKey, youtubeKey) {
+function applyStreamListSectionVisibility(holodexKey, youtubeKey) {
   const listAvailable = holodexKey || youtubeKey;
-  setElementDisplay(document.getElementById('holodex-section'), true);
-  setElementDisplay(document.getElementById('holodex-init-hint'), false);
+  setElementDisplay(document.getElementById('streams-section'), true);
+  setElementDisplay(document.getElementById('streams-init-hint'), false);
   setElementDisplay(document.getElementById('holodex-api-config'), !listAvailable);
-  setElementDisplay(document.getElementById('holodex-streams-section'), listAvailable);
-  setElementDisplay(document.getElementById('holodex-toolbar'), holodexKey, 'flex');
+  setElementDisplay(document.getElementById('streams-list-section'), listAvailable);
+  setElementDisplay(document.getElementById('streams-toolbar'), holodexKey, 'flex');
   // Auth status owns the login button. A later config reload must not show it
   // again while the favorites bar is already in use.
   updateHolodexAuthBar();
-  maybeLoadHolodexStreams();
+  maybeLoadStreamList();
 }
 // Applies the panel's key-driven layout from a loaded config. The auth status
 // may renew the JWT upstream, so it loads only when the Holodex key appears.
 
-function toggleHolodexFold() {
-  const section = document.getElementById('holodex-section');
+function toggleStreamListFold() {
+  const section = document.getElementById('streams-section');
   if (!section) return;
 
   const collapsed = !section.classList.contains('is-collapsed');
-  setHolodexCollapsed(collapsed);
+  setStreamListCollapsed(collapsed);
   try {
-    localStorage.setItem('holodexCollapsed', collapsed ? 'true' : 'false');
+    localStorage.setItem('streamListCollapsed', collapsed ? 'true' : 'false');
   } catch (error) {
     // The fold still works; it just will not be remembered.
   }
 
   if (!collapsed) {
     // Opening the panel catches up on what changed while it was closed.
-    maybeLoadHolodexStreams();
+    maybeLoadStreamList();
   }
 }
 
-function applyHolodexConfig(config) {
+function applyStreamListConfig(config) {
   const holodexKey = !!config.holodex_api_key_configured || !!config.holodex_api_key?.trim();
   const youtubeKey = !!config.youtube_api_key_configured || !!config.youtube_api_key?.trim();
-  const holodexKeyAdded = holodexKey && !holodexState.holodexKeyConfigured;
-  holodexState.holodexKeyConfigured = holodexKey;
+  const holodexKeyAdded = holodexKey && !streamListState.holodexKeyConfigured;
+  streamListState.holodexKeyConfigured = holodexKey;
   if (!holodexKey) {
-    holodexState.holodexUseFavorites = false;
-    holodexState.holodexUseFavoritesInitialized = false;
+    streamListState.holodexUseFavorites = false;
+    streamListState.holodexUseFavoritesInitialized = false;
   }
-  applyHolodexSectionVisibility(holodexKey, youtubeKey);
+  applyStreamListSectionVisibility(holodexKey, youtubeKey);
   if (holodexKeyAdded) {
     // The first fetch went out in channels mode; follow a login to favorites.
-    const usedFavorites = holodexState.holodexUseFavorites;
+    const usedFavorites = streamListState.holodexUseFavorites;
     loadHolodexAuthStatus().then(() => {
-      if (holodexState.holodexUseFavorites !== usedFavorites) maybeLoadHolodexStreams();
+      if (streamListState.holodexUseFavorites !== usedFavorites) maybeLoadStreamList();
     });
   }
 }
-function initHolodexFold() {
+function initStreamListFold() {
   let collapsed = false;
   try {
-    collapsed = localStorage.getItem('holodexCollapsed') === 'true';
+    collapsed = localStorage.getItem('streamListCollapsed') === 'true';
   } catch (error) {
     // Ignore unavailable storage and start expanded.
   }
-  setHolodexCollapsed(collapsed);
+  setStreamListCollapsed(collapsed);
 
   document
-    .getElementById('holodexFoldBtn')
-    ?.addEventListener('click', toggleHolodexFold);
+    .getElementById('streamsFoldBtn')
+    ?.addEventListener('click', toggleStreamListFold);
 
-  const heading = document.getElementById('holodex-heading');
-  heading?.addEventListener('click', toggleHolodexFold);
+  const heading = document.getElementById('streams-heading');
+  heading?.addEventListener('click', toggleStreamListFold);
 }
 
 export {
-  HOLODEX_STATUS_STATE_CLASSES,
+  STREAM_LIST_STATUS_STATE_CLASSES,
   addHolodexChannelToCache,
-  applyHolodexConfig,
-  applyHolodexSectionVisibility,
+  applyStreamListConfig,
+  applyStreamListSectionVisibility,
   closeHolodexLoginModal,
   confirmHolodexAddChannel,
   createHolodexAddChannelControls,
   createHolodexChannelAddIcon,
   createHolodexChannelAddedIndicator,
-  createHolodexStreamActionButton,
-  createHolodexStreamSvg,
+  createStreamActionButton,
+  createStreamSvg,
   createStreamCard,
-  cropAndSwitchToHolodexStream,
+  cropAndSwitchToStream,
   getHolodexChannelPhotoUrl,
   getHolodexChannelUrl,
-  hideHolodexStatus,
-  holodexKeepAliveCheckMs,
-  holodexKeepAliveDue,
-  holodexKeepAliveMs,
-  holodexKeepAliveWithoutEventsMs,
+  hideStreamListStatus,
+  streamListKeepAliveCheckMs,
+  streamListKeepAliveDue,
+  streamListKeepAliveMs,
+  streamListKeepAliveWithoutEventsMs,
   holodexStreamHasConfiguredChannel,
-  initHolodexFold,
+  initStreamListFold,
   initHolodexLoginModalControls,
-  isHolodexPanelOpen,
+  isStreamListPanelOpen,
   loadHolodexAuthStatus,
   logoutHolodexJwt,
   markHolodexChannelAdded,
-  maybeLoadHolodexStreams,
+  maybeLoadStreamList,
   openHolodexLogin,
   openHolodexLoginModal,
   readHolodexAddChannelData,
-  readHolodexStreamActionData,
-  refreshHolodexChannelsData,
-  refreshHolodexStreams,
-  renderHolodexCards,
+  readStreamActionData,
+  refreshChannelsData,
+  refreshStreamList,
+  renderStreamListCards,
   saveHolodexApiKey,
   saveHolodexJwt,
   setHolodexAddChannelButtonsDisabled,
   setHolodexAddChannelConfirmVisible,
-  setHolodexCollapsed,
-  setHolodexStatus,
-  startHolodexDurationTicker,
-  stopHolodexDurationTicker,
+  setStreamListCollapsed,
+  setStreamListStatus,
+  startStreamListDurationTicker,
+  stopStreamListDurationTicker,
   testHolodexApiKey,
   toggleHolodexFavoritesMode,
-  toggleHolodexFold,
+  toggleStreamListFold,
   toggleHolodexSkipJwtVerify,
   updateHolodexAuthBar,
   updateHolodexLoginButton,

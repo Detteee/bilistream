@@ -95,7 +95,7 @@ function streamIsSwitchable(stream) {
   if (restreaming || danmakuEnabled === false) {
     return false;
   }
-  // A Holodex snapshot taken while the processor was down still says
+  // A list snapshot taken while the processor was down still says
   // danmaku_disabled; once 转播 ends and the gate is on, that stale reason
   // must not keep 切换 grey.
   if (danmakuEnabled === true && stream.reason === 'danmaku_disabled') {
@@ -211,7 +211,7 @@ function isLiveStream(stream) {
 function createSwitchButton(stream) {
   const button = document.createElement('button');
   button.type = 'button';
-  button.className = 'holodex-stream-btn holodex-stream-btn-switch';
+  button.className = 'stream-btn stream-btn-switch';
 
   const icon = createStrokeIcon([
     { d: 'M22 12c0 6-4.39 10-9.806 10C7.792 22 4.24 19.665 3 16m-1-4C2 6 6.39 2 11.807 2C16.208 2 19.758 4.335 21 8' },
@@ -269,8 +269,8 @@ export function renderStreams(streams, { fresh = true } = {}) {
   const unchanged = lastStreams === streams && renderedGate === gate;
   lastStreams = Array.isArray(streams) ? streams : null;
   revalidatePendingStream();
-  const container = document.getElementById('holodex-streams');
-  const status = document.getElementById('holodex-status');
+  const container = document.getElementById('streams-list');
+  const status = document.getElementById('streams-status');
   if (!container) {
     return;
   }
@@ -335,7 +335,7 @@ export function renderStreams(streams, { fresh = true } = {}) {
 }
 
 export function setStatus(element, message) {
-  const status = element || document.getElementById('holodex-status');
+  const status = element || document.getElementById('streams-status');
   if (!status) {
     return;
   }

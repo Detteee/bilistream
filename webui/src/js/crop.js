@@ -616,11 +616,11 @@ function loadCapturedCropFrame(imageSrc, onReady, session = cropSession) {
   image.src = imageSrc;
 }
 
-async function switchPendingHolodexStream(pending) {
+async function switchPendingStream(pending) {
   if (!pending) {
     return false;
   }
-  const switchFn = state.hooks.switchToHolodexStream;
+  const switchFn = state.hooks.switchToStream;
   if (typeof switchFn !== 'function') {
     throw new Error('频道切换不可用');
   }
@@ -667,7 +667,7 @@ async function saveCropSelection(restart) {
       closeCropModal();
       if (pending) {
         showNotification('裁剪已保存，正在切换频道...', 'info');
-        await switchPendingHolodexStream(pending);
+        await switchPendingStream(pending);
       } else if (restart) {
         const result = await postJsonApi('/api/restart');
         if (!result.success) throw new Error(result.message || '重启失败');

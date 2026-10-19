@@ -58,7 +58,7 @@ try {
   await waitFor("document.documentElement.classList.contains('app-ready') && document.getElementById('yt-title').textContent.includes('示例')");
   await evaluate("document.getElementById('theme-toggle').click(); document.fonts.ready");
   await new Promise(resolve => setTimeout(resolve, 900));
-  await waitFor("document.querySelectorAll('.holodex-stream-card').length > 0");
+  await waitFor("document.querySelectorAll('.stream-card').length > 0");
   const capture = async path => {
     // Let view transitions and layout animations finish before documenting UI.
     await new Promise(resolve => setTimeout(resolve, 650));
@@ -87,10 +87,10 @@ try {
   await setControls(true, true);
   assert.equal(await evaluate("document.getElementById('priority-channel-card').textContent.includes('其他单机 (235)')"), true);
   await evaluate("document.getElementById('tab-overview').click()");
-  await waitFor("document.querySelector('.holodex-stream-watch')?.checkVisibility()");
+  await waitFor("document.querySelector('.stream-watch')?.checkVisibility()");
   assert.equal(await evaluate("[...document.querySelectorAll('.crop-switch-button')].every(button => !button.textContent.trim() && button.getAttribute('aria-label')==='裁剪切换' && button.parentElement.firstElementChild===button)"), true);
-  assert.equal(await evaluate("[...document.querySelectorAll('.holodex-stream-actions')].every(row => Math.abs(row.querySelector('.holodex-stream-secondary').getBoundingClientRect().width - row.querySelector('.switch-button').getBoundingClientRect().width)<1)"), true);
-  const actionContentsCentered = "[...document.querySelectorAll('.holodex-stream-watch, .holodex-stream-btn-switch')].every(button => { const box=button.getBoundingClientRect(), text=button.querySelector('span').getBoundingClientRect(), icon=button.querySelector('svg').getBoundingClientRect(); return box.width>0 && Math.abs((box.left+box.right)/2-(icon.left+text.right)/2)<1 && icon.right<=text.left; })";
+  assert.equal(await evaluate("[...document.querySelectorAll('.stream-actions')].every(row => Math.abs(row.querySelector('.stream-secondary').getBoundingClientRect().width - row.querySelector('.switch-button').getBoundingClientRect().width)<1)"), true);
+  const actionContentsCentered = "[...document.querySelectorAll('.stream-watch, .stream-btn-switch')].every(button => { const box=button.getBoundingClientRect(), text=button.querySelector('span').getBoundingClientRect(), icon=button.querySelector('svg').getBoundingClientRect(); return box.width>0 && Math.abs((box.left+box.right)/2-(icon.left+text.right)/2)<1 && icon.right<=text.left; })";
   assert.equal(await evaluate(actionContentsCentered), true, 'desktop action content midpoint');
   await evaluate("document.getElementById('tab-settings').click()");
   await evaluate("document.getElementById('config-interval').value='88'; document.getElementById('config-nc-user-session').value='synthetic-direct-check'; document.getElementById('config-nc-user-session').dispatchEvent(new Event('input'))");

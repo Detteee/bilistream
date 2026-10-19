@@ -107,7 +107,7 @@ const { setAnimatedDigits } = await import('../src/js/dom.js');
 const api = await import('../src/js/api.js');
 const { saveBooleanToggle } = await import('../src/js/toggle-save.js');
 const { applyMonitorToggleConfigState } = await import('../src/js/state.js');
-const { holodexKeepAliveDue } = await import('../src/js/overview.js');
+const { streamListKeepAliveDue } = await import('../src/js/overview.js');
 
 test('settings edits submit only changed fields and their loaded values', () => {
   const baseline = { interval: 30, enable_danmaku_command: true, api_key: 'old', keywords: ['a'] };
@@ -542,10 +542,10 @@ test('key meters and discovery tiles carry state as label, not color alone', asy
 
 test('an open Holodex panel renews its lease every 4 min, every minute without SSE', () => {
   const minute = 60 * 1000;
-  assert.equal(holodexKeepAliveDue(4 * minute - 1, true), false);
-  assert.equal(holodexKeepAliveDue(4 * minute, true), true);
-  assert.equal(holodexKeepAliveDue(minute - 1, false), false);
-  assert.equal(holodexKeepAliveDue(minute, false), true);
+  assert.equal(streamListKeepAliveDue(4 * minute - 1, true), false);
+  assert.equal(streamListKeepAliveDue(4 * minute, true), true);
+  assert.equal(streamListKeepAliveDue(minute - 1, false), false);
+  assert.equal(streamListKeepAliveDue(minute, false), true);
 });
 
 

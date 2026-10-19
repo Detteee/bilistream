@@ -426,7 +426,7 @@ function updateClusterNodeMetrics(element, node) {
   updateClusterNetwork(element.querySelector('.cluster-node-network'), node);
 }
 
-function syncHolodexOnAir(cluster) {
+function syncStreamListOnAir(cluster) {
   // A failed poll passes null. Keep the last highlight, matching the public
   // page (a failed refresh does not clear 正在转播). Disabled or idle cluster
   // still clears, including an enabled cluster with no pushing node.
@@ -459,7 +459,7 @@ function renderClusterStatus(cluster, errorMessage) {
     syncMonitorTogglesWithClusterRole();
   }
   state.hooks.updatePriorityToggleAvailability?.();
-  syncHolodexOnAir(cluster);
+  syncStreamListOnAir(cluster);
 
   if (!indicator || !nodeList) {
     return;

@@ -35,7 +35,7 @@ export function createPlayIcon() {
 
 export function createWatchLink(href) {
   const watch = document.createElement('a');
-  watch.className = 'holodex-stream-watch';
+  watch.className = 'stream-watch';
   watch.href = href;
   watch.target = '_blank';
   watch.rel = 'noopener noreferrer';
@@ -48,10 +48,10 @@ export function createWatchLink(href) {
 function createPlaceholderIcon(kind) {
   const wrapper = document.createElement('span');
   wrapper.className = kind === 'niconico'
-    ? 'holodex-duration-niconico-icon'
+    ? 'stream-duration-niconico-icon'
     : kind === 'twitch'
-      ? 'holodex-duration-twitch-icon'
-      : 'holodex-duration-radio-icon';
+      ? 'stream-duration-twitch-icon'
+      : 'stream-duration-radio-icon';
   if (kind === 'niconico') {
     wrapper.appendChild(createSvgIcon(
       '0 0 24 24',
@@ -69,7 +69,7 @@ function createPlaceholderIcon(kind) {
 
 function appendDurationText(duration, text) {
   const span = document.createElement('span');
-  span.className = 'holodex-duration-text';
+  span.className = 'stream-duration-text';
   span.textContent = text;
   duration.appendChild(span);
 }
@@ -78,10 +78,10 @@ function createPlaceholderDurationOverlay(model) {
   const kind = placeholderKind(model);
   const duration = document.createElement('div');
   duration.className = kind === 'niconico'
-    ? 'holodex-stream-duration holodex-stream-duration-niconico'
+    ? 'stream-duration stream-duration-niconico'
     : kind === 'twitch'
-      ? 'holodex-stream-duration holodex-stream-duration-twitch'
-      : 'holodex-stream-duration holodex-stream-duration-radio';
+      ? 'stream-duration stream-duration-twitch'
+      : 'stream-duration stream-duration-radio';
 
   const startMs = streamStartMs(model, model.isLive);
   if (model.isLive && startMs) {
@@ -94,7 +94,7 @@ function createPlaceholderDurationOverlay(model) {
   }
 
   const hover = document.createElement('span');
-  hover.className = 'holodex-duration-hover';
+  hover.className = 'stream-duration-hover';
   hover.textContent = kind === 'niconico' ? 'ニコニコ' : kind === 'twitch' ? '外部配信' : '外部直播';
   duration.append(hover, createPlaceholderIcon(kind));
   return duration;
@@ -111,7 +111,7 @@ function createDurationOverlay(model) {
   }
 
   const duration = document.createElement('div');
-  duration.className = 'holodex-stream-duration holodex-stream-duration-live';
+  duration.className = 'stream-duration stream-duration-live';
   duration.dataset.tick = 'live';
   duration.dataset.startMs = String(startMs);
   appendDurationText(duration, formatDuration(Date.now() - startMs));
@@ -123,14 +123,14 @@ function createDurationOverlay(model) {
 let durationTickerId = null;
 
 /// The one ticker both pages drive. `shouldTick` decides whether a running
-/// page may start it (public: tab visible; admin: Holodex panel open).
+/// page may start it (public: tab visible; admin: 直播与预告 panel open).
 export function startDurationTicker(shouldTick = () => document.visibilityState === 'visible') {
   stopDurationTicker();
   if (!shouldTick()) {
     return;
   }
   updateDurations();
-  if (document.querySelector('.holodex-stream-duration[data-tick="live"], .holodex-stream-scheduled[data-start]')) {
+  if (document.querySelector('.stream-duration[data-tick="live"], .stream-scheduled[data-start]')) {
     durationTickerId = setInterval(updateDurations, 1000);
   }
 }
@@ -144,16 +144,16 @@ export function stopDurationTicker() {
 
 function updateDurations() {
   const now = Date.now();
-  document.querySelectorAll('.holodex-stream-duration[data-tick="live"]').forEach((el) => {
+  document.querySelectorAll('.stream-duration[data-tick="live"]').forEach((el) => {
     const startMs = Number(el.dataset.startMs);
     if (!startMs) {
       return;
     }
-    const textEl = el.querySelector('.holodex-duration-text');
+    const textEl = el.querySelector('.stream-duration-text');
     const text = formatDuration(now - startMs);
     if (textEl && textEl.textContent !== text) textEl.textContent = text;
   });
-  document.querySelectorAll('.holodex-stream-scheduled[data-start]').forEach(el => {
+  document.querySelectorAll('.stream-scheduled[data-start]').forEach(el => {
     const text = formatScheduledStart(el.dataset.start);
     if (el.textContent !== text) el.textContent = text;
   });
@@ -163,10 +163,10 @@ function updateDurations() {
 
 export function createScheduleDivider() {
   const divider = document.createElement('div');
-  divider.className = 'holodex-schedule-divider';
+  divider.className = 'stream-schedule-divider';
 
   const label = document.createElement('span');
-  label.className = 'holodex-schedule-divider-label';
+  label.className = 'stream-schedule-divider-label';
   label.textContent = '预告';
 
   divider.appendChild(label);
@@ -174,7 +174,7 @@ export function createScheduleDivider() {
 }
 
 export function updateViewerCount(card, viewers) {
-  const element = card.querySelector('.holodex-stream-viewers');
+  const element = card.querySelector('.stream-viewers');
   if (!element) return;
   const text = Number.isFinite(viewers) && viewers >= 0 ? `• ${viewers.toLocaleString()} 观看` : '';
   if (element.textContent !== text) element.textContent = text;
@@ -193,11 +193,11 @@ export function watchUrl(model) {
 
 function createThumb(model, onAir, href, thumbnail) {
   const thumb = document.createElement('div');
-  thumb.className = 'holodex-stream-thumb';
+  thumb.className = 'stream-thumb';
 
   const media = href ? document.createElement('a') : document.createElement('div');
   if (href) {
-    media.className = 'holodex-stream-thumb-link';
+    media.className = 'stream-thumb-link';
     media.href = href;
     media.target = '_blank';
     media.rel = 'noopener noreferrer';
@@ -208,16 +208,16 @@ function createThumb(model, onAir, href, thumbnail) {
     media.appendChild(createStreamThumbnail(thumbnail));
   } else {
     const placeholder = document.createElement('div');
-    placeholder.className = 'holodex-stream-thumb-placeholder';
+    placeholder.className = 'stream-thumb-placeholder';
     media.appendChild(placeholder);
   }
   thumb.appendChild(media);
 
   if (model.topic) {
     const topic = document.createElement('div');
-    topic.className = 'holodex-stream-thumb-top';
+    topic.className = 'stream-thumb-top';
     const label = document.createElement('span');
-    label.className = 'holodex-stream-topic';
+    label.className = 'stream-topic';
     label.textContent = model.topic;
     topic.appendChild(label);
     thumb.appendChild(topic);
@@ -225,9 +225,9 @@ function createThumb(model, onAir, href, thumbnail) {
 
   if (onAir) {
     const badge = document.createElement('div');
-    badge.className = 'holodex-stream-thumb-on-air';
+    badge.className = 'stream-thumb-on-air';
     const mark = document.createElement('span');
-    mark.className = 'holodex-stream-on-air';
+    mark.className = 'stream-on-air';
     mark.textContent = '正在转播';
     badge.appendChild(mark);
     thumb.appendChild(badge);
@@ -236,7 +236,7 @@ function createThumb(model, onAir, href, thumbnail) {
   const duration = createDurationOverlay(model);
   if (duration) {
     const bottom = document.createElement('div');
-    bottom.className = 'holodex-stream-thumb-bottom';
+    bottom.className = 'stream-thumb-bottom';
     bottom.appendChild(duration);
     thumb.appendChild(bottom);
   }
@@ -249,7 +249,7 @@ function createAvatar(model, photo, href) {
     return null;
   }
   const avatar = href ? document.createElement('a') : document.createElement('span');
-  avatar.className = 'holodex-stream-avatar';
+  avatar.className = 'stream-avatar';
   if (href) {
     avatar.href = href;
     avatar.target = '_blank';
@@ -267,10 +267,10 @@ function createAvatar(model, photo, href) {
 
 function createChannelRow(model, href, extra) {
   const row = document.createElement('div');
-  row.className = 'holodex-stream-channel-row';
+  row.className = 'stream-channel-row';
 
   const channel = href ? document.createElement('a') : document.createElement('span');
-  channel.className = 'holodex-stream-channel';
+  channel.className = 'stream-channel';
   channel.textContent = model.channelName || '-';
   if (href) {
     channel.href = href;
@@ -287,11 +287,11 @@ function createChannelRow(model, href, extra) {
 
 function createStatusMeta(model) {
   const statusMeta = document.createElement('div');
-  statusMeta.className = 'holodex-stream-meta';
+  statusMeta.className = 'stream-meta';
 
   if (!model.isLive) {
     const scheduled = document.createElement('span');
-    scheduled.className = 'holodex-stream-scheduled';
+    scheduled.className = 'stream-scheduled';
     if (model.startScheduled) scheduled.dataset.start = model.startScheduled;
     scheduled.textContent = model.startScheduled
       ? formatScheduledStart(model.startScheduled)
@@ -301,12 +301,12 @@ function createStatusMeta(model) {
   }
 
   const liveLabel = document.createElement('span');
-  liveLabel.className = 'holodex-stream-live-label';
+  liveLabel.className = 'stream-live-label';
   liveLabel.textContent = '直播中';
   statusMeta.appendChild(liveLabel);
 
   const viewers = document.createElement('span');
-  viewers.className = 'holodex-stream-viewers';
+  viewers.className = 'stream-viewers';
   statusMeta.appendChild(viewers);
   return statusMeta;
 }
@@ -317,7 +317,7 @@ function createStatusMeta(model) {
 /// - `actions`: elements for the action row (watch, switch, crop, add-channel)
 /// - `href`: the watch target; the thumb + avatar link to the platform
 /// - `channelHref` / `avatarHref`: wrap channel/avatar in a link (admin links
-///   to Holodex; the public page passes '' → plain text)
+///   to the channel page; the public page passes '' → plain text)
 /// - `note` / `areaHint`: optional caption lines (public's disabled reason)
 export function renderCard(model, {
   actions = [],
@@ -332,14 +332,14 @@ export function renderCard(model, {
   channelExtra = null,
 } = {}) {
   const card = document.createElement('div');
-  card.className = onAir ? 'holodex-stream-card is-on-air' : 'holodex-stream-card';
+  card.className = onAir ? 'stream-card is-on-air' : 'stream-card';
   card.append(createThumb(model, onAir, href, thumbnail));
 
   const body = document.createElement('div');
-  body.className = 'holodex-stream-body';
+  body.className = 'stream-body';
 
   const contentRow = document.createElement('div');
-  contentRow.className = 'holodex-stream-content-row';
+  contentRow.className = 'stream-content-row';
 
   const avatar = createAvatar(model, avatarPhoto, avatarHref);
   if (avatar) {
@@ -347,10 +347,10 @@ export function renderCard(model, {
   }
 
   const lines = document.createElement('div');
-  lines.className = 'holodex-stream-lines';
+  lines.className = 'stream-lines';
 
   const title = document.createElement('h4');
-  title.className = 'holodex-stream-title';
+  title.className = 'stream-title';
   title.textContent = model.title || '-';
   lines.appendChild(title);
 
@@ -359,13 +359,13 @@ export function renderCard(model, {
 
   if (note) {
     const caption = document.createElement('p');
-    caption.className = 'holodex-stream-note';
+    caption.className = 'stream-note';
     caption.textContent = note;
     lines.appendChild(caption);
   }
   if (areaHint) {
     const hint = document.createElement('p');
-    hint.className = 'holodex-stream-area-hint';
+    hint.className = 'stream-area-hint';
     hint.textContent = areaHint;
     lines.appendChild(hint);
   }
@@ -374,7 +374,7 @@ export function renderCard(model, {
   body.appendChild(contentRow);
 
   const actionRow = document.createElement('div');
-  actionRow.className = 'holodex-stream-actions';
+  actionRow.className = 'stream-actions';
   for (const action of actions) {
     actionRow.appendChild(action);
   }

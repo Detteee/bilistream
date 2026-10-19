@@ -25,20 +25,20 @@ import { initClusterControls, startClusterRefresh, refreshClusterStatus } from '
 import { initClusterMembership, refreshMembership } from './cluster-membership.js';
 import { initNotifySettings, loadNotifySettings, refreshNotifyStatus } from './notify.js';
 import {
-  applyHolodexConfig,
+  applyStreamListConfig,
   initDashboardControls,
-  initHolodexFold,
+  initStreamListFold,
   initHolodexLoginModalControls,
   initFaceAuthModalControls,
   initAreaModalControls,
   initStatusRefresh,
-  maybeLoadHolodexStreams,
-  startHolodexDurationTicker,
-  stopHolodexDurationTicker,
+  maybeLoadStreamList,
+  startStreamListDurationTicker,
+  stopStreamListDurationTicker,
   loadChannelData,
   refreshStatus,
   refreshNetworkStatus,
-  switchToHolodexStream,
+  switchToStream,
   updatePriorityToggleAvailability,
   setOnAir,
 } from './overview.js';
@@ -59,7 +59,7 @@ const analytics = createAnalyticsLoader({
 function loadViewData(name) {
   switch (name) {
     case 'overview':
-      maybeLoadHolodexStreams();
+      maybeLoadStreamList();
       refreshNetworkStatus();
       break;
     case 'manage':
@@ -112,11 +112,11 @@ function activateView(name, options = {}) {
     loadViewData(name);
   } else if (options.reload || name === 'overview' || name === 'analytics') {
     // 统计 refetches on every activation, like 日志.
-    // The Holodex panel catches up every time the overview comes back.
+    // The 直播与预告 panel catches up every time the overview comes back.
     loadViewData(name);
   }
-  if (name === 'overview') startHolodexDurationTicker();
-  else stopHolodexDurationTicker();
+  if (name === 'overview') startStreamListDurationTicker();
+  else stopStreamListDurationTicker();
 }
 
 // R4: mark which edges of the scrolling tab row are clipped (edge fade in CSS).
@@ -163,12 +163,12 @@ function initViewRouter() {
   activateView(saved || 'overview');
 }
 
-// Reloads the config and re-applies the Holodex panel's key layout, which
+// Reloads the config and re-applies the 直播与预告 panel's key layout, which
 // also refetches an open panel.
-function reloadConfigAndHolodexPanel() {
+function reloadConfigAndStreamList() {
   reloadServerConfig().then(config => {
-    if (config) applyHolodexConfig(config);
-    else maybeLoadHolodexStreams();
+    if (config) applyStreamListConfig(config);
+    else maybeLoadStreamList();
   });
 }
 
@@ -180,10 +180,10 @@ function bindEventStream() {
     },
     onConfig: () => {
       invalidateManagedData();
-      reloadConfigAndHolodexPanel();
+      reloadConfigAndStreamList();
       refreshStatus();
     },
-    onHolodex: maybeLoadHolodexStreams,
+    onStreamList: maybeLoadStreamList,
     onHistory: () => {
       if (isViewActive('analytics')) analytics.refreshIfVisible();
     },
@@ -193,7 +193,7 @@ function bindEventStream() {
     },
     onRefresh: () => {
       invalidateManagedData();
-      reloadConfigAndHolodexPanel();
+      reloadConfigAndStreamList();
       refreshStatus();
       refreshClusterStatus();
     },
@@ -201,7 +201,7 @@ function bindEventStream() {
 }
 
 function boot() {
-  state.hooks.switchToHolodexStream = switchToHolodexStream;
+  state.hooks.switchToStream = switchToStream;
   state.hooks.refreshStatus = refreshStatus;
   state.hooks.reloadServerConfig = reloadServerConfig;
   state.hooks.refreshClusterStatus = refreshClusterStatus;
@@ -210,7 +210,7 @@ function boot() {
 
   bindEventStream();
   startLogRefresh();
-  initHolodexFold();
+  initStreamListFold();
   initViewRouter();
   initDashboardControls();
   initAntiCollisionControls();
@@ -230,15 +230,15 @@ function boot() {
 
   document.addEventListener('visibilitychange', () => {
     if (isDashboardVisible()) {
-      startHolodexDurationTicker();
+      startStreamListDurationTicker();
       if (isViewActive('logs')) {
         refreshLogs();
       }
       if (isViewActive('analytics')) analytics.refreshIfVisible();
       refreshStatus();
-      maybeLoadHolodexStreams();
+      maybeLoadStreamList();
     } else {
-      stopHolodexDurationTicker();
+      stopStreamListDurationTicker();
     }
   });
 

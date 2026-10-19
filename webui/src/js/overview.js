@@ -18,7 +18,7 @@ import {
 import { fallbackThumbnailUrl, placeholderKind, streamStartMs, toCardModel } from './stream-model.js';
 import {
   buildHolodexAddChannelPayload,
-  createHolodexSwitchPayload,
+  createSwitchPayload,
   hasConfiguredChannel,
   sameChannelCandidate,
   toAdminChannelCandidate,
@@ -43,58 +43,58 @@ import {
   setStatusCardsMessage,
 } from './status-cards.js';
 import {
-  HOLODEX_STATUS_STATE_CLASSES,
+  STREAM_LIST_STATUS_STATE_CLASSES,
   addHolodexChannelToCache,
-  applyHolodexConfig,
-  applyHolodexSectionVisibility,
+  applyStreamListConfig,
+  applyStreamListSectionVisibility,
   closeHolodexLoginModal,
   confirmHolodexAddChannel,
   createHolodexAddChannelControls,
   createHolodexChannelAddIcon,
   createHolodexChannelAddedIndicator,
-  createHolodexStreamActionButton,
-  createHolodexStreamSvg,
+  createStreamActionButton,
+  createStreamSvg,
   createStreamCard,
-  cropAndSwitchToHolodexStream,
+  cropAndSwitchToStream,
   getHolodexChannelPhotoUrl,
   getHolodexChannelUrl,
-  hideHolodexStatus,
-  holodexKeepAliveCheckMs,
-  holodexKeepAliveDue,
-  holodexKeepAliveMs,
-  holodexKeepAliveWithoutEventsMs,
-  holodexState,
+  hideStreamListStatus,
+  streamListKeepAliveCheckMs,
+  streamListKeepAliveDue,
+  streamListKeepAliveMs,
+  streamListKeepAliveWithoutEventsMs,
+  streamListState,
   holodexStreamHasConfiguredChannel,
-  initHolodexFold,
+  initStreamListFold,
   initHolodexLoginModalControls,
-  isHolodexPanelOpen,
+  isStreamListPanelOpen,
   loadHolodexAuthStatus,
   logoutHolodexJwt,
   markHolodexChannelAdded,
-  maybeLoadHolodexStreams,
+  maybeLoadStreamList,
   openHolodexLogin,
   openHolodexLoginModal,
   readHolodexAddChannelData,
-  readHolodexStreamActionData,
-  refreshHolodexChannelsData,
-  refreshHolodexStreams,
-  renderHolodexCards,
+  readStreamActionData,
+  refreshChannelsData,
+  refreshStreamList,
+  renderStreamListCards,
   saveHolodexApiKey,
   saveHolodexJwt,
   setHolodexAddChannelButtonsDisabled,
   setHolodexAddChannelConfirmVisible,
-  setHolodexCollapsed,
-  setHolodexStatus,
-  startHolodexDurationTicker,
-  stopHolodexDurationTicker,
+  setStreamListCollapsed,
+  setStreamListStatus,
+  startStreamListDurationTicker,
+  stopStreamListDurationTicker,
   testHolodexApiKey,
   toggleHolodexFavoritesMode,
-  toggleHolodexFold,
+  toggleStreamListFold,
   toggleHolodexSkipJwtVerify,
   updateHolodexAuthBar,
   updateHolodexLoginButton,
   updateHolodexModalHint,
-} from './holodex.js';
+} from './stream-list.js';
 
 let statusRefreshInterval = 60000; // Default 60 seconds
 const networkRefreshInterval = 1000;
@@ -166,8 +166,8 @@ function initDashboardControls() {
     .getElementById('refreshNiconicoBtn')
     ?.addEventListener('click', refreshNiconicoStatus);
   document
-    .getElementById('refreshHolodexBtn')
-    ?.addEventListener('click', () => refreshHolodexStreams({ force: true }));
+    .getElementById('refreshStreamsBtn')
+    ?.addEventListener('click', () => refreshStreamList({ force: true }));
   document
     .getElementById('bili-title-edit-btn')
     ?.addEventListener('click', toggleTitleEdit);
@@ -389,7 +389,7 @@ async function initStatusRefresh() {
     updateDanmakuCommandToggle(config.bilibili?.enable_danmaku_command !== false);
 
     applyHolodexMonitorGateToggle(config.holodex_monitor_gate !== false);
-    applyHolodexConfig(config);
+    applyStreamListConfig(config);
 
     applyPriorityAutoRestartToggle(config);
 
@@ -424,14 +424,14 @@ async function initStatusRefresh() {
     }
   }, networkRefreshInterval);
 
-  if (holodexState.holodexKeepAliveId) {
-    clearInterval(holodexState.holodexKeepAliveId);
+  if (streamListState.keepAliveId) {
+    clearInterval(streamListState.keepAliveId);
   }
-  holodexState.holodexKeepAliveId = setInterval(() => {
-    if (holodexKeepAliveDue(Date.now() - holodexState.holodexLastFetchMs, eventStreamHealthy())) {
-      maybeLoadHolodexStreams();
+  streamListState.keepAliveId = setInterval(() => {
+    if (streamListKeepAliveDue(Date.now() - streamListState.lastFetchMs, eventStreamHealthy())) {
+      maybeLoadStreamList();
     }
-  }, holodexKeepAliveCheckMs);
+  }, streamListKeepAliveCheckMs);
 
   // Initial refresh
   refreshStatus();
@@ -452,17 +452,17 @@ function setOnAir(next) {
       title: next.title || '',
     }
     : null;
-  if (JSON.stringify(holodexState.holodexOnAir) === JSON.stringify(normalized)) return;
-  holodexState.holodexOnAir = normalized;
-  const container = document.getElementById('holodex-streams');
-  if (container && (holodexState.lastHolodexLive.length || holodexState.lastHolodexScheduled.length)) {
-    renderHolodexCards(container, holodexState.lastHolodexLive, holodexState.lastHolodexScheduled);
+  if (JSON.stringify(streamListState.onAir) === JSON.stringify(normalized)) return;
+  streamListState.onAir = normalized;
+  const container = document.getElementById('streams-list');
+  if (container && (streamListState.lastLive.length || streamListState.lastScheduled.length)) {
+    renderStreamListCards(container, streamListState.lastLive, streamListState.lastScheduled);
   }
 }
 
 let pendingSwitchData = null;
 let selectedAreaId = null;
-async function switchToHolodexStream(channelId, suggestedAreaId, title, topicId, status, platform, twitchChannelId, externalLink) {
+async function switchToStream(channelId, suggestedAreaId, title, topicId, status, platform, twitchChannelId, externalLink) {
   if (!suggestedAreaId) {
     // Show modal for area selection
     pendingSwitchData = { channelId, areaId: null, title, topicId, status, platform, twitchChannelId, externalLink };
@@ -628,7 +628,7 @@ async function confirmAreaSelection() {
 }
 async function performSwitch(channelId, areaId, title, topicId, status, platform, twitchChannelId, externalLink) {
   try {
-    const payload = createHolodexSwitchPayload({
+    const payload = createSwitchPayload({
       channelId,
       title,
       topicId,
@@ -2287,8 +2287,8 @@ document.addEventListener('click', function (e) {
 
   const switchButton = e.target.closest('.switch-button');
   if (switchButton) {
-    const action = readHolodexStreamActionData(switchButton);
-    switchToHolodexStream(
+    const action = readStreamActionData(switchButton);
+    switchToStream(
       action.channelId,
       action.suggestedAreaId,
       action.title,
@@ -2303,8 +2303,8 @@ document.addEventListener('click', function (e) {
 
   const cropSwitchButton = e.target.closest('.crop-switch-button');
   if (cropSwitchButton) {
-    const action = readHolodexStreamActionData(cropSwitchButton);
-    cropAndSwitchToHolodexStream(
+    const action = readStreamActionData(cropSwitchButton);
+    cropAndSwitchToStream(
       action.channelId,
       action.suggestedAreaId,
       action.title,
@@ -2375,31 +2375,31 @@ export {
   initHolodexLoginModalControls,
   initFaceAuthModalControls,
   initStatusRefresh,
-  applyHolodexSectionVisibility,
-  applyHolodexConfig,
-  isHolodexPanelOpen,
-  maybeLoadHolodexStreams,
-  holodexKeepAliveDue,
-  setHolodexCollapsed,
-  toggleHolodexFold,
-  initHolodexFold,
-  setHolodexStatus,
-  hideHolodexStatus,
-  refreshHolodexStreams,
-  createHolodexStreamSvg,
-  stopHolodexDurationTicker,
-  startHolodexDurationTicker,
+  applyStreamListSectionVisibility,
+  applyStreamListConfig,
+  isStreamListPanelOpen,
+  maybeLoadStreamList,
+  streamListKeepAliveDue,
+  setStreamListCollapsed,
+  toggleStreamListFold,
+  initStreamListFold,
+  setStreamListStatus,
+  hideStreamListStatus,
+  refreshStreamList,
+  createStreamSvg,
+  stopStreamListDurationTicker,
+  startStreamListDurationTicker,
   setOnAir,
   getHolodexChannelUrl,
   getHolodexChannelPhotoUrl,
-  refreshHolodexChannelsData,
+  refreshChannelsData,
   holodexStreamHasConfiguredChannel,
   createHolodexChannelAddIcon,
   createHolodexAddChannelControls,
-  createHolodexStreamActionButton,
-  readHolodexStreamActionData,
+  createStreamActionButton,
+  readStreamActionData,
   createStreamCard,
-  switchToHolodexStream,
+  switchToStream,
   showAreaModal,
   closeAreaModal,
   initAreaModalControls,
@@ -2409,7 +2409,7 @@ export {
   retryStartStream,
   confirmAreaSelection,
   performSwitch,
-  cropAndSwitchToHolodexStream,
+  cropAndSwitchToStream,
   testHolodexApiKey,
   updateHolodexAuthBar,
   toggleHolodexFavoritesMode,
@@ -2518,6 +2518,6 @@ export {
   faceAuthUrl,
   monitorToggleSaveDebounceMs,
   lastStatusRefreshMs,
-  HOLODEX_STATUS_STATE_CLASSES,
+  STREAM_LIST_STATUS_STATE_CLASSES,
   pendingSwitchData,
 };

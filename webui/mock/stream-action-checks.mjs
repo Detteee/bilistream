@@ -9,11 +9,11 @@ export async function checkStreamActions({ base, context, command, evaluate, wai
   };
   const reload = () => command('browsingContext.reload', { context, wait: 'complete' });
   const writes = async () => (await fetch(`${base}/mock/writes`)).json();
-  const card = number => `[...document.querySelectorAll('#holodex-streams .holodex-stream-card')].find(card => card.querySelector('.holodex-stream-title').textContent === '示例直播 ${number}')`;
+  const card = number => `[...document.querySelectorAll('#streams-list .stream-card')].find(card => card.querySelector('.stream-title').textContent === '示例直播 ${number}')`;
   const click = (number, selector) => evaluate(`${card(number)}.querySelector(${JSON.stringify(selector)}).click()`);
   const refresh = async () => {
-    await evaluate("document.getElementById('refreshHolodexBtn').click()");
-    await waitFor("document.getElementById('holodex-streams').getAttribute('aria-busy') === 'false'");
+    await evaluate("document.getElementById('refreshStreamsBtn').click()");
+    await waitFor("document.getElementById('streams-list').getAttribute('aria-busy') === 'false'");
   };
   const nextWrite = async (path, before) => {
     await waitFor(`(async () => (await (await fetch('/mock/writes')).json()).slice(${before}).some(row => row.path === ${JSON.stringify(path)}))()`);
@@ -38,7 +38,7 @@ export async function checkStreamActions({ base, context, command, evaluate, wai
     for (const vocabulary of ['current', 'legacy']) {
       await mode(vocabulary);
       await reload();
-      await waitFor("document.documentElement.classList.contains('app-ready') && document.querySelectorAll('#holodex-streams .holodex-stream-card').length === 8");
+      await waitFor("document.documentElement.classList.contains('app-ready') && document.querySelectorAll('#streams-list .stream-card').length === 8");
       const initialWriteCount = (await writes()).length;
       assert.equal(await evaluate(`${card(101)}.querySelector('.switch-button').checkVisibility()`), true);
       // Both same-ID rows must survive rendering and viewer-only reconciliation.
@@ -47,7 +47,7 @@ export async function checkStreamActions({ base, context, command, evaluate, wai
       await mode('viewers');
       await refresh();
       assert.equal(await evaluate(`window.streamActionCards[0] === ${card(106)} && window.streamActionCards[1] === ${card(107)}`), true, `${vocabulary}: viewer updates retain each card`);
-      assert.equal(await evaluate(`${card(106)}.querySelector('.holodex-stream-viewers').textContent.includes('102')`), true);
+      assert.equal(await evaluate(`${card(106)}.querySelector('.stream-viewers').textContent.includes('102')`), true);
 
       await switchAndCheck(101, expectedSwitch(101, 'twitch', 'https://www.twitch.tv/example_channel_101?view=live#now'), `${vocabulary}: direct Twitch switch`);
       await switchAndCheck(105, expectedSwitch(105, 'youtube', null), `${vocabulary}: YouTube switch and null optionals`);
@@ -101,6 +101,6 @@ export async function checkStreamActions({ base, context, command, evaluate, wai
     await mode('reset');
     await evaluate('delete window.streamActionCards');
     await reload();
-    await waitFor("document.documentElement.classList.contains('app-ready') && document.querySelectorAll('#holodex-streams .holodex-stream-card').length === 2");
+    await waitFor("document.documentElement.classList.contains('app-ready') && document.querySelectorAll('#streams-list .stream-card').length === 2");
   }
 }
