@@ -15,7 +15,7 @@ pub const STATUS: &str = "status";
 pub const CLUSTER: &str = "cluster";
 /// Persisted configuration changed.
 pub const CONFIG: &str = "config";
-/// A Holodex panel list (channels or favorites) changed.
+/// The 直播与预告 list (channels or favorites) changed.
 pub const HOLODEX: &str = "holodex";
 /// 统计 history committed new rows (throttled to ≤ 1 per 5 s by the writer).
 pub const HISTORY: &str = "history";

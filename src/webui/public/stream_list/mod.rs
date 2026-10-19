@@ -1,4 +1,4 @@
-//! Public stream lists built from shared raw rows; viewers read only snapshots.
+//! Public stream lists built from shared raw items; viewers read only snapshots.
 mod images;
 mod payload;
 mod snapshot;
@@ -10,7 +10,7 @@ pub(super) use snapshot::{current_public_streams, start_streams_watch};
 mod test_support {
     use super::payload::{build_public_streams, PublicStream};
     use crate::config::{Channel, ChannelPlatforms};
-    use crate::plugins::holodex::{HolodexChannel, HolodexStream};
+    use crate::plugins::stream_item::{StreamChannel, StreamItem};
     pub(super) fn channel(
         name: &str,
         aliases: &[&str],
@@ -30,7 +30,7 @@ mod test_support {
         }
     }
 
-    pub(super) fn stream(title: &str, topic: Option<&str>, channel_id: &str) -> HolodexStream {
+    pub(super) fn stream(title: &str, topic: Option<&str>, channel_id: &str) -> StreamItem {
         stream_on("vid1", title, topic, channel_id, "live", None)
     }
 
@@ -41,8 +41,8 @@ mod test_support {
         channel_id: &str,
         status: &str,
         scheduled: Option<&str>,
-    ) -> HolodexStream {
-        HolodexStream {
+    ) -> StreamItem {
+        StreamItem {
             id: id.to_string(),
             title: title.to_string(),
             stream_type: "stream".to_string(),
@@ -53,7 +53,7 @@ mod test_support {
             start_scheduled: scheduled.map(str::to_string),
             start_actual: None,
             live_viewers: Some(1200),
-            channel: HolodexChannel {
+            channel: StreamChannel {
                 id: channel_id.to_string(),
                 name: "Kamito".to_string(),
                 photo: None,
@@ -75,7 +75,7 @@ mod test_support {
     }
 
     pub(super) fn build(
-        streams: Vec<HolodexStream>,
+        streams: Vec<StreamItem>,
         enabled: bool,
         banned: &[&str],
     ) -> Vec<PublicStream> {

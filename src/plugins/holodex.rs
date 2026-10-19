@@ -1,4 +1,5 @@
 use super::http::{pooled_client, response_json_limited};
+use super::stream_item::StreamItem;
 use crate::config::load_config;
 use base64::{engine::general_purpose::URL_SAFE, Engine as _};
 use serde::{Deserialize, Serialize};
@@ -9,33 +10,6 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 /// Refresh Holodex JWT when within this many seconds of `exp`.
 pub const HOLODEX_JWT_REFRESH_BEFORE_EXPIRY_SECS: u64 = 3600 * 24 * 30;
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct HolodexStream {
-    pub id: String,
-    pub title: String,
-    #[serde(rename = "type")]
-    pub stream_type: String,
-    pub topic_id: Option<String>,
-    pub published_at: Option<String>,
-    pub available_at: Option<String>,
-    pub status: String,
-    pub start_scheduled: Option<String>,
-    pub start_actual: Option<String>,
-    pub live_viewers: Option<i32>,
-    #[serde(default)]
-    pub channel: HolodexChannel,
-    #[serde(default)]
-    pub link: Option<String>,
-    #[serde(default)]
-    pub thumbnail: Option<String>,
-    #[serde(default, rename = "placeholderType")]
-    pub placeholder_type: Option<String>,
-    /// Set when YouTube `videos.list` classified this row, so its status is
-    /// trusted over Holodex's stale-schedule heuristics.
-    #[serde(skip)]
-    pub yt_confirmed: bool,
-}
-
 #[derive(Serialize, Deserialize, Debug)]
 pub struct HolodexFavoriteChannel {
     pub id: String,
@@ -43,19 +17,10 @@ pub struct HolodexFavoriteChannel {
     pub name: String,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Default)]
-pub struct HolodexChannel {
-    pub id: String,
-    #[serde(default)]
-    pub name: String,
-    #[serde(default)]
-    pub photo: Option<String>,
-}
-
 pub async fn get_holodex_streams(
     channel_ids: Vec<String>,
     include_placeholder: bool,
-) -> Result<Vec<HolodexStream>, Box<dyn Error>> {
+) -> Result<Vec<StreamItem>, Box<dyn Error>> {
     let cfg = load_config().await?;
     let api_key = match cfg.holodex_api_key {
         Some(key) if !key.is_empty() => key,
@@ -189,7 +154,7 @@ async fn favorite_channels_from(
 pub async fn get_holodex_favorites_live(
     api_key: &str,
     jwt: &str,
-) -> Result<(HashSet<String>, Vec<HolodexStream>), Box<dyn Error>> {
+) -> Result<(HashSet<String>, Vec<StreamItem>), Box<dyn Error>> {
     let client = pooled_client(None)?;
 
     let favorites = get_holodex_favorite_channels(api_key, jwt).await?;
@@ -209,7 +174,7 @@ pub async fn get_holodex_favorites_live(
         return Err(format!("Holodex favorites live error: {}", live_resp.status()).into());
     }
 
-    let streams: Vec<HolodexStream> = response_json_limited(live_resp).await?;
+    let streams: Vec<StreamItem> = response_json_limited(live_resp).await?;
     let filtered = streams
         .into_iter()
         .filter(|s| fav_ids.contains(&s.channel.id))
@@ -361,7 +326,7 @@ pub async fn get_holodex_live_title(
         return Err(format!("Holodex API error: {}", response.status()).into());
     }
 
-    let videos: Vec<HolodexStream> = response_json_limited(response).await?;
+    let videos: Vec<StreamItem> = response_json_limited(response).await?;
     for video in videos.iter().rev() {
         if !video
             .channel

@@ -1,8 +1,8 @@
-//! Server-side stream lists for the Holodex panel.
+//! Server-side stream lists for the 直播与预告 panel.
 //!
 //! Each list (the roster's channels, or the Holodex account's favorites) is
-//! rebuilt from the last Holodex rows, the rows discovery found and recently
-//! live rows, corrected by the `videos.list` store, Twitch GQL, and Niconico
+//! rebuilt from the last backstop items, the items discovery found and recently
+//! live items, corrected by the `videos.list` store, Twitch GQL, and Niconico
 //! channel listing pages. YouTube, Twitch GQL and Niconico listings drive the
 //! updates: discovery, the store, Twitch and Niconico liveness and config
 //! commits call `wake()`, and a rebuild that changes the panel's content
@@ -12,7 +12,7 @@
 pub(crate) mod facts;
 mod filters;
 use crate::config::{load_config, Config};
-use crate::plugins::holodex::HolodexStream;
+use crate::plugins::stream_item::StreamItem;
 use crate::webui::events;
 use facts::{list_content, StreamListFacts};
 pub(crate) use filters::filter_streams;
@@ -27,7 +27,7 @@ use tokio::sync::Notify;
 /// A list nobody requested for this long goes idle.
 const LEASE: Duration = Duration::from_secs(10 * 60);
 /// A leased list is rebuilt at least this often, which keeps its IDs wanted
-/// in the store and drops rows past the horizon.
+/// in the store and drops items past the horizon.
 const KEEP_WANTED: Duration = Duration::from_secs(5 * 60);
 const HOLODEX_EVERY: Duration = Duration::from_secs(60);
 /// Forced and input-change fetches stay at least this far apart.
@@ -50,17 +50,17 @@ impl ListKind {
     }
 }
 
-/// What a list serves: corrected, filtered rows, before any consumer's mapping.
+/// What a list serves: corrected, filtered items, before any consumer's mapping.
 pub(crate) struct StreamListSnapshot {
-    pub(crate) rows: Vec<HolodexStream>,
+    pub(crate) items: Vec<StreamItem>,
     /// When Holodex last answered for this list; `None` before any success.
     pub(crate) holodex_ok_at: Option<Instant>,
     /// The Holodex cadence this build ran on (`holodex_every`).
     pub(crate) holodex_every: Duration,
 }
 
-struct HolodexRows {
-    rows: Vec<HolodexStream>,
+struct HolodexFetch {
+    items: Vec<StreamItem>,
     /// Favorites: the channel IDs Holodex listed as favorites.
     favorites: HashSet<String>,
 }
@@ -68,11 +68,11 @@ struct HolodexRows {
 #[derive(Default)]
 struct ListState {
     /// Last successful fetch, and when it answered.
-    holodex: Option<HolodexRows>,
+    holodex: Option<HolodexFetch>,
     holodex_ok_at: Option<Instant>,
     /// Last fetch attempt, successful or not, and its inputs hash.
     attempt: Option<(Instant, u64)>,
-    /// The last failed fetch's message, served while there are no rows.
+    /// The last failed fetch's message, served while there are no items.
     last_error: Option<String>,
     built_at: Option<Instant>,
     /// The display facts last announced over SSE.
@@ -212,24 +212,24 @@ fn note_failure(state: &mut ListState, message: String) {
     state.last_error = Some(message);
 }
 
-fn note_success(state: &mut ListState, rows: HolodexRows) {
+fn note_success(state: &mut ListState, fetch: HolodexFetch) {
     if state.failing {
         tracing::info!("Holodex 列表刷新恢复");
     }
     state.failing = false;
     state.last_error = None;
-    state.holodex = Some(rows);
+    state.holodex = Some(fetch);
     state.holodex_ok_at = Some(Instant::now());
 }
 
-/// Fetches Holodex when due, then returns its rows and the channels the list
+/// Fetches Holodex when due, then returns its items and the channels the list
 /// keeps.
-async fn holodex_rows(
+async fn holodex_items(
     kind: ListKind,
     state: &mut ListState,
     cfg: &mut Config,
     force: bool,
-) -> Result<(Vec<HolodexStream>, HashSet<String>), String> {
+) -> Result<(Vec<StreamItem>, HashSet<String>), String> {
     let has_yt = crate::plugins::youtube_data::youtube_configured(cfg);
     let usable_yt = crate::plugins::youtube_data::youtube_answers_available(cfg);
     let now = Instant::now();
@@ -262,8 +262,8 @@ async fn holodex_rows(
                 ListKind::Channels => {
                     crate::plugins::holodex::get_holodex_streams(roster.clone(), true)
                         .await
-                        .map(|rows| HolodexRows {
-                            rows,
+                        .map(|items| HolodexFetch {
+                            items,
                             favorites: HashSet::new(),
                         })
                         .map_err(|e| format!("Failed to fetch from Holodex: {e}"))
@@ -271,7 +271,7 @@ async fn holodex_rows(
                 ListKind::Favorites => fetch_favorites(cfg).await,
             };
             match fetched {
-                Ok(rows) => note_success(state, rows),
+                Ok(items) => note_success(state, items),
                 Err(message) => note_failure(state, message),
             }
         }
@@ -288,27 +288,27 @@ async fn holodex_rows(
             .clone()
             .unwrap_or_else(|| "Holodex API key not configured".to_string()));
     }
-    let (rows, favorites) = state
+    let (items, favorites) = state
         .holodex
         .as_ref()
-        .map(|holodex| (holodex.rows.clone(), holodex.favorites.clone()))
+        .map(|holodex| (holodex.items.clone(), holodex.favorites.clone()))
         .unwrap_or_default();
     let allowed = match kind {
         ListKind::Channels => roster.into_iter().collect(),
         ListKind::Favorites => favorites,
     };
-    Ok((rows, allowed))
+    Ok((items, allowed))
 }
 
-async fn fetch_favorites(cfg: &mut Config) -> Result<HolodexRows, String> {
+async fn fetch_favorites(cfg: &mut Config) -> Result<HolodexFetch, String> {
     let key = holodex_key(cfg).unwrap_or_default();
     let (jwt, _) = crate::plugins::holodex_account::apply_holodex_jwt_sync(cfg)
         .await
         .map_err(|e| format!("Failed to refresh Holodex JWT: {e}"))?;
-    let (favorites, rows) = crate::plugins::holodex::get_holodex_favorites_live(&key, &jwt)
+    let (favorites, items) = crate::plugins::holodex::get_holodex_favorites_live(&key, &jwt)
         .await
         .map_err(|e| format!("Failed to fetch Holodex favorites: {e}"))?;
-    Ok(HolodexRows { rows, favorites })
+    Ok(HolodexFetch { items, favorites })
 }
 
 /// Rebuilds the list and publishes `events::HOLODEX` when the panel's content
@@ -319,7 +319,7 @@ async fn build(kind: ListKind, force: bool) -> Result<Arc<StreamListSnapshot>, S
     let mut cfg = load_config()
         .await
         .map_err(|e| format!("Failed to load config: {e}"))?;
-    let (rows, allowed) = match holodex_rows(kind, &mut state, &mut cfg, force).await {
+    let (items, allowed) = match holodex_items(kind, &mut state, &mut cfg, force).await {
         Ok(found) => found,
         Err(message) => {
             list.set_snapshot(None);
@@ -327,20 +327,20 @@ async fn build(kind: ListKind, force: bool) -> Result<Arc<StreamListSnapshot>, S
             return Err(message);
         }
     };
-    let rows = crate::plugins::youtube_discovery::merge_discovered(rows);
-    let rows = crate::plugins::youtube_data::apply_youtube_overlay(rows).await;
-    let rows = crate::plugins::twitch_live::overlay(rows);
-    let rows = crate::plugins::niconico_live::overlay(rows);
-    let rows = filter_streams(rows, allowed);
+    let items = crate::plugins::youtube_discovery::merge_discovered(items);
+    let items = crate::plugins::youtube_data::apply_youtube_overlay(items).await;
+    let items = crate::plugins::twitch_live::overlay(items);
+    let items = crate::plugins::niconico_live::overlay(items);
+    let items = filter_streams(items, allowed);
 
-    let panel = list_content(&rows);
+    let panel = list_content(&items);
     if replace_if_changed(&mut state.published, panel) {
         events::publish(events::HOLODEX);
     }
     state.built_at = Some(Instant::now());
     let usable_yt = crate::plugins::youtube_data::youtube_answers_available(&cfg);
     let snapshot = Arc::new(StreamListSnapshot {
-        rows,
+        items,
         holodex_ok_at: state.holodex_ok_at,
         holodex_every: holodex_every(usable_yt),
     });
@@ -348,7 +348,7 @@ async fn build(kind: ListKind, force: bool) -> Result<Arc<StreamListSnapshot>, S
     Ok(snapshot)
 }
 
-/// Extends the list's lease and returns its rows. `force` fetches Holodex now
+/// Extends the list's lease and returns its items. `force` fetches Holodex now
 /// (at most once per `FORCE_GAP`); an idle or empty list is built first.
 pub(crate) async fn current(
     kind: ListKind,
@@ -506,13 +506,13 @@ mod tests {
 
     #[test]
     fn an_unchanged_rebuild_publishes_nothing() {
-        let row: HolodexStream = serde_json::from_value(serde_json::json!({
+        let item: StreamItem = serde_json::from_value(serde_json::json!({
             "id": "a", "title": "Example", "type": "stream", "status": "live",
             "channel": { "id": "UCexample", "name": "Example" }
         }))
         .unwrap();
         let mut slot = None;
-        let original = list_content(std::slice::from_ref(&row));
+        let original = list_content(std::slice::from_ref(&item));
         assert!(replace_if_changed(&mut slot, original.clone()));
         assert!(!replace_if_changed(&mut slot, original.clone()));
         let mut changed = original.clone();
@@ -531,11 +531,11 @@ mod tests {
     #[test]
     fn a_failed_fetch_keeps_the_last_success_time() {
         let mut state = ListState::default();
-        let rows = || HolodexRows {
-            rows: Vec::new(),
+        let items = || HolodexFetch {
+            items: Vec::new(),
             favorites: HashSet::new(),
         };
-        note_success(&mut state, rows());
+        note_success(&mut state, items());
         let ok_at = state.holodex_ok_at;
         assert!(ok_at.is_some());
         note_failure(&mut state, "down".to_string());

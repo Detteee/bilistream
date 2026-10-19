@@ -2,8 +2,9 @@ use super::danmaku::get_channel_name;
 use super::holodex::get_holodex_live_title;
 pub use super::holodex::{
     get_holodex_favorites_live, get_holodex_streams, holodex_jwt_is_expired, holodex_unix_now,
-    refresh_holodex_jwt, sync_holodex_jwt_if_needed, HolodexStream,
+    refresh_holodex_jwt, sync_holodex_jwt_if_needed,
 };
+use super::stream_item::StreamItem;
 use super::utils::{configure_no_window, executable_command};
 use crate::config::load_config;
 use crate::plugins::source_status::SourceStatus;
@@ -154,10 +155,10 @@ pub struct YoutubeChannelStatus {
 
 fn select_holodex_channel_status_at(
     channel_id: &str,
-    streams: &[HolodexStream],
+    streams: &[StreamItem],
     now: DateTime<chrono::Utc>,
 ) -> YoutubeChannelStatus {
-    let channel_streams: Vec<&HolodexStream> = streams
+    let channel_streams: Vec<&StreamItem> = streams
         .iter()
         .filter(|s| s.channel.id == channel_id)
         .collect();
@@ -173,7 +174,7 @@ fn select_holodex_channel_status_at(
     }
 
     let horizon = now + chrono::Duration::hours(UPCOMING_HORIZON_HOURS);
-    let mut upcoming: Vec<&HolodexStream> = channel_streams
+    let mut upcoming: Vec<&StreamItem> = channel_streams
         .iter()
         .copied()
         .filter(|s| {
@@ -220,7 +221,7 @@ fn select_holodex_channel_status_at(
 
 pub fn select_holodex_channel_status(
     channel_id: &str,
-    streams: &[HolodexStream],
+    streams: &[StreamItem],
 ) -> YoutubeChannelStatus {
     select_holodex_channel_status_at(channel_id, streams, chrono::Utc::now())
 }
@@ -230,7 +231,7 @@ pub fn select_holodex_channel_status(
 pub enum MonitorMode {
     /// yt-dlp 兜底: yt-dlp every tick, whatever the other sources say.
     Rescue,
-    /// Holodex rows plus discovered rows, corrected by `videos.list`. yt-dlp
+    /// Stream items plus discovered items, corrected by `videos.list`. yt-dlp
     /// confirms live streams and runs as a throttled safety probe.
     Index,
 }
@@ -353,7 +354,7 @@ enum IndexView {
     /// Rescue mode, or the index could not be read.
     Unavailable,
     Live,
-    /// Not live, and Holodex itself sent a row for the channel.
+    /// Not live, and Holodex itself sent an item for the channel.
     Upcoming,
     /// Nothing but discovered waiting rooms, or nothing at all.
     NoAnswer,
@@ -493,13 +494,13 @@ fn record_safety_probe(channel_id: &str, status: Option<SourceStatus>) {
     }
 }
 
-/// Holodex rows (when a Holodex key is set) plus this channel's discovered
-/// rows, corrected by YouTube, and the IDs Holodex itself sent.
+/// Backstop items (when a Holodex key is set) plus this channel's discovered
+/// items, corrected by YouTube, and the IDs Holodex itself sent.
 async fn index_rows(
     cfg: &crate::config::Config,
     channel_id: &str,
     max_age: Option<Duration>,
-) -> Result<(Vec<HolodexStream>, HashSet<String>), String> {
+) -> Result<(Vec<StreamItem>, HashSet<String>), String> {
     let has_holodex_key = cfg
         .holodex_api_key
         .as_deref()
@@ -569,14 +570,14 @@ pub async fn get_youtube_channel_status(
 /// instead of one per channel.
 const WATCH_FRESH_FOR: Duration = Duration::from_secs(90);
 
-/// Live rows for the QQ watch list: the whole watched roster in one index
+/// Live items for the QQ watch list: the whole watched roster in one index
 /// read.
 ///
 /// [`index_rows`] answers for the channel being relayed; this covers channels
 /// that are only watched, so a go-live signal no longer waits for a relay.
 /// `Err` means no source could answer at all, which lets the caller keep its
-/// last rows instead of reading silence as "offline".
-pub async fn watch_live_rows(channel_ids: &[String]) -> Result<Vec<HolodexStream>, String> {
+/// last items instead of reading silence as "offline".
+pub async fn watch_live_rows(channel_ids: &[String]) -> Result<Vec<StreamItem>, String> {
     let mut wanted: Vec<String> = channel_ids
         .iter()
         .map(|id| id.trim().to_string())
@@ -608,12 +609,12 @@ pub async fn watch_live_rows(channel_ids: &[String]) -> Result<Vec<HolodexStream
         super::youtube_data::apply_youtube_overlay_within(streams, Some(WATCH_FRESH_FOR)).await;
     Ok(streams
         .into_iter()
-        .filter(|row| row.status == "live" && roster.contains(row.channel.id.as_str()))
+        .filter(|item| item.status == "live" && roster.contains(item.channel.id.as_str()))
         .collect())
 }
 
-/// Holodex rows plus this channel's streams found by RSS discovery.
-fn with_discovered_rows(channel_id: &str, streams: Vec<HolodexStream>) -> Vec<HolodexStream> {
+/// Stream items plus this channel's streams found by RSS discovery.
+fn with_discovered_rows(channel_id: &str, streams: Vec<StreamItem>) -> Vec<StreamItem> {
     super::youtube_discovery::merge_discovered(streams)
         .into_iter()
         .filter(|s| s.channel.id == channel_id)
@@ -693,7 +694,7 @@ fn warning_metadata_needs_confirmation(
         )
 }
 
-/// Keep the ID returned by the actual live confirmation. A stale index row
+/// Keep the ID returned by the actual live confirmation. A stale index item
 /// must not label a current URL as a different (possibly older) episode.
 fn confirmed_index_status(status: YoutubeChannelStatus, confirmed: SourceStatus) -> SourceStatus {
     let SourceStatus {
@@ -747,7 +748,7 @@ pub(crate) async fn get_youtube_area_topic(
 fn youtube_area_topic_for_video(
     channel_id: &str,
     video_id: &str,
-    streams: &[HolodexStream],
+    streams: &[StreamItem],
 ) -> Option<String> {
     streams
         .iter()
@@ -793,7 +794,7 @@ async fn get_youtube_status_with(
         MonitorMode::Index => match index_rows(&cfg, channel_id, overlay_max_age(probe)).await {
             Ok((streams, holodex_ids)) => {
                 let status = select_holodex_channel_status(channel_id, &streams);
-                // Holodex omits some streams entirely, so only its own row for
+                // Holodex omits some streams entirely, so only its own item for
                 // this channel (or a stream YouTube calls live) answers. A
                 // discovered waiting room alone must not hide a stream that
                 // went live on another video.
@@ -1261,7 +1262,7 @@ mod tests {
             Some("current-id")
         ));
     }
-    use crate::plugins::holodex::HolodexChannel;
+    use crate::plugins::stream_item::StreamChannel;
 
     #[test]
     fn index_mode_needs_the_switch_off_and_some_key() {
@@ -1336,7 +1337,7 @@ mod tests {
 
     #[test]
     fn a_dropped_stream_only_reaches_its_own_channels_monitor() {
-        let live = |id: &str, channel: &str| HolodexStream {
+        let live = |id: &str, channel: &str| StreamItem {
             id: id.to_string(),
             title: String::new(),
             stream_type: "stream".to_string(),
@@ -1347,7 +1348,7 @@ mod tests {
             start_scheduled: None,
             start_actual: Some("2026-09-25T10:00:00Z".to_string()),
             live_viewers: None,
-            channel: HolodexChannel {
+            channel: StreamChannel {
                 id: channel.to_string(),
                 ..Default::default()
             },
@@ -1360,10 +1361,10 @@ mod tests {
         super::super::youtube_data::remember_live_for_test(live("drop-b", "UCdropB"));
 
         // Holodex sent nothing for A during the outage: A's stream is back as live.
-        let rows = with_discovered_rows("UCdropA", Vec::new());
-        let ids: Vec<&str> = rows.iter().map(|s| s.id.as_str()).collect();
+        let items = with_discovered_rows("UCdropA", Vec::new());
+        let ids: Vec<&str> = items.iter().map(|s| s.id.as_str()).collect();
         assert_eq!(ids, vec!["drop-a"]);
-        assert!(select_holodex_channel_status("UCdropA", &rows).is_live);
+        assert!(select_holodex_channel_status("UCdropA", &items).is_live);
 
         // After a switch to C, neither dropped stream touches C's view.
         assert!(with_discovered_rows("UCdropC", Vec::new()).is_empty());
@@ -1490,8 +1491,8 @@ mod tests {
         assert_send(get_youtube_channel_status("channel-id"));
     }
 
-    fn holodex_stream(id: &str, status: &str, scheduled: Option<&str>) -> HolodexStream {
-        HolodexStream {
+    fn holodex_stream(id: &str, status: &str, scheduled: Option<&str>) -> StreamItem {
+        StreamItem {
             id: id.to_string(),
             title: format!("{} title", id),
             stream_type: "stream".to_string(),
@@ -1502,7 +1503,7 @@ mod tests {
             start_scheduled: scheduled.map(str::to_string),
             start_actual: None,
             live_viewers: None,
-            channel: HolodexChannel {
+            channel: StreamChannel {
                 id: "channel-id".to_string(),
                 ..Default::default()
             },

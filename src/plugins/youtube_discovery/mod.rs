@@ -22,8 +22,8 @@ mod rss;
 use rss::{fetch_feed, FeedOutcome, RssHealth};
 pub use rss::{parse_feed, FeedEntry};
 
-use super::holodex::{HolodexChannel, HolodexStream};
 use super::http::pooled_client;
+use super::stream_item::{StreamChannel, StreamItem};
 use super::youtube_data::{
     google_get, lane_book, set_target_reserved, usable_key_count, Lane, LaneBook,
     DAILY_UNIT_BUDGET, RESERVED_UNITS, TARGET_RESERVED_UNITS,
@@ -99,8 +99,8 @@ fn restream_target(cfg: &Config) -> Option<String> {
 
 #[derive(Default)]
 struct Discovery {
-    /// Live or upcoming rows, already classified by YouTube.
-    found: HashMap<String, HolodexStream>,
+    /// Live or upcoming items, already classified by YouTube.
+    found: HashMap<String, StreamItem>,
     /// IDs YouTube called a plain upload, ended, or omitted. Pruned to the IDs
     /// still in some feed or playlist, so it stays bounded.
     ignored: HashSet<String>,
@@ -108,8 +108,8 @@ struct Discovery {
 
 static DISCOVERY: Mutex<Option<Discovery>> = Mutex::new(None);
 
-fn base_row(entry: &FeedEntry) -> HolodexStream {
-    HolodexStream {
+fn base_item(entry: &FeedEntry) -> StreamItem {
+    StreamItem {
         id: entry.video_id.clone(),
         title: entry.title.clone(),
         stream_type: "stream".to_string(),
@@ -120,7 +120,7 @@ fn base_row(entry: &FeedEntry) -> HolodexStream {
         start_scheduled: None,
         start_actual: None,
         live_viewers: None,
-        channel: HolodexChannel {
+        channel: StreamChannel {
             id: entry.channel_id.clone(),
             name: entry.channel_name.clone(),
             photo: None,
@@ -597,7 +597,7 @@ struct Worker {
     rss: RssHealth,
     rss_enabled: bool,
     next_rss: Option<Instant>,
-    /// Re-check of known rows and retry after a failed classification.
+    /// Re-check of known items and retry after a failed classification.
     next_recheck: Option<Instant>,
     playlist_on: bool,
     /// How the roster's plan last fit, as reported.
@@ -635,7 +635,7 @@ impl Worker {
     async fn tick(&mut self) -> Result<(), String> {
         let role = crate::cluster::yt_index_role();
         if role.is_peer() {
-            // The owner node discovers for the cluster; its rows come with the index.
+            // The owner node discovers for the cluster; its items come with the index.
             self.report_source = None;
             self.classify_failures = FailureReport::default();
             self.rss_client_failures = FailureReport::default();
@@ -675,7 +675,7 @@ impl Worker {
         );
         let keys = cfg.youtube_api_keys();
         if keys.is_empty() {
-            // Nothing can be classified without a key; drop stale rows too.
+            // Nothing can be classified without a key; drop stale items too.
             *DISCOVERY.lock().unwrap_or_else(|e| e.into_inner()) = None;
             *PLAYLIST_STATUS.lock().unwrap_or_else(|e| e.into_inner()) = None;
             *self = Worker::default();
@@ -929,8 +929,8 @@ impl Worker {
             guard
                 .iter()
                 .flat_map(|state| state.found.values())
-                .filter(|row| row.status == "live")
-                .map(|row| row.channel.id.clone())
+                .filter(|item| item.status == "live")
+                .map(|item| item.channel.id.clone())
                 .collect()
         };
 
@@ -1055,7 +1055,7 @@ impl Worker {
                     && state
                         .found
                         .get(id)
-                        .is_some_and(|row| row.status == "upcoming")
+                        .is_some_and(|item| item.status == "upcoming")
             })
         };
 
@@ -1064,9 +1064,9 @@ impl Worker {
             let mut guard = DISCOVERY.lock().unwrap_or_else(|e| e.into_inner());
             let state = guard.get_or_insert_with(Discovery::default);
             state.ignored.retain(|id| entries.contains_key(id));
-            // A push for a known waiting room re-checks the known rows now.
+            // A push for a known waiting room re-checks the known items now.
             recheck = self.next_recheck.is_none_or(|at| at <= now) || pushed_known(state);
-            let known: Vec<HolodexStream> = if recheck {
+            let known: Vec<StreamItem> = if recheck {
                 state.found.values().cloned().collect()
             } else {
                 Vec::new()
@@ -1076,7 +1076,7 @@ impl Worker {
                 .filter(|id| !state.found.contains_key(*id) && !state.ignored.contains(*id))
                 .cloned()
                 .collect();
-            candidates.extend(known.iter().map(|row| row.id.clone()));
+            candidates.extend(known.iter().map(|item| item.id.clone()));
             (candidates, known)
         };
         if candidates.is_empty() {
@@ -1111,45 +1111,45 @@ impl Worker {
             self.next_recheck = Some(now + RSS_TICK);
         }
 
-        let known_ids: HashSet<String> = known.iter().map(|row| row.id.clone()).collect();
-        let new_rows: Vec<HolodexStream> = candidates
+        let known_ids: HashSet<String> = known.iter().map(|item| item.id.clone()).collect();
+        let new_rows: Vec<StreamItem> = candidates
             .iter()
             .filter(|id| !known_ids.contains(*id))
             .filter_map(|id| entries.get(id))
-            .map(|(entry, _)| base_row(entry))
+            .map(|(entry, _)| base_item(entry))
             .collect();
         // Rows YouTube omitted would pass through the overlay unchanged; they are
         // private or deleted, so drop them here instead.
-        let rows: Vec<HolodexStream> = known
+        let items: Vec<StreamItem> = known
             .into_iter()
             .chain(new_rows)
-            .filter(|row| videos.contains_key(&row.id))
+            .filter(|item| videos.contains_key(&item.id))
             .collect();
-        let classified = super::youtube_data::overlay(rows, &videos);
+        let classified = super::youtube_data::overlay(items, &videos);
 
         let mut guard = DISCOVERY.lock().unwrap_or_else(|e| e.into_inner());
         let state = guard.get_or_insert_with(Discovery::default);
-        // Re-checked rows are replaced by their new answer, or dropped.
+        // Re-checked items are replaced by their new answer, or dropped.
         state.found.retain(|id, _| !known_ids.contains(id));
-        for row in classified {
-            if row.status == "live" && !known_ids.contains(&row.id) {
+        for item in classified {
+            if item.status == "live" && !known_ids.contains(&item.id) {
                 let source = fresh
-                    .get(&row.id)
-                    .or_else(|| entries.get(&row.id).map(|(_, source)| source))
+                    .get(&item.id)
+                    .or_else(|| entries.get(&item.id).map(|(_, source)| source))
                     .copied()
                     .unwrap_or(Source::Rss);
-                let since = row.start_actual.as_deref().and_then(seconds_since);
+                let since = item.start_actual.as_deref().and_then(seconds_since);
                 tracing::info!(
                     "{} 发现直播 {} channel={} ({}) via {}，开播距今 {}",
                     self.node_label(),
-                    safe_text(&row.id, 64),
-                    safe_text(&row.channel.id, 64),
-                    safe_text(&row.channel.name, 36),
+                    safe_text(&item.id, 64),
+                    safe_text(&item.channel.id, 64),
+                    safe_text(&item.channel.name, 36),
                     source.label(),
                     since.map_or_else(|| "未知".to_string(), human_duration)
                 );
             }
-            state.found.insert(row.id.clone(), row);
+            state.found.insert(item.id.clone(), item);
         }
         for id in candidates {
             if !state.found.contains_key(&id) {
@@ -1199,34 +1199,34 @@ fn note_discovery_success(report: &mut FailureReport, node: &str, operation: &st
     }
 }
 
-/// Holodex rows plus discovered live/upcoming rows Holodex did not send, and
+/// Stream items plus discovered live/upcoming items the backstop did not send, and
 /// streams seen live moments ago that both have since dropped (see
-/// `youtube_data::recent_live_rows`). Callers filter by channel and horizon
+/// `youtube_data::recent_live_items`). Callers filter by channel and horizon
 /// afterwards as usual.
-pub fn merge_discovered(streams: Vec<HolodexStream>) -> Vec<HolodexStream> {
+pub fn merge_discovered(streams: Vec<StreamItem>) -> Vec<StreamItem> {
     if let crate::cluster::YtIndexRole::Peer(index) = crate::cluster::yt_index_role() {
-        // The owner's discovered and recently live rows.
-        return merge_rows(streams, index.discovered.iter());
+        // The owner's discovered and recently live items.
+        return merge_items(streams, index.discovered.iter());
     }
-    let found: Vec<HolodexStream> = DISCOVERY
+    let found: Vec<StreamItem> = DISCOVERY
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .as_ref()
         .map(|state| state.found.values().cloned().collect())
         .unwrap_or_default();
     let present: HashSet<String> = streams.iter().chain(&found).map(|s| s.id.clone()).collect();
-    let recent = super::youtube_data::recent_live_rows(&present);
-    merge_rows(streams, found.iter().chain(&recent))
+    let recent = super::youtube_data::recent_live_items(&present);
+    merge_items(streams, found.iter().chain(&recent))
 }
 
-fn merge_rows<'a>(
-    mut streams: Vec<HolodexStream>,
-    found: impl Iterator<Item = &'a HolodexStream>,
-) -> Vec<HolodexStream> {
+fn merge_items<'a>(
+    mut streams: Vec<StreamItem>,
+    found: impl Iterator<Item = &'a StreamItem>,
+) -> Vec<StreamItem> {
     let mut present: HashSet<String> = streams.iter().map(|s| s.id.clone()).collect();
-    for row in found {
-        if present.insert(row.id.clone()) {
-            streams.push(row.clone());
+    for item in found {
+        if present.insert(item.id.clone()) {
+            streams.push(item.clone());
         }
     }
     streams
@@ -1327,18 +1327,18 @@ mod tests {
             title: format!("{id} rss"),
             published: None,
         };
-        let mut holodex = base_row(&entry("shared"));
+        let mut holodex = base_item(&entry("shared"));
         holodex.title = "holodex".to_string();
-        let found = [base_row(&entry("shared")), base_row(&entry("missing"))];
+        let found = [base_item(&entry("shared")), base_item(&entry("missing"))];
 
-        let merged = merge_rows(vec![holodex], found.iter());
+        let merged = merge_items(vec![holodex], found.iter());
         let ids: Vec<&str> = merged.iter().map(|s| s.id.as_str()).collect();
         assert_eq!(ids, vec!["shared", "missing"]);
         assert_eq!(merged[0].title, "holodex");
 
-        // A row both discovered and recently live is added once.
-        let recent = [base_row(&entry("missing")), base_row(&entry("dropped"))];
-        let merged = merge_rows(Vec::new(), found.iter().chain(&recent));
+        // A item both discovered and recently live is added once.
+        let recent = [base_item(&entry("missing")), base_item(&entry("dropped"))];
+        let merged = merge_items(Vec::new(), found.iter().chain(&recent));
         let ids: Vec<&str> = merged.iter().map(|s| s.id.as_str()).collect();
         assert_eq!(ids, vec!["shared", "missing", "dropped"]);
     }
@@ -1507,7 +1507,7 @@ mod tests {
         assert_eq!(fit(&dry).1, Fit::Paused);
     }
 
-    /// Peers get pushed streams through the index's `discovered` rows, which
+    /// Peers get pushed streams through the index's `discovered` items, which
     /// the index node publishes from `merge_discovered(Vec::new())`.
     #[tokio::test]
     async fn a_pushed_live_stream_is_published_even_with_rss_disabled() {
@@ -1549,7 +1549,7 @@ mod tests {
         let published = merge_discovered(Vec::new());
         assert!(published
             .iter()
-            .any(|row| row.id == entry.video_id && row.status == "live"));
+            .any(|item| item.id == entry.video_id && item.status == "live"));
     }
 
     #[tokio::test]

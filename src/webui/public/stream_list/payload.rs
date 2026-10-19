@@ -2,7 +2,7 @@
 use super::images::{channel_avatar_url, thumbnail_for};
 use crate::config::Channel;
 use crate::plugins::banned_keywords::banned_keyword_hits;
-use crate::plugins::holodex::HolodexStream;
+use crate::plugins::stream_item::StreamItem;
 use crate::plugins::twitch::channel_id_from_url;
 use crate::webui::stream_list::facts::resolve_stream_facts;
 use serde::{Deserialize, Serialize};
@@ -93,11 +93,11 @@ fn short_command_name(channel: &Channel) -> Option<String> {
         .cloned()
 }
 
-/// `%转播%` names a platform and a channel, not a video, so two Holodex rows
+/// `%转播%` names a platform and a channel, not a video, so two stream items
 /// for the same YouTube channel (or the same Twitch login, or the same
 /// Niconico program) are one switch target. A unique fallback keeps unkeyed
-/// rows from grouping together.
-fn switch_group_key(stream: &HolodexStream) -> String {
+/// items from grouping together.
+fn switch_group_key(stream: &StreamItem) -> String {
     if let Some(live_id) = stream
         .link
         .as_deref()
@@ -132,7 +132,7 @@ fn cmp_public_stream_order(a: &PublicStream, b: &PublicStream) -> std::cmp::Orde
 /// that same target cannot offer 切换 either: the command cannot pick the
 /// later video.
 fn apply_earlier_banned_keyword(keys: &[String], built: &mut [PublicStream]) {
-    // Keep the first row on equal sort keys, just like the previous stable sort.
+    // Keep the first item on equal sort keys, just like the previous stable sort.
     let mut earliest: HashMap<&str, usize> = HashMap::with_capacity(keys.len());
     for (index, key) in keys.iter().enumerate() {
         earliest
@@ -216,7 +216,7 @@ impl<'a> ChannelIndex<'a> {
 /// a keyword block and, after 转播 ends, leave every card stuck unswitchable
 /// until the 30s Holodex snapshot rebuilt.
 fn switchability(
-    stream: &HolodexStream,
+    stream: &StreamItem,
     target: Option<&CommandTarget>,
     danmaku_enabled: bool,
     banned: &[String],
@@ -258,7 +258,7 @@ fn platform_is_supported(target: Option<&CommandTarget>) -> bool {
 }
 
 pub(super) fn build_public_streams(
-    streams: Vec<HolodexStream>,
+    streams: Vec<StreamItem>,
     channels: &[Channel],
     danmaku_enabled: bool,
     banned: &[String],
@@ -448,7 +448,7 @@ mod tests {
     }
 
     /// List order is not schedule order: the 06:00 雑談 still blocks the
-    /// 20:00 card when Holodex returns the later row first.
+    /// 20:00 card when Holodex returns the later item first.
     #[test]
     fn the_sooner_banned_stream_wins_even_when_listed_second() {
         let built = build(
@@ -613,7 +613,7 @@ mod tests {
         assert!(built[0].switchable);
     }
 
-    /// Holodex does not list Niconico, so overlay rows are placeholders keyed
+    /// Holodex does not list Niconico, so overlay items are placeholders keyed
     /// by the YouTube channel. `%转播%` still cannot name NC.
     #[test]
     fn a_niconico_placeholder_cannot_be_requested() {
@@ -720,8 +720,8 @@ mod tests {
         absent.live_viewers = None;
         absent.thumbnail = None;
         let built = build(vec![ordinary, twitch, niconico, absent], true, &[]);
-        for row in &built {
-            let value = serde_json::to_value(row).unwrap();
+        for item in &built {
+            let value = serde_json::to_value(item).unwrap();
             let mut keys: Vec<String> = value.as_object().unwrap().keys().cloned().collect();
             keys.sort();
 
@@ -754,7 +754,7 @@ mod tests {
 
             assert_eq!(keys, expected);
             // Holodex's channel id is an identifier the page has no use for.
-            assert!(!serde_json::to_string(row).unwrap().contains("UCkamito"));
+            assert!(!serde_json::to_string(item).unwrap().contains("UCkamito"));
         }
     }
 
@@ -794,16 +794,16 @@ mod tests {
             "ended", "雑談", None, "UCkamito", "upcoming", None,
         )];
 
-        let rows = crate::cluster::with_yt_index_role(
+        let items = crate::cluster::with_yt_index_role(
             crate::cluster::YtIndexRole::Peer(std::sync::Arc::new(index)),
             // The channels list's steps (`stream_list::build`).
             async {
-                let rows = crate::plugins::youtube_discovery::merge_discovered(holodex);
-                let rows = crate::plugins::youtube_data::apply_youtube_overlay(rows).await;
-                let rows = crate::plugins::twitch_live::overlay(rows);
-                let rows = crate::plugins::niconico_live::overlay(rows);
+                let items = crate::plugins::youtube_discovery::merge_discovered(holodex);
+                let items = crate::plugins::youtube_data::apply_youtube_overlay(items).await;
+                let items = crate::plugins::twitch_live::overlay(items);
+                let items = crate::plugins::niconico_live::overlay(items);
                 crate::webui::stream_list::filter_streams(
-                    rows,
+                    items,
                     ["UCkamito", "UCnazuna"]
                         .map(str::to_string)
                         .into_iter()
@@ -812,7 +812,7 @@ mod tests {
             },
         )
         .await;
-        let ids: Vec<&str> = rows.iter().map(|row| row.id.as_str()).collect();
+        let ids: Vec<&str> = items.iter().map(|item| item.id.as_str()).collect();
         assert_eq!(ids, vec!["dropped"]);
     }
     #[test]
@@ -833,7 +833,7 @@ mod tests {
         // A subprocess gives this test its own unit-store, so no concurrent
         // list/config test observes the temporary areas document.
         let snapshot = crate::webui::stream_list::StreamListSnapshot {
-            rows: vec![stream("area-contract-keyword", None, "UCexample")],
+            items: vec![stream("area-contract-keyword", None, "UCexample")],
             holodex_ok_at: None,
             holodex_every: std::time::Duration::from_secs(60),
         };
@@ -845,8 +845,8 @@ mod tests {
                 }),
             )
             .unwrap();
-            let admin = crate::webui::api::stream_list::map_stream_list(&snapshot.rows);
-            let public = build_public_streams(snapshot.rows.clone(), &[], true, &[]);
+            let admin = crate::webui::api::stream_list::map_stream_list(&snapshot.items);
+            let public = build_public_streams(snapshot.items.clone(), &[], true, &[]);
             assert_eq!(admin[0].suggested_area_id, Some(id));
             assert_eq!(admin[0].suggested_area_name.as_deref(), Some(name));
             assert_eq!(public[0].suggested_area_id, Some(id));
@@ -872,17 +872,17 @@ mod tests {
         upcoming.title = "clean".to_string();
         upcoming.status = "upcoming".to_string();
         upcoming.link = Some("http://twitch.tv/example_channel_001".to_string());
-        let rows = build_public_streams(
+        let items = build_public_streams(
             vec![live, upcoming],
             &channels,
             true,
             &["blocked".to_string()],
         );
-        assert_eq!(rows[0].command_platform.as_deref(), Some("TW"));
-        assert_eq!(rows[0].command_channel.as_deref(), Some("Example"));
-        assert_eq!(rows[0].link.as_deref(), Some(link));
-        assert_eq!(rows[0].thumbnail.as_deref(), Some("https://static-cdn.jtvnw.net/previews-ttv/live_user_example_channel_001-640x360.jpg"));
-        assert_eq!(rows[1].reason, Some(NotSwitchable::EarlierBannedKeyword));
+        assert_eq!(items[0].command_platform.as_deref(), Some("TW"));
+        assert_eq!(items[0].command_channel.as_deref(), Some("Example"));
+        assert_eq!(items[0].link.as_deref(), Some(link));
+        assert_eq!(items[0].thumbnail.as_deref(), Some("https://static-cdn.jtvnw.net/previews-ttv/live_user_example_channel_001-640x360.jpg"));
+        assert_eq!(items[1].reason, Some(NotSwitchable::EarlierBannedKeyword));
 
         let target = ChannelIndex::new(&channels).command_target(
             "UCexample",

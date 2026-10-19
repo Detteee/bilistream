@@ -24,11 +24,11 @@ use chrono::{DateTime, Local};
 use futures_util::future::join_all;
 use tokio::sync::Notify;
 
-use super::holodex::{HolodexChannel, HolodexStream};
 use super::niconico::{
     fetch_channel_listing, live_id_from_link, normalize_channel_id, watch_url, ChannelLiveListing,
     ChannelProgram,
 };
+use super::stream_item::{StreamChannel, StreamItem};
 use crate::config::{load_config, Config};
 use crate::plugins::source_status::SourceStatus;
 
@@ -50,7 +50,7 @@ const TICK: Duration = Duration::from_secs(10);
 const CHANNELS_PER_PASS: usize = 4;
 
 /// A channels.json entry with both a YouTube channel and a Niconico slug.
-/// Overlay rows reuse that YouTube channel id so the allowlist, name and
+/// Overlay items reuse that YouTube channel id so the allowlist, name and
 /// photo match Holodex; they are still a separate card from the YouTube
 /// stream on the same channel.
 #[derive(Debug, Clone, PartialEq)]
@@ -499,9 +499,9 @@ async fn poll_pass(cfg: &Config) {
     }
 }
 
-/// Holodex's rows corrected by the listings, or as they are when no listing
+/// The list's items corrected by the listings, or as they are when no listing
 /// has answered within `FRESH_FOR`.
-pub(crate) fn overlay(rows: Vec<HolodexStream>) -> Vec<HolodexStream> {
+pub(crate) fn overlay(items: Vec<StreamItem>) -> Vec<StreamItem> {
     let now = Instant::now();
     let answers = with_state(|state| {
         let fresh = state
@@ -510,76 +510,78 @@ pub(crate) fn overlay(rows: Vec<HolodexStream>) -> Vec<HolodexStream> {
         fresh.then(|| state.answers.clone())
     });
     match answers {
-        Some(answers) => apply(rows, &answers),
-        None => rows,
+        Some(answers) => apply(items, &answers),
+        None => items,
     }
 }
 
-fn is_niconico_row(row: &HolodexStream) -> bool {
-    row.stream_type == "placeholder"
-        && live_id_from_link(row.link.as_deref().unwrap_or("")).is_some()
+fn is_niconico_item(item: &StreamItem) -> bool {
+    item.stream_type == "placeholder"
+        && live_id_from_link(item.link.as_deref().unwrap_or("")).is_some()
 }
 
-/// A live or scheduled listing updates that channel's Niconico row, or adds
-/// one; idle drops that channel's Niconico rows. Unasked channels keep
-/// Holodex's rows as they are.
-fn apply(mut rows: Vec<HolodexStream>, answers: &Answers) -> Vec<HolodexStream> {
+/// A live or scheduled listing updates that channel's Niconico item, or adds
+/// one; idle drops that channel's Niconico items. Unasked channels keep
+/// The list's items as they are.
+fn apply(mut items: Vec<StreamItem>, answers: &Answers) -> Vec<StreamItem> {
     for entry in &answers.roster {
         let Some(listing) = answers.listings.get(&entry.channel_id) else {
             continue;
         };
         match listing {
             ChannelLiveListing::Idle => {
-                rows.retain(|row| !(is_niconico_row(row) && row.channel.id == entry.youtube_id));
+                items.retain(|item| {
+                    !(is_niconico_item(item) && item.channel.id == entry.youtube_id)
+                });
             }
             ChannelLiveListing::OnAir(program) => {
-                upsert(&mut rows, entry, program, "live");
+                upsert(&mut items, entry, program, "live");
             }
             ChannelLiveListing::Scheduled(program) => {
-                upsert(&mut rows, entry, program, "upcoming");
+                upsert(&mut items, entry, program, "upcoming");
             }
         }
     }
-    rows
+    items
 }
 
 fn upsert(
-    rows: &mut Vec<HolodexStream>,
+    items: &mut Vec<StreamItem>,
     entry: &RosterChannel,
     program: &ChannelProgram,
     status: &str,
 ) {
     let want = program.live_id.as_str();
-    rows.retain(|row| {
-        if !is_niconico_row(row) || row.channel.id != entry.youtube_id {
+    items.retain(|item| {
+        if !is_niconico_item(item) || item.channel.id != entry.youtube_id {
             return true;
         }
-        row.status == status
-            && live_id_from_link(row.link.as_deref().unwrap_or("")).as_deref() == Some(want)
+        item.status == status
+            && live_id_from_link(item.link.as_deref().unwrap_or("")).as_deref() == Some(want)
     });
-    if let Some(row) = rows
+    if let Some(item) = items
         .iter_mut()
-        .find(|row| is_niconico_row(row) && row.channel.id == entry.youtube_id)
+        .find(|item| is_niconico_item(item) && item.channel.id == entry.youtube_id)
     {
         if let Some(title) = program.title.as_deref().filter(|title| !title.is_empty()) {
-            row.title = title.to_string();
+            item.title = title.to_string();
         }
         if let Some(start) = start_rfc3339(program) {
-            row.start_scheduled = Some(start.clone());
+            item.start_scheduled = Some(start.clone());
             if status == "live" {
-                row.start_actual = Some(start.clone());
+                item.start_actual = Some(start.clone());
             }
-            row.available_at = Some(start);
+            item.available_at = Some(start);
         }
         if let Some(thumbnail) = program
             .thumbnail
             .as_deref()
             .filter(|thumbnail| !thumbnail.is_empty())
         {
-            row.thumbnail = Some(thumbnail.to_string());
+            item.thumbnail = Some(thumbnail.to_string());
         }
     } else {
-        rows.push(new_row(entry, program, status, rows));
+        items.push(new_item(entry, program, status, items));
     }
 }
 
@@ -587,17 +589,17 @@ fn start_rfc3339(program: &ChannelProgram) -> Option<String> {
     program.start_at.as_ref().map(|dt| dt.to_rfc3339())
 }
 
-fn new_row(
+fn new_item(
     entry: &RosterChannel,
     program: &ChannelProgram,
     status: &str,
-    rows: &[HolodexStream],
-) -> HolodexStream {
-    let known = rows
+    items: &[StreamItem],
+) -> StreamItem {
+    let known = items
         .iter()
-        .find(|row| row.channel.id == entry.youtube_id)
-        .map(|row| row.channel.clone());
-    let channel = HolodexChannel {
+        .find(|item| item.channel.id == entry.youtube_id)
+        .map(|item| item.channel.clone());
+    let channel = StreamChannel {
         id: entry.youtube_id.clone(),
         name: known
             .as_ref()
@@ -609,7 +611,7 @@ fn new_row(
             .filter(|photo| !photo.is_empty()),
     };
     let start = start_rfc3339(program);
-    HolodexStream {
+    StreamItem {
         id: format!("niconico-{}", program.live_id),
         title: program.title.clone().unwrap_or_default(),
         stream_type: "placeholder".to_string(),
@@ -690,8 +692,8 @@ mod tests {
         }
     }
 
-    fn row(id: &str, status: &str, link: Option<&str>) -> HolodexStream {
-        HolodexStream {
+    fn item(id: &str, status: &str, link: Option<&str>) -> StreamItem {
+        StreamItem {
             id: id.to_string(),
             title: "holodex title".to_string(),
             stream_type: if link.is_some() {
@@ -706,7 +708,7 @@ mod tests {
             start_scheduled: None,
             start_actual: None,
             live_viewers: None,
-            channel: HolodexChannel {
+            channel: StreamChannel {
                 id: "UCvspo".to_string(),
                 name: "ぶいすぽ holodex".to_string(),
                 photo: Some("https://yt3.ggpht.com/vspo".to_string()),
@@ -739,16 +741,16 @@ mod tests {
 
     #[test]
     fn a_live_channel_the_list_lacks_gets_a_niconico_row() {
-        let rows = apply(
-            vec![row("yt1", "upcoming", None)],
+        let items = apply(
+            vec![item("yt1", "upcoming", None)],
             &answers(ChannelLiveListing::OnAir(program(
                 "lv351182284",
                 "激ロー",
                 true,
             ))),
         );
-        assert_eq!(rows.len(), 2);
-        let added = &rows[1];
+        assert_eq!(items.len(), 2);
+        let added = &items[1];
         assert_eq!(added.id, "niconico-lv351182284");
         assert_eq!(added.status, "live");
         assert_eq!(
@@ -767,9 +769,9 @@ mod tests {
             "https://listing-thumbnail.live.nicovideo.jp?image=prod-lv351182284/t.jpg&w=640&h=360"
                 .to_string(),
         );
-        let rows = apply(Vec::new(), &answers(ChannelLiveListing::OnAir(listing)));
+        let items = apply(Vec::new(), &answers(ChannelLiveListing::OnAir(listing)));
         assert_eq!(
-            rows[0].thumbnail.as_deref(),
+            items[0].thumbnail.as_deref(),
             Some(
                 "https://listing-thumbnail.live.nicovideo.jp?image=prod-lv351182284/t.jpg&w=640&h=360"
             )
@@ -778,7 +780,7 @@ mod tests {
 
     #[test]
     fn a_scheduled_channel_adds_an_upcoming_row() {
-        let rows = apply(
+        let items = apply(
             Vec::new(),
             &answers(ChannelLiveListing::Scheduled(program(
                 "lv351230205",
@@ -786,18 +788,18 @@ mod tests {
                 true,
             ))),
         );
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].status, "upcoming");
-        assert_eq!(rows[0].id, "niconico-lv351230205");
-        assert_eq!(rows[0].channel.name, "ぶいすぽっ!【公式】");
-        assert!(rows[0].start_actual.is_none());
-        assert!(rows[0].start_scheduled.is_some());
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].status, "upcoming");
+        assert_eq!(items[0].id, "niconico-lv351230205");
+        assert_eq!(items[0].channel.name, "ぶいすぽっ!【公式】");
+        assert!(items[0].start_actual.is_none());
+        assert!(items[0].start_scheduled.is_some());
     }
 
     #[test]
     fn a_live_listing_updates_holodex_s_row_instead_of_adding_one() {
-        let rows = apply(
-            vec![row(
+        let items = apply(
+            vec![item(
                 "placeholder-1",
                 "live",
                 Some("https://live.nicovideo.jp/watch/lv351182284"),
@@ -808,61 +810,61 @@ mod tests {
                 false,
             ))),
         );
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].id, "placeholder-1");
-        assert_eq!(rows[0].title, "new title");
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].id, "placeholder-1");
+        assert_eq!(items[0].title, "new title");
     }
 
     #[test]
     fn idle_drops_only_that_channel_s_niconico_rows() {
-        let rows = apply(
+        let items = apply(
             vec![
-                row("live", "live", Some("https://live.nicovideo.jp/watch/lv1")),
-                row(
+                item("live", "live", Some("https://live.nicovideo.jp/watch/lv1")),
+                item(
                     "tonight",
                     "upcoming",
                     Some("https://live.nicovideo.jp/watch/lv2"),
                 ),
-                row("yt", "live", None),
-                row("tw", "live", Some("https://twitch.tv/someone")),
+                item("yt", "live", None),
+                item("tw", "live", Some("https://twitch.tv/someone")),
             ],
             &answers(ChannelLiveListing::Idle),
         );
-        let ids: Vec<&str> = rows.iter().map(|row| row.id.as_str()).collect();
+        let ids: Vec<&str> = items.iter().map(|item| item.id.as_str()).collect();
         assert_eq!(ids, ["yt", "tw"]);
     }
 
     #[test]
     fn without_answers_holodex_stands() {
-        let original = vec![row(
+        let original = vec![item(
             "live",
             "live",
             Some("https://live.nicovideo.jp/watch/lv1"),
         )];
-        let rows = apply(
+        let items = apply(
             original.clone(),
             &Answers {
                 listings: HashMap::new(),
                 roster: vec![vspo()],
             },
         );
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].title, original[0].title);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].title, original[0].title);
     }
 
     #[test]
     fn going_live_replaces_the_upcoming_row() {
-        let rows = apply(
-            vec![row(
+        let items = apply(
+            vec![item(
                 "niconico-lvold",
                 "upcoming",
                 Some("https://live.nicovideo.jp/watch/lvold"),
             )],
             &answers(ChannelLiveListing::OnAir(program("lvnew", "now", false))),
         );
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].id, "niconico-lvnew");
-        assert_eq!(rows[0].status, "live");
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].id, "niconico-lvnew");
+        assert_eq!(items[0].status, "live");
     }
 
     #[test]
@@ -1164,11 +1166,11 @@ mod tests {
         assert!(due.is_empty(), "the target's listing is still fresh");
         assert!(adopted);
         assert_eq!(state.last_attempt.get("vspo"), Some(&t0));
-        let rows = apply(Vec::new(), &state.answers);
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].id, "niconico-lv1");
-        assert_eq!(rows[0].status, "upcoming");
-        assert_eq!(rows[0].channel.id, "UCvspo");
+        let items = apply(Vec::new(), &state.answers);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].id, "niconico-lv1");
+        assert_eq!(items[0].status, "upcoming");
+        assert_eq!(items[0].channel.id, "UCvspo");
 
         assert_eq!(
             state.begin_pass(&asked, &[vspo()], later, now_local),

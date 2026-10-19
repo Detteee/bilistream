@@ -1,5 +1,5 @@
 //! Internal display facts shared by list consumers, never an HTTP payload.
-use crate::plugins::holodex::HolodexStream;
+use crate::plugins::stream_item::StreamItem;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct StreamListFacts {
@@ -25,7 +25,7 @@ pub(crate) struct StreamListFacts {
 
 /// Resolve at each projection point so current area edits are visible even
 /// when the source snapshot has not rebuilt. Keep original links and images.
-pub(crate) fn resolve_stream_facts(stream: &HolodexStream) -> StreamListFacts {
+pub(crate) fn resolve_stream_facts(stream: &StreamItem) -> StreamListFacts {
     let (suggested_area_id, suggested_area_name) =
         crate::plugins::suggest_area_from_stream(stream.topic_id.as_deref(), &stream.title);
     StreamListFacts {
@@ -55,8 +55,8 @@ pub(crate) fn resolve_stream_facts(stream: &HolodexStream) -> StreamListFacts {
 }
 
 /// Discovery order is unstable. Stable sorting ignores distinct-ID reorder
-/// while retaining duplicate rows and their existing relative order.
-pub(super) fn list_content(streams: &[HolodexStream]) -> Vec<StreamListFacts> {
+/// while retaining duplicate items and their existing relative order.
+pub(super) fn list_content(streams: &[StreamItem]) -> Vec<StreamListFacts> {
     let mut facts: Vec<_> = streams.iter().map(resolve_stream_facts).collect();
     facts.sort_by(|a, b| a.id.cmp(&b.id));
     facts
@@ -66,7 +66,7 @@ pub(super) fn list_content(streams: &[HolodexStream]) -> Vec<StreamListFacts> {
 mod tests {
     use super::*;
 
-    fn row() -> HolodexStream {
+    fn item() -> StreamItem {
         serde_json::from_value(serde_json::json!({
             "id": "a", "title": "Example", "type": "stream", "status": "live",
             "channel": { "id": "UCexample", "name": "Example" }
@@ -76,50 +76,50 @@ mod tests {
 
     #[test]
     fn content_comparison_preserves_mapped_facts_and_duplicate_rows() {
-        let row = row();
-        let original = list_content(std::slice::from_ref(&row));
-        let mut internal = row.clone();
+        let item = item();
+        let original = list_content(std::slice::from_ref(&item));
+        let mut internal = item.clone();
         internal.yt_confirmed = true;
         internal.stream_type = "other".to_string();
         internal.channel.photo = Some(String::new());
         assert_eq!(original, list_content(&[internal]));
 
-        let mut visible = row.clone();
+        let mut visible = item.clone();
         visible.live_viewers = Some(1);
         assert_ne!(original, list_content(&[visible]));
-        let mut visible = row.clone();
+        let mut visible = item.clone();
         visible.title = "Changed title".to_string();
         assert_ne!(original, list_content(&[visible]));
-        let mut other = row.clone();
+        let mut other = item.clone();
         other.id = "b".to_string();
         assert_eq!(
-            list_content(&[row.clone(), other.clone()]),
-            list_content(&[other, row.clone()])
+            list_content(&[item.clone(), other.clone()]),
+            list_content(&[other, item.clone()])
         );
-        assert_ne!(original, list_content(&[row.clone(), row.clone()]));
+        assert_ne!(original, list_content(&[item.clone(), item.clone()]));
 
-        let mut duplicate = row.clone();
+        let mut duplicate = item.clone();
         duplicate.link = Some("https://www.twitch.tv/example_channel_001".to_string());
-        let duplicates = list_content(&[row.clone(), duplicate.clone()]);
+        let duplicates = list_content(&[item.clone(), duplicate.clone()]);
         assert_eq!(duplicates.len(), 2);
         assert_eq!(duplicates[0].link, None);
         assert_eq!(duplicates[1].link, duplicate.link);
-        assert_ne!(duplicates, list_content(&[duplicate, row]));
+        assert_ne!(duplicates, list_content(&[duplicate, item]));
     }
 
     #[test]
     fn facts_keep_source_values_and_normalize_only_the_documented_fields() {
-        let mut row = row();
-        row.topic_id = Some("Example topic".to_string());
-        row.stream_type = "placeholder".to_string();
-        row.channel.photo = Some(String::new());
-        row.link = Some(" https://www.twitch.tv/Example_Channel_001?x=1 ".to_string());
-        row.thumbnail = Some(String::new());
-        let facts = resolve_stream_facts(&row);
-        assert_eq!(facts.topic, row.topic_id);
+        let mut item = item();
+        item.topic_id = Some("Example topic".to_string());
+        item.stream_type = "placeholder".to_string();
+        item.channel.photo = Some(String::new());
+        item.link = Some(" https://www.twitch.tv/Example_Channel_001?x=1 ".to_string());
+        item.thumbnail = Some(String::new());
+        let facts = resolve_stream_facts(&item);
+        assert_eq!(facts.topic, item.topic_id);
         assert!(facts.is_placeholder);
         assert_eq!(facts.channel_photo, None);
-        assert_eq!(facts.link, row.link);
+        assert_eq!(facts.link, item.link);
         assert_eq!(facts.thumbnail, Some(String::new()));
     }
 }

@@ -167,16 +167,16 @@ async fn poll(shared: Arc<Shared>) {
     }
 }
 
-fn observation(row: crate::plugins::holodex::HolodexStream) -> Option<LiveObservation> {
-    let channel_id = row.channel.id.trim().to_string();
+fn observation(item: crate::plugins::stream_item::StreamItem) -> Option<LiveObservation> {
+    let channel_id = item.channel.id.trim().to_string();
     if channel_id.is_empty() {
         return None;
     }
     Some(LiveObservation {
         platform: "youtube".to_string(),
         channel_id,
-        channel_name: row.channel.name.trim().to_string(),
-        title: Some(row.title.trim().to_string()).filter(|title| !title.is_empty()),
+        channel_name: item.channel.name.trim().to_string(),
+        title: Some(item.title.trim().to_string()).filter(|title| !title.is_empty()),
     })
 }
 

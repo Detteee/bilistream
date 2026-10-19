@@ -1,7 +1,7 @@
 //! Cluster snapshots, requests, and monitor-toggle / channel-target helpers.
 
 use crate::config::{Config, PriorityChannel, Twitch, Youtube};
-use crate::plugins::holodex::HolodexStream;
+use crate::plugins::stream_item::StreamItem;
 use crate::plugins::youtube_data::YtVideo;
 use crate::webui::state::{NetworkStatus, StatusData};
 use serde::{Deserialize, Serialize};
@@ -348,7 +348,7 @@ pub struct YtIndexPayload {
     /// (private, members-only, deleted).
     pub videos: BTreeMap<String, Option<YtVideo>>,
     /// Discovered and recently live rows the owner merges into Holodex's.
-    pub discovered: Vec<HolodexStream>,
+    pub discovered: Vec<StreamItem>,
 }
 
 impl YtIndexPayload {

@@ -2,7 +2,7 @@
 //!
 //! Holodex notices a Twitch stream minutes late. While a stream list is
 //! leased, the worker asks about every roster login, and the lists correct
-//! Holodex's Twitch rows with the answers (`overlay`). While the Twitch monitor
+//! Holodex's Twitch items with the answers (`overlay`). While the Twitch monitor
 //! is on, it asks about the target too, whose turn to live ends the monitor's
 //! wait (`take_monitor_wake`), as YouTube's go-live does. GQL needs no key and
 //! has no quota, so every node asks for itself.
@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 use serde_json::json;
 use tokio::sync::Notify;
 
-use super::holodex::{HolodexChannel, HolodexStream};
+use super::stream_item::{StreamChannel, StreamItem};
 use crate::config::{load_config, Config};
 
 const POLL_EVERY: Duration = Duration::from_secs(30);
@@ -60,7 +60,7 @@ struct TwitchLive {
 }
 
 /// A channels.json entry with both a YouTube channel and a Twitch login. The
-/// lists key rows by the YouTube channel ID, as Holodex does.
+/// lists key items by the YouTube channel ID, as Holodex does.
 #[derive(Debug, Clone, PartialEq)]
 struct RosterLogin {
     login: String,
@@ -124,11 +124,11 @@ fn normalize(login: &str) -> String {
     login.trim().to_ascii_lowercase()
 }
 
-fn row_login(row: &HolodexStream) -> Option<String> {
-    if row.stream_type != "placeholder" {
+fn row_login(item: &StreamItem) -> Option<String> {
+    if item.stream_type != "placeholder" {
         return None;
     }
-    channel_id_from_url(row.link.as_deref()?)
+    channel_id_from_url(item.link.as_deref()?)
 }
 
 fn wake_monitor(login: &str) {
@@ -336,9 +336,9 @@ async fn poll_pass(cfg: &Config) {
     }
 }
 
-/// Holodex's rows corrected by the answers (`apply`), or as they are when GQL
+/// The list's items corrected by the answers (`apply`), or as they are when GQL
 /// has not answered within `FRESH_FOR`.
-pub(crate) fn overlay(rows: Vec<HolodexStream>) -> Vec<HolodexStream> {
+pub(crate) fn overlay(items: Vec<StreamItem>) -> Vec<StreamItem> {
     let now = Instant::now();
     let answers = with_state(|state| {
         let fresh = state
@@ -347,54 +347,54 @@ pub(crate) fn overlay(rows: Vec<HolodexStream>) -> Vec<HolodexStream> {
         fresh.then(|| state.answers.clone())
     });
     match answers {
-        Some(answers) => apply(rows, &answers),
-        None => rows,
+        Some(answers) => apply(items, &answers),
+        None => items,
     }
 }
 
-/// A live answer updates the login's live row, or adds one while Holodex has
-/// not noticed the stream; an offline answer drops the login's live rows.
-/// Unasked logins keep Holodex's rows as they are.
-fn apply(mut rows: Vec<HolodexStream>, answers: &Answers) -> Vec<HolodexStream> {
-    rows.retain(|row| {
-        row.status != "live"
-            || !row_login(row).is_some_and(|login| matches!(answers.live.get(&login), Some(None)))
+/// A live answer updates the login's live item, or adds one while the backstop
+/// has not noticed the stream; an offline answer drops the login's live items.
+/// Unasked logins keep their items as they are.
+fn apply(mut items: Vec<StreamItem>, answers: &Answers) -> Vec<StreamItem> {
+    items.retain(|item| {
+        item.status != "live"
+            || !row_login(item).is_some_and(|login| matches!(answers.live.get(&login), Some(None)))
     });
     for entry in &answers.roster {
         let Some(Some(stream)) = answers.live.get(&entry.login) else {
             continue;
         };
-        let existing = rows
+        let existing = items
             .iter_mut()
-            .find(|row| row.status == "live" && row_login(row).as_deref() == Some(&entry.login));
+            .find(|item| item.status == "live" && row_login(item).as_deref() == Some(&entry.login));
         match existing {
-            Some(row) => {
+            Some(item) => {
                 if !stream.title.is_empty() {
-                    row.title = stream.title.clone();
+                    item.title = stream.title.clone();
                 }
                 if stream.started_at.is_some() {
-                    row.start_actual = stream.started_at.clone();
+                    item.start_actual = stream.started_at.clone();
                 }
-                row.live_viewers = stream.viewers.or(row.live_viewers);
-                row.topic_id = row.topic_id.take().or_else(|| stream.game.clone());
-                row.thumbnail = row.thumbnail.take().or_else(|| stream.preview.clone());
+                item.live_viewers = stream.viewers.or(item.live_viewers);
+                item.topic_id = item.topic_id.take().or_else(|| stream.game.clone());
+                item.thumbnail = item.thumbnail.take().or_else(|| stream.preview.clone());
             }
             None => {
-                let row = new_row(entry, stream, &rows);
-                rows.push(row);
+                let item = new_item(entry, stream, &items);
+                items.push(item);
             }
         }
     }
-    rows
+    items
 }
 
-fn new_row(entry: &RosterLogin, stream: &TwitchLive, rows: &[HolodexStream]) -> HolodexStream {
-    // Holodex's name and photo for the channel, when it lists any other row.
-    let known = rows
+fn new_item(entry: &RosterLogin, stream: &TwitchLive, items: &[StreamItem]) -> StreamItem {
+    // Holodex's name and photo for the channel, when it lists any other item.
+    let known = items
         .iter()
-        .find(|row| row.channel.id == entry.youtube_id)
-        .map(|row| row.channel.clone());
-    let channel = HolodexChannel {
+        .find(|item| item.channel.id == entry.youtube_id)
+        .map(|item| item.channel.clone());
+    let channel = StreamChannel {
         id: entry.youtube_id.clone(),
         name: known
             .as_ref()
@@ -406,7 +406,7 @@ fn new_row(entry: &RosterLogin, stream: &TwitchLive, rows: &[HolodexStream]) -> 
             .filter(|photo| !photo.is_empty())
             .or_else(|| stream.avatar.clone()),
     };
-    HolodexStream {
+    StreamItem {
         id: format!("twitch-{}", stream.stream_id),
         title: stream.title.clone(),
         stream_type: "placeholder".to_string(),
@@ -485,8 +485,8 @@ mod tests {
         }
     }
 
-    fn row(id: &str, status: &str, link: Option<&str>) -> HolodexStream {
-        HolodexStream {
+    fn item(id: &str, status: &str, link: Option<&str>) -> StreamItem {
+        StreamItem {
             id: id.to_string(),
             title: "holodex title".to_string(),
             stream_type: if link.is_some() {
@@ -502,7 +502,7 @@ mod tests {
             start_scheduled: None,
             start_actual: None,
             live_viewers: None,
-            channel: HolodexChannel {
+            channel: StreamChannel {
                 id: "UCtoko".to_string(),
                 name: "とおこ holodex".to_string(),
                 photo: Some("https://yt3.ggpht.com/toko".to_string()),
@@ -523,18 +523,18 @@ mod tests {
 
     #[test]
     fn a_live_login_the_list_lacks_gets_a_twitch_row() {
-        let rows = apply(
-            vec![row("yt1", "upcoming", None)],
+        let items = apply(
+            vec![item("yt1", "upcoming", None)],
             &answers(Some(live("宿題"))),
         );
-        assert_eq!(rows.len(), 2);
-        let added = &rows[1];
+        assert_eq!(items.len(), 2);
+        let added = &items[1];
         assert_eq!(added.id, "twitch-316566340211");
         assert_eq!(added.status, "live");
         assert_eq!(added.link.as_deref(), Some("https://twitch.tv/urs_toko"));
         assert_eq!(added.start_actual.as_deref(), Some("2026-09-26T14:02:07Z"));
         assert_eq!(added.topic_id.as_deref(), Some("Teamfight Tactics"));
-        // Keyed and named like Holodex's rows for the channel.
+        // Keyed and named like the backstop's items for the channel.
         assert_eq!(added.channel.id, "UCtoko");
         assert_eq!(added.channel.name, "とおこ holodex");
         assert_eq!(
@@ -554,51 +554,51 @@ mod tests {
 
     #[test]
     fn a_live_login_updates_holodex_s_row_instead_of_adding_one() {
-        let rows = apply(
-            vec![row(
+        let items = apply(
+            vec![item(
                 "UBWcTxPTMD1",
                 "live",
                 Some("https://twitch.tv/URS_toko"),
             )],
             &answers(Some(live("new title"))),
         );
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].id, "UBWcTxPTMD1");
-        assert_eq!(rows[0].title, "new title");
-        assert_eq!(rows[0].live_viewers, Some(1413));
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].id, "UBWcTxPTMD1");
+        assert_eq!(items[0].title, "new title");
+        assert_eq!(items[0].live_viewers, Some(1413));
         assert_eq!(
-            rows[0].start_actual.as_deref(),
+            items[0].start_actual.as_deref(),
             Some("2026-09-26T14:02:07Z")
         );
     }
 
     #[test]
     fn an_offline_login_drops_only_its_live_rows() {
-        let rows = apply(
+        let items = apply(
             vec![
-                row("ended", "live", Some("https://www.twitch.tv/urs_toko")),
-                row("tonight", "upcoming", Some("https://twitch.tv/urs_toko")),
-                row("other", "live", Some("https://twitch.tv/someone_else")),
-                row("yt", "live", None),
+                item("ended", "live", Some("https://www.twitch.tv/urs_toko")),
+                item("tonight", "upcoming", Some("https://twitch.tv/urs_toko")),
+                item("other", "live", Some("https://twitch.tv/someone_else")),
+                item("yt", "live", None),
             ],
             &answers(None),
         );
-        let ids: Vec<&str> = rows.iter().map(|row| row.id.as_str()).collect();
+        let ids: Vec<&str> = items.iter().map(|item| item.id.as_str()).collect();
         assert_eq!(ids, ["tonight", "other", "yt"]);
     }
 
     #[test]
     fn without_answers_holodex_stands() {
-        let original = vec![row("ended", "live", Some("https://twitch.tv/urs_toko"))];
-        let rows = apply(
+        let original = vec![item("ended", "live", Some("https://twitch.tv/urs_toko"))];
+        let items = apply(
             original.clone(),
             &Answers {
                 live: HashMap::new(),
                 roster: vec![toko()],
             },
         );
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].title, original[0].title);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].title, original[0].title);
     }
 
     #[test]
@@ -719,15 +719,15 @@ mod tests {
     #[test]
     fn overlay_uses_canonical_hosts_and_retains_the_original_link() {
         let link = " HTTPS://WWW.TWITCH.TV/URS_Toko/videos?x=1#live ";
-        let rows = apply(
-            vec![row("existing", "live", Some(link))],
+        let items = apply(
+            vec![item("existing", "live", Some(link))],
             &answers(Some(live("updated"))),
         );
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].title, "updated");
-        assert_eq!(rows[0].link.as_deref(), Some(link));
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].title, "updated");
+        assert_eq!(items[0].link.as_deref(), Some(link));
         assert_eq!(
-            row_login(&row(
+            row_login(&item(
                 "unrelated",
                 "live",
                 Some("https://example.com/twitch.tv/urs_toko")

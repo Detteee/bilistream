@@ -5,7 +5,7 @@ use std::collections::HashSet;
 /// Holodex Favorites/Home drop streams that never got `start_actual` once the
 /// schedule is more than two hours old (`!start_actual && now > scheduled + 2h`).
 /// Rows YouTube classified skip this: its `actualStartTime` is authoritative.
-fn holodex_has_start_actual(stream: &crate::plugins::holodex::HolodexStream) -> bool {
+fn holodex_has_start_actual(stream: &crate::plugins::stream_item::StreamItem) -> bool {
     stream
         .start_actual
         .as_deref()
@@ -13,7 +13,7 @@ fn holodex_has_start_actual(stream: &crate::plugins::holodex::HolodexStream) -> 
 }
 
 fn holodex_scheduled_at(
-    stream: &crate::plugins::holodex::HolodexStream,
+    stream: &crate::plugins::stream_item::StreamItem,
 ) -> Option<chrono::DateTime<chrono::Utc>> {
     chrono::DateTime::parse_from_rfc3339(stream.start_scheduled.as_deref()?)
         .ok()
@@ -21,7 +21,7 @@ fn holodex_scheduled_at(
 }
 
 fn holodex_unconfirmed_and_stale(
-    stream: &crate::plugins::holodex::HolodexStream,
+    stream: &crate::plugins::stream_item::StreamItem,
     now: chrono::DateTime<chrono::Utc>,
 ) -> bool {
     if stream.yt_confirmed || holodex_has_start_actual(stream) {
@@ -32,17 +32,17 @@ fn holodex_unconfirmed_and_stale(
 }
 
 pub(crate) fn filter_streams(
-    streams: Vec<crate::plugins::holodex::HolodexStream>,
+    streams: Vec<crate::plugins::stream_item::StreamItem>,
     allowed_channel_ids: HashSet<String>,
-) -> Vec<crate::plugins::holodex::HolodexStream> {
+) -> Vec<crate::plugins::stream_item::StreamItem> {
     filter_streams_at(streams, allowed_channel_ids, chrono::Utc::now())
 }
 
 /// Roster membership and Holodex avatars use the YouTube channel id, including
-/// Niconico/Twitch placeholders. Upcoming rows are hidden only when *that
+/// Niconico/Twitch placeholders. Upcoming items are hidden only when *that
 /// platform* is already live, so 激ロー and the official YouTube relay both
 /// stay on the panel.
-fn live_slot_key(stream: &crate::plugins::holodex::HolodexStream) -> String {
+fn live_slot_key(stream: &crate::plugins::stream_item::StreamItem) -> String {
     if stream
         .link
         .as_deref()
@@ -58,10 +58,10 @@ fn live_slot_key(stream: &crate::plugins::holodex::HolodexStream) -> String {
 }
 
 fn filter_streams_at(
-    streams: Vec<crate::plugins::holodex::HolodexStream>,
+    streams: Vec<crate::plugins::stream_item::StreamItem>,
     allowed_channel_ids: HashSet<String>,
     now: chrono::DateTime<chrono::Utc>,
-) -> Vec<crate::plugins::holodex::HolodexStream> {
+) -> Vec<crate::plugins::stream_item::StreamItem> {
     let mut live_slots: HashSet<String> = HashSet::new();
     for stream in &streams {
         if stream.status == "live" && !holodex_unconfirmed_and_stale(stream, now) {
@@ -105,7 +105,7 @@ fn filter_streams_at(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::plugins::holodex::{HolodexChannel, HolodexStream};
+    use crate::plugins::stream_item::{StreamChannel, StreamItem};
     use chrono::{DateTime, Utc};
     fn at(rfc3339: &str) -> DateTime<Utc> {
         DateTime::parse_from_rfc3339(rfc3339)
@@ -118,8 +118,8 @@ mod tests {
         status: &str,
         scheduled: Option<&str>,
         start_actual: Option<&str>,
-    ) -> HolodexStream {
-        HolodexStream {
+    ) -> StreamItem {
+        StreamItem {
             id: id.to_string(),
             title: format!("{id} title"),
             stream_type: "stream".to_string(),
@@ -130,7 +130,7 @@ mod tests {
             start_scheduled: scheduled.map(str::to_string),
             start_actual: start_actual.map(str::to_string),
             live_viewers: None,
-            channel: HolodexChannel {
+            channel: StreamChannel {
                 id: "channel-id".to_string(),
                 ..Default::default()
             },
@@ -145,7 +145,7 @@ mod tests {
         HashSet::from(["channel-id".to_string()])
     }
 
-    fn kept(streams: Vec<HolodexStream>, now: DateTime<Utc>) -> Vec<String> {
+    fn kept(streams: Vec<StreamItem>, now: DateTime<Utc>) -> Vec<String> {
         filter_streams_at(streams, ids(), now)
             .into_iter()
             .map(|stream| stream.id)
@@ -227,7 +227,7 @@ mod tests {
         assert_eq!(kept(vec![late], now), vec!["late"]);
     }
 
-    fn niconico_live(id: &str) -> HolodexStream {
+    fn niconico_live(id: &str) -> StreamItem {
         let mut stream = stream(
             id,
             "live",
@@ -239,7 +239,7 @@ mod tests {
         stream
     }
 
-    fn niconico_upcoming(id: &str) -> HolodexStream {
+    fn niconico_upcoming(id: &str) -> StreamItem {
         let mut stream = stream(id, "upcoming", Some("2026-09-02T20:00:00Z"), None);
         stream.stream_type = "placeholder".to_string();
         stream.link = Some("https://live.nicovideo.jp/watch/lv351230205".to_string());
@@ -311,8 +311,8 @@ mod tests {
 
     #[test]
     fn an_embedded_twitch_hostname_does_not_take_a_twitch_live_slot() {
-        let mut row = stream("external", "live", None, None);
-        row.link = Some("https://example.com/twitch.tv/example_channel_001".to_string());
-        assert_eq!(live_slot_key(&row), "YT:channel-id");
+        let mut item = stream("external", "live", None, None);
+        item.link = Some("https://example.com/twitch.tv/example_channel_001".to_string());
+        assert_eq!(live_slot_key(&item), "YT:channel-id");
     }
 }

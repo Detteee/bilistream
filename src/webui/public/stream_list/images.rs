@@ -1,7 +1,7 @@
 //! Public stream image fallbacks, CDN recovery, and cache rewriting.
 use super::super::thumbnails;
 use super::payload::PublicStream;
-use crate::plugins::holodex::HolodexStream;
+use crate::plugins::stream_item::StreamItem;
 use crate::plugins::twitch::channel_id_from_url;
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
@@ -13,7 +13,7 @@ const AVATAR_RETRY: Duration = Duration::from_secs(4 * 60);
 /// Holodex omits the thumbnail for plain YouTube streams and for Twitch
 /// placeholders, so derive what the dashboard derives. Done here rather than
 /// in the page so the cache fetches these too.
-pub(super) fn thumbnail_for(stream: &HolodexStream) -> Option<String> {
+pub(super) fn thumbnail_for(stream: &StreamItem) -> Option<String> {
     if let Some(thumbnail) = stream.thumbnail.as_deref().filter(|t| !t.is_empty()) {
         return Some(thumbnail.to_string());
     }
@@ -31,7 +31,7 @@ pub(super) fn thumbnail_for(stream: &HolodexStream) -> Option<String> {
     (!stream.id.is_empty()).then(|| format!("https://i.ytimg.com/vi/{}/sddefault.jpg", stream.id))
 }
 
-/// Holodex serves a channel image for every YouTube channel id. Discovery rows
+/// Holodex serves a channel image for every YouTube channel id. Discovery items
 /// often have no `channel.photo`, and the page only paints an avatar from that
 /// field. When this host is down, `use_youtube_cdn_avatars` substitutes the
 /// `yt3.ggpht.com` url Holodex stores as `channel.photo`.

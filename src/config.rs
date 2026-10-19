@@ -151,7 +151,7 @@ pub struct Config {
     #[serde(default = "default_true")]
     pub holodex_monitor_gate: bool,
     /// Optional YouTube Data API keys, one per line or comma separated (see
-    /// `youtube_api_keys`). When set, Holodex rows are re-classified with
+    /// `youtube_api_keys`). When set, stream rows are re-classified with
     /// `videos.list` before the monitor and the Holodex panel use them.
     #[serde(default)]
     pub youtube_api_key: Option<String>,

@@ -1,13 +1,13 @@
 //! Admin projection and queries for the multi-provider stream list.
-use crate::plugins::holodex::HolodexStream;
+use crate::plugins::stream_item::StreamItem;
 use crate::webui::stream_list::facts::resolve_stream_facts;
 use axum::{extract::Query, Json};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-// Holodex API - Get live/upcoming streams
+// Multi-provider live/upcoming items (the route name stays compatibility vocabulary).
 #[derive(Serialize, Debug)]
-pub struct AdminStreamListRow {
+pub struct AdminStreamListItem {
     pub id: String,
     pub title: String,
     pub topic: Option<String>,
@@ -28,12 +28,12 @@ pub struct AdminStreamListRow {
     pub thumbnail: Option<String>,
 }
 
-pub(crate) fn map_stream_list(streams: &[HolodexStream]) -> Vec<AdminStreamListRow> {
+pub(crate) fn map_stream_list(streams: &[StreamItem]) -> Vec<AdminStreamListItem> {
     streams
         .iter()
         .map(|stream| {
             let facts = resolve_stream_facts(stream);
-            AdminStreamListRow {
+            AdminStreamListItem {
                 id: facts.id,
                 title: facts.title,
                 topic: facts.topic,
@@ -78,7 +78,7 @@ pub async fn get_stream_list(Query(query): Query<StreamListQuery>) -> Json<serde
         Ok(snapshot) => Json(json!({
             "success": true,
             "source": kind.source(),
-            "data": map_stream_list(&snapshot.rows)
+            "data": map_stream_list(&snapshot.items)
         })),
         Err(message) => Json(json!({ "success": false, "message": message })),
     }
@@ -87,14 +87,14 @@ pub async fn get_stream_list(Query(query): Query<StreamListQuery>) -> Json<serde
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::plugins::holodex::{HolodexChannel, HolodexStream};
+    use crate::plugins::stream_item::{StreamChannel, StreamItem};
     fn stream(
         id: &str,
         status: &str,
         scheduled: Option<&str>,
         start_actual: Option<&str>,
-    ) -> HolodexStream {
-        HolodexStream {
+    ) -> StreamItem {
+        StreamItem {
             id: id.to_string(),
             title: format!("{id} title"),
             stream_type: "stream".to_string(),
@@ -105,7 +105,7 @@ mod tests {
             start_scheduled: scheduled.map(str::to_string),
             start_actual: start_actual.map(str::to_string),
             live_viewers: None,
-            channel: HolodexChannel {
+            channel: StreamChannel {
                 id: "channel-id".to_string(),
                 ..Default::default()
             },
@@ -139,11 +139,11 @@ mod tests {
         niconico.link = Some("https://live.nicovideo.jp/watch/lv12345".to_string());
         let missing = stream("missing", "upcoming", None, None);
         let sources = [ordinary, placeholder, niconico, missing];
-        let rows = map_stream_list(&sources);
-        assert_eq!(rows.len(), sources.len());
+        let items = map_stream_list(&sources);
+        assert_eq!(items.len(), sources.len());
 
-        for (row, source) in rows.iter().zip(&sources) {
-            let value = serde_json::to_value(row).unwrap();
+        for (item, source) in items.iter().zip(&sources) {
+            let value = serde_json::to_value(item).unwrap();
             let obj = value.as_object().unwrap();
             let keys: Vec<_> = obj.keys().map(String::as_str).collect();
             assert_eq!(

@@ -13,7 +13,7 @@
 //! On the cluster's public-status node the store is also published as the
 //! index peers answer from (see `cluster::yt_index`).
 
-use super::holodex::HolodexStream;
+use super::stream_item::StreamItem;
 use super::youtube_data::{
     classify, fetch_videos, lane_book, YtLiveState, YtVideo, MAX_IDS_PER_CALL,
 };
@@ -289,7 +289,7 @@ impl Store {
     /// Rebuilds the index peers download, under a new version only when it
     /// changed. Nothing is published until there is something to serve, so
     /// peers keep answering for themselves meanwhile.
-    fn publish(&mut self, discovered: Vec<HolodexStream>, now: Instant, utc: DateTime<Utc>) {
+    fn publish(&mut self, discovered: Vec<StreamItem>, now: Instant, utc: DateTime<Utc>) {
         let stretch = self.stretch();
         let monitored = &self.monitored;
         let videos: BTreeMap<String, Option<YtVideo>> = self

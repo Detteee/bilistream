@@ -13,7 +13,7 @@ const KEEP_LEASE: Duration = Duration::from_secs(4 * 60);
 /// Events arriving together share one rebuild.
 const DEBOUNCE: Duration = Duration::from_secs(1);
 /// Holodex counts as fresh for this many of its intervals, so two missed
-/// backstop fetches in a row are tolerated.
+/// backstop fetches in a row (consecutively) are tolerated.
 const HOLODEX_GRACE_INTERVALS: u32 = 3;
 
 struct PublicStreamListSnapshot {
@@ -103,7 +103,7 @@ async fn rebuild_public_streams() -> bool {
     let channels = channels_data.channels;
 
     // Already merged with discovery, overlaid by YouTube and filtered, the same
-    // rows the dashboard shows. Reading it also extends the list's lease.
+    // items the dashboard shows. Reading it also extends the list's lease.
     let list = match crate::webui::stream_list::current(
         crate::webui::stream_list::ListKind::Channels,
         false,
@@ -124,7 +124,7 @@ async fn rebuild_public_streams() -> bool {
     let danmaku_enabled = super::super::snapshot::public_danmaku_enabled(&cluster);
 
     let banned = danmaku_banned_keywords();
-    let mut public = build_public_streams(list.rows.clone(), &channels, danmaku_enabled, &banned);
+    let mut public = build_public_streams(list.items.clone(), &channels, danmaku_enabled, &banned);
 
     prepare_images(&mut public, &cfg).await;
 

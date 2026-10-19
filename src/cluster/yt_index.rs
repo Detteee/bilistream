@@ -272,10 +272,10 @@ async fn fetch_index(cfg: &Config, owner: &str) -> Result<YtIndexPayload, String
             .unwrap_or_else(|| "节点拒绝提供索引".to_string()));
     }
     let mut index = envelope.data.ok_or_else(|| "节点未返回索引".to_string())?;
-    // `yt_confirmed` does not travel. The owner only has these rows because
+    // `yt_confirmed` does not travel. The owner only has these items because
     // YouTube confirmed them, so here too they drop once its answers omit them.
-    for row in &mut index.discovered {
-        row.yt_confirmed = true;
+    for item in &mut index.discovered {
+        item.yt_confirmed = true;
     }
     Ok(index)
 }
@@ -529,7 +529,7 @@ mod tests {
         assert!(!text.contains("synthetic-peer-token"));
         assert!(!text.contains("https://peer.invalid"));
     }
-    use crate::plugins::holodex::{HolodexChannel, HolodexStream};
+    use crate::plugins::stream_item::{StreamChannel, StreamItem};
     use crate::plugins::youtube_data::{YtLiveDetails, YtSnippet, YtVideo};
     use std::collections::{BTreeMap, HashMap};
 
@@ -756,8 +756,8 @@ mod tests {
         assert_eq!(value["websub"]["verified"], 3);
     }
 
-    fn row(id: &str, status: &str) -> HolodexStream {
-        HolodexStream {
+    fn item(id: &str, status: &str) -> StreamItem {
+        StreamItem {
             id: id.to_string(),
             title: "holodex title".to_string(),
             stream_type: "stream".to_string(),
@@ -768,7 +768,7 @@ mod tests {
             start_scheduled: None,
             start_actual: None,
             live_viewers: None,
-            channel: HolodexChannel {
+            channel: StreamChannel {
                 id: "UCyt-index".to_string(),
                 ..Default::default()
             },
@@ -794,7 +794,7 @@ mod tests {
         }
     }
 
-    fn index(videos: Vec<(&str, Option<YtVideo>)>, discovered: Vec<HolodexStream>) -> YtIndexRole {
+    fn index(videos: Vec<(&str, Option<YtVideo>)>, discovered: Vec<StreamItem>) -> YtIndexRole {
         YtIndexRole::Peer(Arc::new(YtIndexPayload {
             version: "v1".to_string(),
             videos: videos
@@ -839,9 +839,10 @@ mod tests {
         );
     }
 
-    fn statuses(rows: &[HolodexStream]) -> HashMap<&str, &str> {
-        rows.iter()
-            .map(|row| (row.id.as_str(), row.status.as_str()))
+    fn statuses(items: &[StreamItem]) -> HashMap<&str, &str> {
+        items
+            .iter()
+            .map(|item| (item.id.as_str(), item.status.as_str()))
             .collect()
     }
 
@@ -855,15 +856,15 @@ mod tests {
             ],
             Vec::new(),
         );
-        let rows = vec![
-            row("went-live", "upcoming"),
-            row("ended", "live"),
-            row("members", "live"),
-            row("unknown", "upcoming"),
+        let items = vec![
+            item("went-live", "upcoming"),
+            item("ended", "live"),
+            item("members", "live"),
+            item("unknown", "upcoming"),
         ];
         let corrected = with_yt_index_role(
             role.clone(),
-            crate::plugins::youtube_data::apply_youtube_overlay(rows),
+            crate::plugins::youtube_data::apply_youtube_overlay(items),
         )
         .await;
         assert_eq!(
@@ -889,27 +890,27 @@ mod tests {
 
     #[tokio::test]
     async fn a_peer_shows_a_dropped_stream_until_the_owner_sees_it_end() {
-        let mut dropped = row("dropped", "live");
+        let mut dropped = item("dropped", "live");
         dropped.yt_confirmed = true;
         let corrected = |answer: Option<YtVideo>| {
             let role = index(vec![("dropped", answer)], vec![dropped.clone()]);
             with_yt_index_role(role, async {
-                let rows = crate::plugins::youtube_discovery::merge_discovered(vec![row(
+                let items = crate::plugins::youtube_discovery::merge_discovered(vec![item(
                     "listed", "upcoming",
                 )]);
-                crate::plugins::youtube_data::apply_youtube_overlay(rows).await
+                crate::plugins::youtube_data::apply_youtube_overlay(items).await
             })
         };
 
-        let rows = corrected(Some(video("dropped", None))).await;
+        let items = corrected(Some(video("dropped", None))).await;
         assert_eq!(
-            statuses(&rows),
+            statuses(&items),
             HashMap::from([("listed", "upcoming"), ("dropped", "live")])
         );
-        let rows = corrected(Some(video("dropped", Some("2026-09-25T11:00:00Z")))).await;
-        assert_eq!(statuses(&rows), HashMap::from([("listed", "upcoming")]));
-        let rows = corrected(None).await;
-        assert_eq!(statuses(&rows), HashMap::from([("listed", "upcoming")]));
+        let items = corrected(Some(video("dropped", Some("2026-09-25T11:00:00Z")))).await;
+        assert_eq!(statuses(&items), HashMap::from([("listed", "upcoming")]));
+        let items = corrected(None).await;
+        assert_eq!(statuses(&items), HashMap::from([("listed", "upcoming")]));
     }
 
     #[tokio::test]
@@ -925,7 +926,7 @@ mod tests {
                     "data": {
                         "version": "v7",
                         "videos": {"dropped": null},
-                        "discovered": [row("dropped", "live")],
+                        "discovered": [item("dropped", "live")],
                     },
                     "message": null,
                 }))
@@ -943,8 +944,8 @@ mod tests {
         assert_eq!(fetched.version, "v7");
         assert_eq!(fetched.videos.get("dropped"), Some(&None));
         assert!(
-            fetched.discovered.iter().all(|row| row.yt_confirmed),
-            "rows the owner's answers omit must drop on peers too"
+            fetched.discovered.iter().all(|item| item.yt_confirmed),
+            "items the owner's answers omit must drop on peers too"
         );
     }
 }

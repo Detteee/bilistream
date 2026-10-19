@@ -1,18 +1,18 @@
-//! YouTube Data API overlay for Holodex rows.
+//! YouTube Data API overlay for stream items.
 //!
-//! Holodex keeps rows `upcoming` after go-live, keeps finished or never-started
-//! rows `live`, and lags YouTube in both directions. `videos.list` returns
-//! YouTube's own `liveStreamingDetails` for up to 50 known video IDs per unit,
-//! so the rows Holodex already sent are re-classified from that instead.
+//! The Holodex backstop keeps items `upcoming` after go-live, keeps finished or
+//! never-started items `live`, and lags YouTube in both directions. `videos.list`
+//! returns YouTube's own `liveStreamingDetails` for up to 50 known video IDs per
+//! unit, so items the list already holds are re-classified from that instead.
 //!
 //! `youtube_api_key` may hold several keys (from different Google projects);
 //! calls draw on a pool with a daily budget per key.
 //!
-//! Everything here degrades to the Holodex rows unchanged: no key, every
+//! Everything here degrades to the input items unchanged: no key, every
 //! budget spent, or any API error.
 
-use super::holodex::HolodexStream;
 use super::http::{pooled_client, response_json_limited};
+use super::stream_item::StreamItem;
 use crate::config::load_config;
 use chrono::{Datelike, TimeZone};
 use serde::{Deserialize, Serialize};
@@ -99,16 +99,13 @@ pub fn classify(video: &YtVideo) -> YtLiveState {
     }
 }
 
-/// Re-classify Holodex rows from YouTube's answer.
+/// Re-classify stream items from YouTube's answer.
 ///
 /// Ended and plain uploads are dropped. IDs YouTube did not return (private,
-/// members-only, deleted) and placeholder rows keep their Holodex values,
-/// except rows YouTube itself confirmed earlier (discovered or recently live):
+/// members-only, deleted) and placeholder items keep the backstop's values,
+/// except items YouTube itself confirmed earlier (discovered or recently live):
 /// those only ever came from YouTube, so an omitted one is dropped.
-pub fn overlay(
-    streams: Vec<HolodexStream>,
-    videos: &HashMap<String, YtVideo>,
-) -> Vec<HolodexStream> {
+pub fn overlay(streams: Vec<StreamItem>, videos: &HashMap<String, YtVideo>) -> Vec<StreamItem> {
     streams
         .into_iter()
         .filter_map(|mut stream| {
@@ -814,13 +811,13 @@ pub(crate) fn youtube_configured(cfg: &crate::config::Config) -> bool {
 }
 
 /// A dropped encoder can reconnect under the same video ID while YouTube holds
-/// the broadcast open (2–5 min), and Holodex often drops the row meanwhile.
+/// the broadcast open (2–5 min), and Holodex often drops it meanwhile.
 /// A stream seen live is re-added for this long after Holodex and discovery
 /// last listed it, and kept only while YouTube still answers live.
 const RECENT_LIVE_HOLD: Duration = Duration::from_secs(10 * 60);
 
-/// Video ID → (last listed by Holodex or discovery, last live row).
-type RecentLive = HashMap<String, (Instant, HolodexStream)>;
+/// Video ID → (last listed by Holodex or discovery, last live item).
+type RecentLive = HashMap<String, (Instant, StreamItem)>;
 static RECENT_LIVE: Mutex<Option<RecentLive>> = Mutex::new(None);
 
 fn with_recent_live<T>(f: impl FnOnce(&mut RecentLive) -> T) -> T {
@@ -828,9 +825,9 @@ fn with_recent_live<T>(f: impl FnOnce(&mut RecentLive) -> T) -> T {
     f(guard.get_or_insert_with(HashMap::new))
 }
 
-/// Recently live rows missing from `present`, to be re-checked by the overlay.
+/// Recently live items missing from `present`, to be re-checked by the overlay.
 /// Rows still in `present` count as listed now.
-pub(crate) fn recent_live_rows(present: &HashSet<String>) -> Vec<HolodexStream> {
+pub(crate) fn recent_live_items(present: &HashSet<String>) -> Vec<StreamItem> {
     with_recent_live(|recent| recent_live_rows_in(recent, present, Instant::now()))
 }
 
@@ -838,7 +835,7 @@ fn recent_live_rows_in(
     recent: &mut RecentLive,
     present: &HashSet<String>,
     now: Instant,
-) -> Vec<HolodexStream> {
+) -> Vec<StreamItem> {
     for (id, (listed, _)) in recent.iter_mut() {
         if present.contains(id) {
             *listed = now;
@@ -848,34 +845,34 @@ fn recent_live_rows_in(
     recent
         .iter()
         .filter(|(id, _)| !present.contains(*id))
-        .map(|(_, (_, row))| row.clone())
+        .map(|(_, (_, item))| item.clone())
         .collect()
 }
 
 #[cfg(test)]
-pub(crate) fn remember_live_for_test(row: HolodexStream) {
+pub(crate) fn remember_live_for_test(item: StreamItem) {
     with_recent_live(|recent| {
-        recent.insert(row.id.clone(), (Instant::now(), row));
+        recent.insert(item.id.clone(), (Instant::now(), item));
     });
 }
 
-/// Remember rows YouTube answered live; forget asked IDs it did not.
+/// Remember items YouTube answered live; forget asked IDs it did not.
 fn record_recent_live(
     recent: &mut RecentLive,
     asked: &[String],
-    result: &[HolodexStream],
+    result: &[StreamItem],
     now: Instant,
 ) {
-    let live: HashMap<&str, &HolodexStream> = result
+    let live: HashMap<&str, &StreamItem> = result
         .iter()
         .filter(|stream| stream.yt_confirmed && stream.status == "live")
         .map(|stream| (stream.id.as_str(), stream))
         .collect();
     for id in asked {
         match live.get(id.as_str()) {
-            Some(row) => {
+            Some(item) => {
                 let listed = recent.get(id).map_or(now, |(listed, _)| *listed);
-                recent.insert(id.clone(), (listed, (*row).clone()));
+                recent.insert(id.clone(), (listed, (*item).clone()));
             }
             None => {
                 recent.remove(id);
@@ -884,16 +881,16 @@ fn record_recent_live(
     }
 }
 
-/// Holodex rows corrected by YouTube, or unchanged when the overlay is off or fails.
-pub async fn apply_youtube_overlay(streams: Vec<HolodexStream>) -> Vec<HolodexStream> {
+/// Stream items corrected by YouTube, or unchanged when the overlay is off or fails.
+pub async fn apply_youtube_overlay(streams: Vec<StreamItem>) -> Vec<StreamItem> {
     apply_youtube_overlay_within(streams, None).await
 }
 
 /// `apply_youtube_overlay` that re-fetches answers older than `max_age`.
 pub async fn apply_youtube_overlay_within(
-    streams: Vec<HolodexStream>,
+    streams: Vec<StreamItem>,
     max_age: Option<Duration>,
-) -> Vec<HolodexStream> {
+) -> Vec<StreamItem> {
     if let crate::cluster::YtIndexRole::Peer(index) = crate::cluster::yt_index_role() {
         // The public-status node answers for the cluster: no key and no Google call here.
         let videos = index.answers(streams.iter().map(|stream| &stream.id));
@@ -939,10 +936,10 @@ pub async fn apply_youtube_overlay_within(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::plugins::holodex::HolodexChannel;
+    use crate::plugins::stream_item::StreamChannel;
 
-    fn row(id: &str, status: &str, stream_type: &str) -> HolodexStream {
-        HolodexStream {
+    fn item(id: &str, status: &str, stream_type: &str) -> StreamItem {
+        StreamItem {
             id: id.to_string(),
             title: "holodex title".to_string(),
             stream_type: stream_type.to_string(),
@@ -953,7 +950,7 @@ mod tests {
             start_scheduled: Some("2026-09-24T10:00:00Z".to_string()),
             start_actual: None,
             live_viewers: None,
-            channel: HolodexChannel::default(),
+            channel: StreamChannel::default(),
             link: None,
             thumbnail: None,
             placeholder_type: None,
@@ -1051,7 +1048,7 @@ mod tests {
             "v",
             Some(details(Some("2026-09-24T10:02:00Z"), None, None)),
         )]);
-        let out = overlay(vec![row("v", "upcoming", "stream")], &videos);
+        let out = overlay(vec![item("v", "upcoming", "stream")], &videos);
         assert_eq!(out[0].status, "live");
         assert_eq!(out[0].start_actual.as_deref(), Some("2026-09-24T10:02:00Z"));
         assert_eq!(out[0].live_viewers, Some(1234));
@@ -1063,7 +1060,7 @@ mod tests {
     #[test]
     fn a_hung_live_row_without_a_youtube_start_becomes_upcoming() {
         let videos = by_id(vec![video("v", Some(details(None, None, Some("later"))))]);
-        let mut hung = row("v", "live", "stream");
+        let mut hung = item("v", "live", "stream");
         hung.start_actual = Some(String::new());
         let out = overlay(vec![hung], &videos);
         assert_eq!(out[0].status, "upcoming");
@@ -1079,8 +1076,8 @@ mod tests {
         ]);
         let out = overlay(
             vec![
-                row("ended", "live", "stream"),
-                row("vod", "upcoming", "stream"),
+                item("ended", "live", "stream"),
+                item("vod", "upcoming", "stream"),
             ],
             &videos,
         );
@@ -1092,8 +1089,8 @@ mod tests {
         let videos = by_id(vec![video("ph", None)]);
         let out = overlay(
             vec![
-                row("members", "live", "stream"),
-                row("ph", "live", "placeholder"),
+                item("members", "live", "stream"),
+                item("ph", "live", "placeholder"),
             ],
             &videos,
         );
@@ -1104,15 +1101,15 @@ mod tests {
 
     #[test]
     fn a_row_youtube_confirmed_earlier_is_dropped_once_omitted() {
-        let mut confirmed = row("gone", "live", "stream");
+        let mut confirmed = item("gone", "live", "stream");
         confirmed.yt_confirmed = true;
         assert!(overlay(vec![confirmed], &HashMap::new()).is_empty());
     }
 
-    fn live_row(id: &str) -> HolodexStream {
-        let mut row = row(id, "live", "stream");
-        row.yt_confirmed = true;
-        row
+    fn live_item(id: &str) -> StreamItem {
+        let mut item = item(id, "live", "stream");
+        item.yt_confirmed = true;
+        item
     }
 
     fn ids(list: &[&str]) -> Vec<String> {
@@ -1127,7 +1124,7 @@ mod tests {
     fn a_dropped_live_stream_is_re_added_until_youtube_ends_it() {
         let t0 = Instant::now();
         let mut recent = RecentLive::new();
-        record_recent_live(&mut recent, &ids(&["v"]), &[live_row("v")], t0);
+        record_recent_live(&mut recent, &ids(&["v"]), &[live_item("v")], t0);
 
         // Holodex still lists it: nothing to re-add.
         assert!(recent_live_rows_in(&mut recent, &set(&["v"]), t0).is_empty());
@@ -1137,7 +1134,7 @@ mod tests {
         assert_eq!(re_added.len(), 1);
         assert_eq!(re_added[0].id, "v");
 
-        // YouTube still answers live during its hold: the row survives the
+        // YouTube still answers live during its hold: the item survives the
         // overlay and stays remembered.
         let videos = by_id(vec![video("v", Some(details(Some("s"), None, None)))]);
         let result = overlay(re_added, &videos);
@@ -1157,7 +1154,7 @@ mod tests {
     fn a_re_added_row_youtube_omits_is_dropped_and_forgotten() {
         let t0 = Instant::now();
         let mut recent = RecentLive::new();
-        record_recent_live(&mut recent, &ids(&["v"]), &[live_row("v")], t0);
+        record_recent_live(&mut recent, &ids(&["v"]), &[live_item("v")], t0);
         let result = overlay(
             recent_live_rows_in(&mut recent, &set(&[]), t0),
             &HashMap::new(),
@@ -1171,15 +1168,15 @@ mod tests {
     fn the_hold_counts_from_when_holodex_last_listed_the_stream() {
         let t0 = Instant::now();
         let mut recent = RecentLive::new();
-        record_recent_live(&mut recent, &ids(&["v"]), &[live_row("v")], t0);
+        record_recent_live(&mut recent, &ids(&["v"]), &[live_item("v")], t0);
         // Still listed at +5 min, so the hold restarts there.
         let t5 = t0 + Duration::from_secs(5 * 60);
         recent_live_rows_in(&mut recent, &set(&["v"]), t5);
-        // YouTube answering live for a re-added row does not extend it.
+        // YouTube answering live for a re-added item does not extend it.
         record_recent_live(
             &mut recent,
             &ids(&["v"]),
-            &[live_row("v")],
+            &[live_item("v")],
             t5 + RECENT_LIVE_HOLD / 2,
         );
         let before = t5 + RECENT_LIVE_HOLD - Duration::from_secs(1);
@@ -1192,8 +1189,8 @@ mod tests {
     fn a_stream_that_goes_back_to_upcoming_is_forgotten() {
         let t0 = Instant::now();
         let mut recent = RecentLive::new();
-        record_recent_live(&mut recent, &ids(&["v"]), &[live_row("v")], t0);
-        let mut upcoming = live_row("v");
+        record_recent_live(&mut recent, &ids(&["v"]), &[live_item("v")], t0);
+        let mut upcoming = live_item("v");
         upcoming.status = "upcoming".to_string();
         record_recent_live(&mut recent, &ids(&["v"]), &[upcoming], t0);
         assert!(recent.is_empty());
