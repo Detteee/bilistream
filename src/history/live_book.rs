@@ -14,6 +14,7 @@ pub enum SummaryPhase {
     Pending,
     Claimed,
     Failed,
+    Skipped,
     Done,
 }
 
@@ -24,14 +25,9 @@ pub struct SummaryMark {
     pub node: Option<String>,
     #[serde(default)]
     pub at: u64,
-    /// New claim rounds supersede abandoned claims without changing the
-    /// legacy phase vocabulary understood by older heartbeat readers.
+    /// New claim rounds supersede abandoned claims.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub generation: u64,
-    /// Encoded as Failed + this flag so an older peer can still decode the
-    /// heartbeat. New nodes keep skipped distinct in the durable store.
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub skipped: bool,
     /// Allowlisted totals of a `Done` fetch, so every node can join them to
     /// its own sessions (no revenue field exists).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -40,10 +36,6 @@ pub struct SummaryMark {
 
 fn is_zero(value: &u64) -> bool {
     *value == 0
-}
-
-fn is_false(value: &bool) -> bool {
-    !value
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -83,8 +75,8 @@ impl BiliLiveMark {
             summary_phase: match self.summary.phase {
                 SummaryPhase::Pending => BiliSummaryPhase::Pending,
                 SummaryPhase::Claimed => BiliSummaryPhase::Claimed,
-                SummaryPhase::Failed if self.summary.skipped => BiliSummaryPhase::Skipped,
                 SummaryPhase::Failed => BiliSummaryPhase::Failed,
+                SummaryPhase::Skipped => BiliSummaryPhase::Skipped,
                 SummaryPhase::Done => BiliSummaryPhase::Done,
             },
             summary_node: self.summary.node.clone(),
@@ -106,13 +98,13 @@ impl BiliLiveMark {
                 phase: match record.summary_phase {
                     BiliSummaryPhase::Pending => SummaryPhase::Pending,
                     BiliSummaryPhase::Claimed => SummaryPhase::Claimed,
-                    BiliSummaryPhase::Failed | BiliSummaryPhase::Skipped => SummaryPhase::Failed,
+                    BiliSummaryPhase::Failed => SummaryPhase::Failed,
+                    BiliSummaryPhase::Skipped => SummaryPhase::Skipped,
                     BiliSummaryPhase::Done => SummaryPhase::Done,
                 },
                 node: record.summary_node,
                 at: record.summary_at,
                 generation: record.summary_generation,
-                skipped: record.summary_phase == BiliSummaryPhase::Skipped,
                 totals: record.totals,
             },
         }
@@ -129,7 +121,7 @@ fn better(a: &SummaryMark, b: &SummaryMark) -> bool {
         match mark.phase {
             SummaryPhase::Pending => 0,
             SummaryPhase::Claimed => 1,
-            SummaryPhase::Failed => 2,
+            SummaryPhase::Failed | SummaryPhase::Skipped => 2,
             SummaryPhase::Done => 3,
         }
     }
@@ -146,9 +138,8 @@ fn better(a: &SummaryMark, b: &SummaryMark) -> bool {
         })
     }
     fn round(mark: &SummaryMark) -> u64 {
-        // Older peers do not serialize generation. Their first claim still
-        // competes with our first claim by node id. A stripped echo of a
-        // later round cannot undo that later round.
+        // A first claim has generation 0 but still competes; an echo of a
+        // later round keeps its generation.
         if mark.phase == SummaryPhase::Pending {
             mark.generation
         } else {
@@ -165,7 +156,7 @@ fn better(a: &SummaryMark, b: &SummaryMark) -> bool {
         rank(a),
         std::cmp::Reverse(a.node.as_deref()),
         a.at,
-        a.skipped,
+        a.phase == SummaryPhase::Skipped,
         totals(a),
         a.generation,
     ) > (
@@ -174,7 +165,7 @@ fn better(a: &SummaryMark, b: &SummaryMark) -> bool {
         rank(b),
         std::cmp::Reverse(b.node.as_deref()),
         b.at,
-        b.skipped,
+        b.phase == SummaryPhase::Skipped,
         totals(b),
         b.generation,
     )
@@ -220,7 +211,9 @@ impl BiliLiveBook {
     pub fn open_key(&self, room: u64) -> Option<&BiliLiveMark> {
         self.entries
             .iter()
-            .filter(|m| m.room == room && m.stopped_at.is_none() && !m.summary.skipped)
+            .filter(|m| {
+                m.room == room && m.stopped_at.is_none() && m.summary.phase != SummaryPhase::Skipped
+            })
             .max_by_key(|m| m.started_at)
     }
 
@@ -243,7 +236,7 @@ impl BiliLiveBook {
             mark.room == room
                 && mark.started_at <= at
                 && mark.stopped_at.is_none()
-                && !mark.summary.skipped
+                && mark.summary.phase != SummaryPhase::Skipped
         }) {
             mark.stopped_at = Some(at);
         }
@@ -285,7 +278,6 @@ impl BiliLiveBook {
             node: Some(me.to_string()),
             at: now,
             generation,
-            skipped: false,
             totals: None,
         };
         Some(generation)
@@ -356,7 +348,7 @@ impl LocalBook {
     fn restore(&mut self, book: BiliLiveBook) {
         for mark in &book.entries {
             if mark.stopped_at.is_none()
-                && !mark.summary.skipped
+                && mark.summary.phase != SummaryPhase::Skipped
                 && self.book.mark(mark.room, &mark.live_key).is_none()
             {
                 self.restored.push(RestoredKey {
@@ -413,11 +405,10 @@ impl LocalBook {
                     && mark.summary.phase != SummaryPhase::Done
             }) {
                 mark.summary = SummaryMark {
-                    phase: SummaryPhase::Failed,
+                    phase: SummaryPhase::Skipped,
                     node: Some(by.strip_prefix("getinfo:").unwrap_or(by).to_string()),
                     at,
                     generation: mark.summary.generation.max(1).saturating_add(1),
-                    skipped: true,
                     totals: None,
                 };
             }
@@ -574,11 +565,10 @@ pub(crate) fn skip_summary(room: u64, key: &str, me: &str, at: u64) {
         {
             if mark.summary.phase == SummaryPhase::Pending {
                 mark.summary = SummaryMark {
-                    phase: SummaryPhase::Failed,
+                    phase: SummaryPhase::Skipped,
                     node: Some(me.to_string()),
                     at,
                     generation: mark.summary.generation,
-                    skipped: true,
                     totals: None,
                 };
             }
@@ -731,6 +721,26 @@ mod tests {
     }
 
     #[test]
+    fn the_heartbeat_wire_carries_five_phases_and_refuses_unknown_ones() {
+        let mut book = stopped();
+        book.entries[0].summary.phase = SummaryPhase::Skipped;
+        book.entries[0].summary.node = Some("b".into());
+        let wire = serde_json::to_value(&book).unwrap();
+        assert_eq!(wire["entries"][0]["summary"]["phase"], "skipped");
+        let parsed: BiliLiveBook = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            parsed.entries[0].record().summary_phase,
+            BiliSummaryPhase::Skipped
+        );
+        let mut bad = wire;
+        bad["entries"][0]["summary"]["phase"] = serde_json::json!("abandoned");
+        assert!(
+            serde_json::from_value::<BiliLiveBook>(bad).is_err(),
+            "an unknown phase must fail the heartbeat, not be guessed"
+        );
+    }
+
+    #[test]
     fn restoration_does_not_quarantine_a_newer_live_fact_observed_during_startup() {
         let mut local = LocalBook::default();
         local.record_started(42, "synthetic-current", "a", 100);
@@ -741,60 +751,6 @@ mod tests {
             matches!(local.begin_lookup(42, false), KeyLookup::Known(key) if key == "synthetic-current")
         );
         assert_eq!(local.heartbeat_book().unwrap().entries.len(), 1);
-    }
-
-    #[test]
-    fn superseded_restored_key_uses_only_the_deployed_v1_wire_phase_vocabulary() {
-        // Deployed v1 has this four-variant enum and ignores unknown struct
-        // fields. Keeping it separate catches an accidental `skipped` variant
-        // that would reject the entire heartbeat on those peers.
-        #[derive(Deserialize)]
-        #[serde(rename_all = "snake_case")]
-        enum V1Phase {
-            Pending,
-            Claimed,
-            Failed,
-            Done,
-        }
-        #[derive(Deserialize)]
-        struct V1Summary {
-            phase: V1Phase,
-        }
-        #[derive(Deserialize)]
-        struct V1Mark {
-            summary: V1Summary,
-        }
-        #[derive(Deserialize)]
-        struct V1Book {
-            entries: Vec<V1Mark>,
-        }
-
-        let mut local = restored_open();
-        local.record_started(42, "synthetic-current", "getinfo:b", 100);
-        let wire = serde_json::to_value(local.heartbeat_book().unwrap()).unwrap();
-        let v1: V1Book = serde_json::from_value(wire.clone()).unwrap();
-        assert!(v1
-            .entries
-            .iter()
-            .any(|mark| matches!(mark.summary.phase, V1Phase::Failed)));
-        assert!(v1
-            .entries
-            .iter()
-            .any(|mark| matches!(mark.summary.phase, V1Phase::Pending)));
-        let mut echoed = wire;
-        for entry in echoed["entries"].as_array_mut().unwrap() {
-            let summary = entry["summary"].as_object_mut().unwrap();
-            summary.remove("skipped");
-            summary.remove("generation");
-        }
-        local.book.join(&serde_json::from_value(echoed).unwrap());
-        let old = local.book.mark(42, "synthetic-broadcast").unwrap();
-        assert_eq!(old.record().summary_phase, BiliSummaryPhase::Skipped);
-        assert_eq!(old.stopped_at, None);
-        assert_eq!(
-            local.book.open_key(42).unwrap().live_key,
-            "synthetic-current"
-        );
     }
 
     #[test]
@@ -849,40 +805,6 @@ mod tests {
         assert_eq!(book.claim(42, "synthetic-broadcast", "a", 1000, 60), None);
         assert!(!book.finish_claim(42, "synthetic-broadcast", "b", 2, 166, None));
         assert_eq!(book.entries[0].summary.totals, Some(totals));
-    }
-
-    #[test]
-    fn mixed_version_echo_preserves_generation_and_known_skipped_state() {
-        fn older_echo(book: &BiliLiveBook) -> BiliLiveBook {
-            let mut value = serde_json::to_value(book).unwrap();
-            for mark in value["entries"].as_array_mut().unwrap() {
-                let summary = mark["summary"].as_object_mut().unwrap();
-                assert!(matches!(
-                    summary["phase"].as_str().unwrap(),
-                    "pending" | "claimed" | "failed" | "done"
-                ));
-                summary.remove("generation");
-                summary.remove("skipped");
-            }
-            serde_json::from_value(value).unwrap()
-        }
-        let mut book = stopped();
-        book.claim(42, "synthetic-broadcast", "b", 100, 60).unwrap();
-        book.claim(42, "synthetic-broadcast", "b", 160, 60).unwrap();
-        book.join(&older_echo(&book.clone()));
-        assert_eq!(book.entries[0].summary.generation, 2);
-        book.entries[0].summary.phase = SummaryPhase::Failed;
-        book.entries[0].summary.skipped = true;
-        let old = older_echo(&book);
-        book.join(&old);
-        assert_eq!(
-            book.entries[0].record().summary_phase,
-            BiliSummaryPhase::Skipped
-        );
-        let mut other_order = old;
-        other_order.join(&book);
-        assert_eq!(other_order, book);
-        assert!(!format!("{:?}", book.entries[0].record()).contains("synthetic-broadcast"));
     }
 
     #[test]

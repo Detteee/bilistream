@@ -763,7 +763,6 @@ fn mark(key: &str, started: u64, phase: SummaryPhase, node: Option<&str>) -> Bil
             at: 0,
             totals: None,
             generation: 0,
-            skipped: false,
         },
     }
 }
