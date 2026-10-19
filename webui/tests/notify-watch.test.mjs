@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
-  addWatch, filterCandidates, groupedWatchSupported, normalizeWatch,
+  addWatch, filterCandidates, normalizeWatch,
   toggleWatchCandidate, watchCatalog, watchEntryError, watchForSave, watchKey,
   watchRowLive, watchRows, watchSelection,
 } from '../src/js/notify-watch.js';
@@ -13,9 +13,6 @@ const settings = {
   config: { watch: { enabled: false, channels: [] } },
   revision: 4, credentials_generation: 7,
 };
-const yt = { platform: 'youtube', channel_id: 'UCexample', name: configured.name };
-const tw = { platform: 'twitch', channel_id: 'ExampleLogin', name: configured.name };
-const legacy = { watch_candidates: [yt, tw], config: settings.config };
 
 test('full name catalog is browsable without a query, and selected choices stay visible', () => {
   const source = { configured_channels: Array.from({ length: 60 }, (_, i) => ({ name: `Channel ${i}`, platforms: ['youtube'] })) };
@@ -71,33 +68,6 @@ test('unresolved configured entries remain removable and round-trip without resp
   assert.deepEqual(toggleWatchCandidate(list, configured, false).list, []);
 });
 
-test('legacy catalog matches saved accounts by identity, keeping partial follows and name collisions', () => {
-  const catalog = watchCatalog(legacy);
-  assert.equal(catalog.length, 1);
-  assert.equal(groupedWatchSupported(legacy), false);
-  assert.deepEqual(watchSelection(catalog[0], [yt]), { checked: true, partial: true });
-  const unrelated = { platform: 'twitch', channel_id: 'unrelated', name: configured.name };
-  const before = [yt, unrelated];
-  const rows = watchRows(before, catalog);
-  assert.equal(rows.length, 2);
-  assert.equal(rows[0].unavailable, false);
-  assert.equal(rows[1].historical, true);
-  assert.equal(rows[1].unavailable, true);
-  const all = toggleWatchCandidate(before, catalog[0], true).list;
-  assert.deepEqual(all, [yt, unrelated, tw]);
-  const loaded = { ...legacy, config: { watch: { channels: before } } };
-  assert.deepEqual(watchForSave(all, loaded).list, all);
-  assert.equal(watchForSave(all, loaded).error, '');
-  assert.deepEqual(toggleWatchCandidate(all, catalog[0], false).list, [unrelated]);
-});
-
-test('legacy configured selections are atomic flat writes within the old account limit', () => {
-  const before = Array.from({ length: 49 }, (_, i) => ({ platform: 'youtube', channel_id: `UC${i}`, name: `频道${i}` }));
-  assert.equal(toggleWatchCandidate(before, watchCatalog(legacy)[0], true).list, before);
-  assert.match(toggleWatchCandidate(before, watchCatalog(legacy)[0], true).error, /50/);
-  assert.deepEqual(toggleWatchCandidate([], watchCatalog(legacy)[0], true).list, [yt, tw]);
-});
-
 test('50 grouped channels may cover more than 50 accounts', () => {
   let list = [];
   for (let i = 0; i < 50; i++) list = addWatch(list, { kind: 'configured', name: `Name ${i}` }).list;
@@ -107,36 +77,20 @@ test('50 grouped channels may cover more than 50 accounts', () => {
   assert.match(addWatch(list, { kind: 'configured', name: 'Extra' }).error, /50/);
 });
 
-test('capability loss cannot send unsupported objects or silently lose unresolved targets', () => {
-  const encoded = watchForSave([configured], legacy);
-  assert.deepEqual(encoded.list, [yt, tw]);
-  assert.ok(encoded.list.every(c => !('kind' in c)));
-  const unresolved = [{ kind: 'configured', name: '已移除' }];
-  assert.equal(watchForSave(unresolved, legacy).list, unresolved);
-  assert.ok(watchForSave(unresolved, legacy).error);
-});
-
-test('unavailable historical entries never show live, including stale legacy status', () => {
+test('unavailable historical entries are never live', () => {
   const manual = { kind: 'manual', name: configured.name, platforms: { twitch: 'other' } };
   const rows = watchRows([configured, manual], watchCatalog(settings));
-  const status = { watch: { live: ['twitch:other'], live_entries: [{ kind: 'manual', name: configured.name }] } };
+  const status = { watch: { live_entries: [{ kind: 'manual', name: configured.name }] } };
   assert.equal(watchRowLive(rows[0], status), false);
   assert.equal(watchRowLive(rows[1], status), false);
   assert.equal(watchRowLive(rows[0], { watch: { live_entries: [configured] } }), true);
-  assert.equal(watchRowLive(watchRows([tw], watchCatalog(legacy))[0], { watch: { live: ['twitch:examplelogin'] } }), true);
-  const old = { platform: 'twitch', channel_id: 'unmatched', name: '旧关注项' };
-  assert.equal(watchRowLive(watchRows([old], watchCatalog(legacy))[0], { watch: { live: ['twitch:unmatched'] } }), false);
 });
-
-test('new saves reject uncatalogued flat targets and unknown configured names on both API versions', () => {
+test('new saves reject flat account entries and unknown configured names', () => {
   const outside = { platform: 'twitch', channel_id: 'unmatched', name: '旧关注项' };
-  for (const api of [settings, legacy]) {
-    assert.match(watchForSave([outside], api).error, /仅可关注/);
-    assert.ok(watchForSave([{ kind: 'configured', name: '不存在' }], api).error);
-  }
-  assert.equal(watchForSave([yt, tw], legacy).error, '');
+  assert.match(watchForSave([outside], settings).error, /找不到|仅可关注/);
+  assert.ok(watchForSave([{ kind: 'configured', name: '不存在' }], settings).error);
+  assert.equal(watchForSave([configured], settings).error, '');
 });
-
 test('remote settings refresh preserves a watch draft and advances unchanged fields', () => {
   const previous = configToForm(settings.config);
   const draft = { ...previous, watch_channels: JSON.stringify([configured]) };

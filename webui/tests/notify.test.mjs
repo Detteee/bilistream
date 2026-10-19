@@ -84,33 +84,33 @@ import {
 } from '../src/js/notify-state.js';
 
 test('watch list: identity, validation, add/remove and patch', () => {
+  // Account keys exist only for retained manual entries; a saved entry names a channel.
   assert.equal(watchKey({ platform: 'twitch', channel_id: 'SomeLogin' }), 'twitch:somelogin');
+  assert.equal(watchKey({ kind: 'configured', name: '主频道' }), 'configured:主频道');
   let list = [];
-  ({ list } = addWatch(list, { platform: 'youtube', channel_id: 'UCabc', name: '主频道' }));
-  assert.equal(list.length, 1);
-  assert.equal(addWatch(list, { platform: 'youtube', channel_id: 'UCabc' }).error, '已在关注列表中');
-  assert.match(watchEntryError({ platform: 'youtube', channel_id: 'bad id' }), /只能包含/);
-  assert.equal(watchEntryError({ platform: 'bilibili', channel_id: 'x' }), '请选择平台');
-  assert.match(watchEntryError({ platform: 'twitch', channel_id: 'x', name: 'n'.repeat(41) }), /40/);
+  ({ list } = addWatch(list, { kind: 'configured', name: '主频道' }));
+  assert.deepEqual(list, [{ kind: 'configured', name: '主频道' }]);
+  assert.equal(addWatch(list, { kind: 'configured', name: '主频道' }).error, '已在关注列表中');
+  assert.equal(watchEntryError({ kind: 'configured', name: '' }), '请选择已配置的频道');
+  assert.equal(watchEntryError({ platform: 'youtube', channel_id: 'UCabc' }), '请选择已配置的频道');
+  assert.match(watchEntryError({ kind: 'manual', name: 'x' }), /仅可关注/);
   const candidates = [
-    { platform: 'youtube', channel_id: 'UCabc', name: '主频道' },
-    { platform: 'twitch', channel_id: 'other', name: '副频道' },
+    { kind: 'configured', name: '主频道', platforms: ['youtube'] },
+    { kind: 'configured', name: '副频道', platforms: ['twitch'] },
   ];
-  assert.deepEqual(filterCandidates(candidates, '', list).map(c => c.channel_id), ['UCabc', 'other']);
-  assert.deepEqual(filterCandidates(candidates, 'twitch', []).map(c => c.channel_id), []);
-  assert.deepEqual(filterCandidates(candidates, '主', []).map(c => c.channel_id), ['UCabc']);
-  list = removeWatch(list, 'youtube:UCabc');
+  assert.deepEqual(filterCandidates(candidates, '').map(c => c.name), ['主频道', '副频道']);
+  assert.deepEqual(filterCandidates(candidates, '副').map(c => c.name), ['副频道']);
+  list = removeWatch(list, 'configured:主频道');
   assert.equal(list.length, 0);
 
   const base = configToForm({ watch: { enabled: false, channels: [] } });
   assert.equal(base.commands_enabled, true);
-  const next = { ...base, watch_enabled: true, watch_channels: JSON.stringify([candidates[1]]) };
+  const next = { ...base, watch_enabled: true, watch_channels: JSON.stringify([{ kind: 'configured', name: '副频道' }]) };
   const patch = formToPatch(next, base);
-  assert.deepEqual(patch.watch, { enabled: true, channels: [candidates[1]] });
+  assert.deepEqual(patch.watch, { enabled: true, channels: [{ kind: 'configured', name: '副频道' }] });
   assert.equal(patch.commands_enabled, undefined);
   assert.deepEqual(formToPatch({ ...base, commands_enabled: false }, base), { commands_enabled: false });
 });
-
 test('eligible senders share the same connection states and neutral wording', () => {
   const settings = { app_secret_configured: true, openid_set: true, config: { enabled: true, qq: { app_id: '1' } } };
   for (const state of ['online', 'offline', 'failed']) {

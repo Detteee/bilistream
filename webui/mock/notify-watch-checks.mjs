@@ -104,7 +104,6 @@ export async function checkNotifyWatch({ base, context, command, evaluate, waitF
     assert.deepEqual(channels.find(c => c.name === '电台夜话'), { kind: 'manual', name: '电台夜话', platforms: { youtube: 'UCmanualradio', twitch: 'manualradio' } }, 'historical payload is retained unchanged');
     assert.equal(channels.filter(c => c.kind !== 'configured').length, 1, 'no new manual entry');
     assert.equal(await evaluate(`${options}.length`), 24, 'save response preserves full picker');
-    assert.equal(await evaluate(`${el('notify-watch-migration')}.hidden`), true);
     await command('browsingContext.reload', { context, wait: 'complete' });
     await ready();
     assert.equal(await evaluate(`${rows}.length`), 3, 'saved grouped list reloads');
@@ -123,28 +122,6 @@ export async function checkNotifyWatch({ base, context, command, evaluate, waitF
     assert.equal(await evaluate('window.watchRefused'), 1);
     assert.equal(await evaluate('document.activeElement.id'), 'notify-watch-picker-toggle');
     await evaluate('window.fetch=window.watchOriginalFetch; delete window.watchOriginalFetch');
-
-    await open('watch-legacy');
-    await expand();
-    assert.equal(await evaluate(`${options}.length`), 24);
-    assert.equal(await evaluate(`${options}[0].indeterminate`), true, 'legacy partial follows preserved');
-    assert.equal(await evaluate(`${historical}.querySelector('.notify-watch-live').textContent`), '不可用', 'unmatched old account cannot show live');
-    const legacyBefore = (await writes()).length;
-    await evaluate(`${options}[0].focus()`);
-    await key(' ');
-    assert.equal(await evaluate(`${options}[0].checked && !${options}[0].indeterminate`), true);
-    await save();
-    const legacySave = (await writes()).slice(legacyBefore);
-    assert.equal(legacySave.length, 1);
-    assert.equal(legacySave[0].patch.config.watch.channels.length, 4);
-    assert.ok(legacySave[0].patch.config.watch.channels.every(c => c.platform && c.channel_id && !c.kind));
-    assert.deepEqual(legacySave[0].patch.config.watch.channels.find(c => c.channel_id === 'historical_login'), { platform: 'twitch', channel_id: 'historical_login', name: '旧频道' });
-    assert.equal(await evaluate(`${rows}.length`), 2);
-    assert.equal(await evaluate(`${options}.length`), 24);
-    await evaluate(`${historical}.querySelector('.notify-watch-remove').click()`);
-    await save();
-    assert.equal((await writes()).at(-1).patch.config.watch.channels.length, 3);
-    assert.equal(await evaluate(`${rows}.length`), 1);
 
     await open('watch-empty');
     await expand();
@@ -181,7 +158,7 @@ export async function checkNotifyWatch({ base, context, command, evaluate, waitF
         await shot(`qq-watch-selected-${theme}-${width}.png`);
       }
     }
-    console.log('QQ watch browser checks passed: configured-only choices with no manual/account controls, browse all 24 names, checkbox/Space/Escape, stable draft/focus, optional search, grouped save/reload, legacy flat save, unavailable historical retention/removal, empty/unresolved, 320/375/768/1280 dark/light.');
+    console.log('QQ watch browser checks passed: configured-only choices with no manual/account controls, browse all 24 names, checkbox/Space/Escape, stable draft/focus, optional search, grouped save/reload, unavailable historical retention/removal, empty/unresolved, 320/375/768/1280 dark/light.');
     console.log(JSON.stringify(measures));
   } finally {
     await fetch(`${base}/mock/notify-mode?mode=ok`);

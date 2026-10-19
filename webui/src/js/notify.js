@@ -6,7 +6,7 @@ import { showNotification, setButtonLoading, reconcileChildren } from './dom.js'
 import { isViewActive } from './state.js';
 import { LIVE_EVENTS_TICK_MS, STATUS_STALE_MS, activePushValueInto, renderLiveEventsInto } from './live-events-view.js';
 import {
-  WATCH_PLATFORMS, WATCH_MAX, filterCandidates, groupedWatchSupported,
+  WATCH_PLATFORMS, WATCH_MAX, filterCandidates,
   toggleWatchCandidate, watchCatalog, watchForSave, watchKey, watchRowLive, watchRows, watchSelection,
 } from './notify-watch.js';
 import {
@@ -328,7 +328,7 @@ function renderWatch() {
   // fields and status polls must not move focus.
   const query = $('notify-watch-search')?.value || '';
   const catalog = watchCatalog(settings);
-  const sig = JSON.stringify([watchDraft, catalog, query, status?.watch, disabled, groupedWatchSupported(settings)]);
+  const sig = JSON.stringify([watchDraft, catalog, query, status?.watch, disabled]);
   if (sig === watchSig) return;
   watchSig = sig;
   const rows = watchRows(watchDraft, catalog);
@@ -341,9 +341,7 @@ function renderWatch() {
   if (empty) empty.hidden = rows.length > 0;
   const count = $('notify-watch-count');
   setBadge(count, `已关注 ${rows.length} / ${WATCH_MAX}`, watchDraft.length >= WATCH_MAX ? 'sync-warning' : '');
-  $('notify-watch-help').textContent = groupedWatchSupported(settings)
-    ? '按频道关注，自动涵盖已关联的平台。同一场直播只通知一次，不占用召回额度。保存后同步到所有节点。'
-    : '按频道名称选择关注项。当前节点暂不支持跨平台合并通知。';
+  $('notify-watch-help').textContent = '按频道关注，自动涵盖已关联的平台。同一场直播只通知一次，不占用召回额度。保存后同步到所有节点。';
   $('notify-watch-search-clear').hidden = !query;
   const results = $('notify-watch-results');
   if (results) {
@@ -817,20 +815,14 @@ function setStatus(data, token) {
   return true;
 }
 
-function applySettings(data, { force, keepCatalog = false }) {
+function applySettings(data, { force }) {
+  // A reply without a revision is not a settings document: refuse it rather
+  // than merge a partially shaped payload.
+  if (!Number.isSafeInteger(data?.revision)) return;
   // A GET that captured settings before a successful save must not restore the
-  // old watch list. Newer reads (and replies without a revision) remain
-  // eligible; request sequencing still orders equal versions.
-  if (Number.isSafeInteger(data.revision) && Number.isSafeInteger(settings?.revision)
-    && data.revision < settings.revision) return;
+  // old watch list. Request sequencing orders equal versions.
+  if (Number.isSafeInteger(settings?.revision) && data.revision < settings.revision) return;
   const previous = baseline;
-  // Older PUT responses omit the read-only picker catalog. A mutation keeps
-  // the loaded catalog; a fresh GET can still change the reported capability.
-  if (keepCatalog) {
-    for (const key of ['configured_channels', 'watch_candidates']) {
-      if (!(key in data) && Array.isArray(settings?.[key])) data = { ...data, [key]: settings[key] };
-    }
-  }
   settings = data;
   baseline = configToForm(data.config);
   // F rev 3: the AppID is write-only; its value never goes in the input.
@@ -912,7 +904,7 @@ async function save() {
     setWatchError('');
     $('notify-app-secret').value = '';
     const pendingDraft = pendingSettingsForm(result.data, baseline, form);
-    applySettings(result.data, { force: true, keepCatalog: true });
+    applySettings(result.data, { force: true });
     if (pendingDraft) fillForm(pendingDraft);
     if (openid) { pendingUnbind = new Set(); clearedAt.clear(); }
     showNotification(pendingDraft ? LOCAL_SETTINGS_PENDING_TEXT : openid ? '管理员 openid 已绑定' : '通知设置已保存', pendingDraft ? 'warning' : 'success');
@@ -946,7 +938,7 @@ async function clearSecret() {
     request: () => putJson('/api/notify', clearSecretBody(settings)),
     onSuccess: result => {
       clearRefusal();
-      applySettings(result.data, { force: !isDirty(), keepCatalog: true });
+      applySettings(result.data, { force: !isDirty() });
       showNotification('AppSecret 已清除', 'success');
     },
     onError: error => {

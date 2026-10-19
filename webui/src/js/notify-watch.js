@@ -1,14 +1,10 @@
-// Channel-name watch-list state. New servers resolve configured names; older
-// servers still receive their original flat account entries. No DOM access.
+// Channel-name watch-list state: every saved entry names a configured channel,
+// or is a retained manual entry the operator can remove. No DOM access.
 
 export const WATCH_PLATFORMS = Object.freeze({ youtube: 'YouTube', twitch: 'Twitch', niconico: 'Niconico' });
 export const WATCH_MAX = 50;
 const platforms = Object.keys(WATCH_PLATFORMS);
 const text = value => String(value ?? '').trim();
-
-export function groupedWatchSupported(settings) {
-  return Array.isArray(settings?.configured_channels);
-}
 
 export function watchKey(channel) {
   if (channel?.kind === 'configured' || channel?.kind === 'manual') return `${channel.kind}:${text(channel.name)}`;
@@ -23,31 +19,21 @@ function accountValues(value = {}) {
 // Strip response-only fields, including unresolved / migration metadata, from
 // the draft so neither a status refresh nor a save treats them as user edits.
 export function normalizeWatch(list) {
-  return (Array.isArray(list) ? list : []).map(c => {
-    if (c.kind === 'configured') return { kind: 'configured', name: text(c.name) };
-    if (c.kind === 'manual') return { kind: 'manual', name: text(c.name), platforms: accountValues(c.platforms) };
-    return { platform: text(c.platform), channel_id: text(c.channel_id), name: text(c.name) };
-  });
+  return (Array.isArray(list) ? list : []).map(c => (c.kind === 'manual'
+    ? { kind: 'manual', name: text(c.name), platforms: accountValues(c.platforms) }
+    : { kind: 'configured', name: text(c.name) }));
 }
 
 function accountKeys(channel) {
-  if (channel.kind === 'configured') return [];
-  if (channel.kind === 'manual') return Object.entries(channel.platforms || {}).map(([platform, channel_id]) => watchKey({ platform, channel_id }));
-  return [watchKey(channel)];
+  if (channel.kind !== 'manual') return [];
+  return Object.entries(channel.platforms || {}).map(([platform, channel_id]) => watchKey({ platform, channel_id }));
 }
 
 export function watchEntryError(channel, list = []) {
   const name = text(channel?.name);
   if (channel?.kind === 'manual') return '仅可关注频道管理中已配置的频道。';
-  if (channel?.kind === 'configured') {
-    if (!name) return '请选择已配置的频道';
-  } else {
-    if (!WATCH_PLATFORMS[channel?.platform]) return '请选择平台';
-    const id = text(channel.channel_id);
-    if (!id) return '请填写频道 ID';
-    if (id.length > 64 || !/^[0-9A-Za-z_.@-]+$/.test(id)) return '频道 ID 只能包含字母、数字和 _ - . @';
-    if ([...name].length > 40) return '名称最多 40 个字';
-  }
+  if (channel?.kind !== 'configured') return '请选择已配置的频道';
+  if (!name) return '请选择已配置的频道';
   if (list.some(c => watchKey(c) === watchKey(channel))) return '已在关注列表中';
   const taken = new Set(list.flatMap(accountKeys));
   if (accountKeys(channel).some(key => taken.has(key))) return '该账号已在关注列表中';
@@ -64,24 +50,13 @@ export function removeWatch(list, key) {
   return list.filter(c => watchKey(c) !== key);
 }
 
-// Legacy catalog rows are grouped for presentation only. Saved rows match by
-// account identity, never by display name (which may belong to another bot).
+// Saved rows match by account identity, never by display name (which may
+// belong to another bot). The catalog is the server's configured channels.
 export function watchCatalog(settings) {
-  if (groupedWatchSupported(settings)) {
-    return settings.configured_channels.map(c => ({
-      kind: 'configured', name: text(c.name),
-      platforms: platforms.filter(p => Array.isArray(c.platforms) && c.platforms.includes(p)),
-    }));
-  }
-  const byName = new Map();
-  for (const target of normalizeWatch(settings?.watch_candidates)) {
-    const name = target.name || target.channel_id;
-    if (!byName.has(name)) byName.set(name, { kind: 'configured', name, platforms: [], targets: [] });
-    const channel = byName.get(name);
-    if (!channel.platforms.includes(target.platform)) channel.platforms.push(target.platform);
-    if (!channel.targets.some(c => watchKey(c) === watchKey(target))) channel.targets.push(target);
-  }
-  return [...byName.values()];
+  return (settings?.configured_channels || []).map(c => ({
+    kind: 'configured', name: text(c.name),
+    platforms: platforms.filter(p => Array.isArray(c.platforms) && c.platforms.includes(p)),
+  }));
 }
 
 // Every match stays browsable, including selected channels. Platform names
@@ -92,36 +67,22 @@ export function filterCandidates(candidates, query) {
 }
 
 export function watchSelection(candidate, list) {
-  if (!candidate.targets) return { checked: list.some(c => watchKey(c) === watchKey(candidate)), partial: false };
-  const keys = new Set(list.map(watchKey));
-  const count = candidate.targets.filter(c => keys.has(watchKey(c))).length;
-  return { checked: count > 0, partial: count > 0 && count < candidate.targets.length };
+  return { checked: list.some(c => watchKey(c) === watchKey(candidate)), partial: false };
 }
 
 export function toggleWatchCandidate(list, candidate, selected) {
-  if (!candidate.targets) return selected ? addWatch(list, candidate) : { list: removeWatch(list, watchKey(candidate)), error: '' };
-  const keys = new Set(candidate.targets.map(watchKey));
-  if (!selected) return { list: list.filter(c => !keys.has(watchKey(c))), error: '' };
-  let next = list;
-  for (const target of candidate.targets) {
-    if (next.some(c => watchKey(c) === watchKey(target))) continue;
-    const added = addWatch(next, target);
-    if (added.error) return { list, error: added.error }; // one selection is atomic
-    next = added.list;
-  }
-  return { list: next, error: '' };
+  return selected ? addWatch(list, candidate) : { list: removeWatch(list, watchKey(candidate)), error: '' };
 }
 
-// Defensive boundary for a page whose backend changed while a draft was open.
-// Never post grouped entries to a legacy server, and never discard an account
-// that cannot be resolved there. Historical unmatched entries may be retained
-// unchanged or removed, but cannot be created or edited by a new save.
+// Defensive boundary for a page whose data changed while a draft was open:
+// a retained historical entry may stay or be removed, but a new save cannot
+// create or edit one.
 export function watchForSave(list, settings) {
   const catalog = watchCatalog(settings);
   const entries = normalizeWatch(list);
   const saved = new Set(normalizeWatch(settings?.config?.watch?.channels).map(c => JSON.stringify(c)));
   const retained = entry => saved.has(JSON.stringify(entry));
-  if (groupedWatchSupported(settings)) {
+  {
     for (const entry of entries) {
       if (retained(entry)) continue;
       if (entry.kind !== 'configured') return { list, error: '仅可关注频道管理中已配置的频道。' };
@@ -161,8 +122,9 @@ export function watchRows(list, catalog) {
       platforms: [], members: [],
     });
     const row = rows.get(key);
-    const available = entry.kind === 'configured' ? configured?.platforms || []
-      : entry.kind === 'manual' ? Object.keys(accountValues(entry.platforms)) : [entry.platform];
+    const available = entry.kind === 'configured'
+      ? configured?.platforms || []
+      : Object.keys(accountValues(entry.platforms));
     row.platforms = platforms.filter(p => row.platforms.includes(p) || available.includes(p));
     row.members.push(entry);
   }
@@ -171,9 +133,7 @@ export function watchRows(list, catalog) {
 
 export function watchRowLive(row, status) {
   if (row.unavailable) return false;
-  if (Array.isArray(status?.watch?.live_entries)) return status.watch.live_entries.some(c => watchKey(c) === row.key);
-  const live = new Set(status?.watch?.live || []);
-  return row.members.some(c => live.has(watchKey(c)) || accountKeys(c).some(key => live.has(key)));
+  return (status?.watch?.live_entries || []).some(c => watchKey(c) === row.key);
 }
 
 export function watchRefusal(error) {

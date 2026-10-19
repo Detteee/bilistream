@@ -54,8 +54,6 @@ async function clearSavedSecret(control) {
   saveButton.disabled = true;
   const input = document.getElementById(control.input);
   const draft = input.value;
-  const legacy = control.field === 'niconico_user_session' ? document.getElementById('config-nc-cookies-file') : null;
-  const legacyDraft = legacy?.value;
   let cleared = false;
   try {
     const field = `clear_${control.field}`;
@@ -65,10 +63,6 @@ async function clearSavedSecret(control) {
     secretRevision = null;
     if (input.value === draft) input.value = '';
     configBaseline[control.field] = '';
-    if (legacy) {
-      if (legacy.value === legacyDraft) legacy.value = '';
-      configBaseline.niconico_cookies_file = '';
-    }
     document.getElementById(`${control.button}-status`).textContent = '已清除';
     document.getElementById(control.button).hidden = true;
     const saved = await getJson('/api/config');
@@ -76,7 +70,6 @@ async function clearSavedSecret(control) {
     mergeConfigData(saved);
     renderSecretControls(saved);
     if (control.field === 'youtube_api_key') void loadYoutubeKeyStatus();
-    if (legacy) void loadNicoSessionStatus();
     showNotification(`${control.label}已清除`, 'success');
   } catch (error) {
     showNotification(cleared ? '已清除，请重新加载状态' : error.message, cleared ? 'success' : 'error');
@@ -219,7 +212,6 @@ async function loadSystemConfig() {
     setInputValue('config-nc-user-session', '');
     setCheckboxChecked('config-nc-session-check', config.niconico?.session_check_enabled !== false);
     loadNicoSessionStatus();
-    setInputValue('config-nc-cookies-file', (config.niconico && config.niconico.cookies_file) || '');
     setInputValue('config-nc-proxy', config.niconico?.proxy || '');
     updateNicoCheckButton();
 
@@ -638,7 +630,6 @@ function getCurrentConfig() {
     youtube_deno_path: document.getElementById('config-yt-deno-path').value.trim(),
     niconico_user_session: document.getElementById('config-nc-user-session').value.trim(),
     niconico_session_check_enabled: document.getElementById('config-nc-session-check').checked,
-    niconico_cookies_file: document.getElementById('config-nc-cookies-file').value.trim(),
     niconico_proxy: document.getElementById('config-nc-proxy').value.trim(),
     cluster: getClusterConfigFromForm()
   };
