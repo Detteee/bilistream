@@ -222,7 +222,7 @@ async fn active_first_then_never_again_for_the_same_generation() {
     assert_eq!(qq.count(), 2);
     assert_eq!(
         qq.text(1),
-        "⚪ 本场转播已结束\n本场从 某频道 开始，共持续 3 小时 12 分钟。\n结束原因：源直播结束\n发送节点：a"
+        "⚪ 本场转播已结束\n本场从 某频道 开始，共持续 3 小时 12 分钟。\n结束原因：某频道下播\n发送节点：a"
     );
     run(&mut ledger, None, Some(2), NOW + 4 * 3600 + 5, &qq, &commit).await;
     assert_eq!(qq.count(), 2);
@@ -933,6 +933,57 @@ fn the_notice_copy_is_the_task_copy() {
     assert_eq!(
         render(LiveEventKey::end(), &ledger.live.broadcast, false, "JP"),
         "⚪ 本场转播已结束\n本场 某频道 -> Kamito，共持续 1 天 3 小时。\n结束原因：B站警告/切断\n发送节点：JP"
+    );
+}
+
+/// Only a source end names a channel: the session's newest source, because
+/// that is the channel the operator saw go offline. Any other cause stays a
+/// room fact, and an unknown source falls back to the generic label.
+#[test]
+fn a_source_end_names_the_channel_that_went_offline() {
+    // The reported notice: 天帝フォルテ stopped, nobody pressed 停止直播, and
+    // the room closed on its own later because there was no source left.
+    let mut ledger = NotifyLedger {
+        local: "CA".into(),
+        ..Default::default()
+    };
+    let mut forte = info("YT:UCforte");
+    forte.channel = "天帝フォルテ".into();
+    ledger.live.source(&forte, NOW);
+    assert!(ledger
+        .live
+        .end(NOW + 42 * 60, BroadcastEndCause::SourceEnded));
+    assert_eq!(
+        render(LiveEventKey::end(), &ledger.live.broadcast, false, "CA"),
+        "⚪ 本场转播已结束\n本场从 天帝フォルテ 开始，共持续 42 分钟。\n结束原因：天帝フォルテ下播\n发送节点：CA"
+    );
+    // A session that switched names the source relayed last, not the first.
+    let mut switched = started();
+    let mut other = info("TW:kamito");
+    other.channel = "Kamito".into();
+    switched.live.source(&other, NOW + 60);
+    switched
+        .live
+        .end(NOW + 42 * 60, BroadcastEndCause::SourceEnded);
+    assert!(
+        render(LiveEventKey::end(), &switched.live.broadcast, false, "CA")
+            .contains("结束原因：Kamito下播")
+    );
+    // A room that went away while a source was still being relayed keeps the
+    // room wording: nobody here stopped it, but no source ended either.
+    let mut room = started();
+    room.live.end(NOW + 60, BroadcastEndCause::BiliStopped);
+    assert!(
+        render(LiveEventKey::end(), &room.live.broadcast, false, "CA")
+            .contains("结束原因：B站直播间下播")
+    );
+    // A session with no recorded source cannot name one.
+    let mut unnamed = started();
+    unnamed.live.broadcast.channel.clear();
+    unnamed.live.end(NOW + 60, BroadcastEndCause::SourceEnded);
+    assert!(
+        render(LiveEventKey::end(), &unnamed.live.broadcast, false, "CA")
+            .contains("结束原因：源直播结束")
     );
 }
 

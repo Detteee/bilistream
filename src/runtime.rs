@@ -626,6 +626,17 @@ fn end_cause(action: EndAction, bili_live: bool) -> Option<BroadcastEndCause> {
     }
 }
 
+/// The 下播 cause for a room online-to-offline edge nobody here performed.
+/// A source that ended and was not replaced is the cause: the room closed
+/// because there was nothing left to relay, not because B站 took it away.
+fn room_offline_cause(source_ended: bool) -> BroadcastEndCause {
+    if source_ended {
+        BroadcastEndCause::SourceEnded
+    } else {
+        BroadcastEndCause::BiliStopped
+    }
+}
+
 fn end_danmaku_text(channel_name: &str, commands_enabled: bool) -> String {
     if commands_enabled {
         format!("{} 直播结束，可使用弹幕指令进行换台", channel_name)
@@ -1483,6 +1494,10 @@ struct PassState {
     /// notice is keyed to this edge: only an observed online-to-offline change
     /// closes the broadcast, so a source gap never ends the room's session.
     bili_room_was_live: bool,
+    /// The last source ended and nothing has been relayed since. The room may
+    /// still be live for the 换台 window; a room that closes now closes because
+    /// its source ended — 天帝フォルテ下播 — not on its own (Addendum E rev 8).
+    source_ended: bool,
 }
 
 /// Fetch the room's live status and emit the session 下播 edge when the room has
@@ -1505,7 +1520,8 @@ async fn observe_bili_room(
         }
     };
     if state.bili_room_was_live && !bili_live.is_live {
-        bilistream::notify::live_ended(BroadcastEndCause::BiliStopped);
+        bilistream::notify::live_ended(room_offline_cause(state.source_ended));
+        state.source_ended = false;
     }
     state.bili_room_was_live = bili_live.is_live;
     Some(bili_live)
@@ -2902,6 +2918,9 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 channel: channel_name.clone(),
                 title: title_str.to_string(),
             });
+            // Something is relayed again, so a room that closes from here on no
+            // longer closes because the previous source ended.
+            state.source_ended = false;
             let source_client = selected_source_client(&selected_stream, &probes, &nico_live);
 
             state.stream_end.start_session(
@@ -2993,6 +3012,13 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 current_is_live,
                 bili_is_live,
             );
+            // The source is confirmed ended with the room still live: this
+            // session now has nothing to relay, so a room that closes before a
+            // new source arrives closed because the source ended. Recorded for
+            // the next pass's edge detector, cleared by the next relayed source.
+            if matches!(action, EndAction::AnnounceEnd { bili_live: true }) {
+                state.source_ended = true;
+            }
             if matches!(
                 action,
                 EndAction::SkipHandoff
@@ -5226,6 +5252,22 @@ mod tests {
         assert_eq!(
             end_cause(EndAction::BiliStoppedQuietly, false),
             Some(BroadcastEndCause::BiliStopped)
+        );
+    }
+
+    /// A room that closes after its source ended was not taken away by B站:
+    /// the session has nothing left to relay, so the 下播 names the source.
+    #[test]
+    fn room_offline_edge_names_the_source_that_ended() {
+        assert_eq!(
+            room_offline_cause(true),
+            BroadcastEndCause::SourceEnded,
+            "a source that ended and was not replaced is the cause"
+        );
+        assert_eq!(
+            room_offline_cause(false),
+            BroadcastEndCause::BiliStopped,
+            "a room that closes while a source is live ended on its own"
         );
     }
 

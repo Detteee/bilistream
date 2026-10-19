@@ -56,11 +56,12 @@ pub enum BroadcastEndCause {
     ManualStop,
     /// 源直播已结束，房间空转超过 3 小时后自动停播.
     AutoStop,
-    /// 源直播结束与房间停播同时确认.
+    /// 源直播结束：房间当场确认，或房间在换台窗口里随后自行下播.
     SourceEnded,
     /// 违禁词(主播名或玩家ID)命中，本进程主动停播.
     ContentRejected,
-    /// The room was taken offline without this node stopping it.
+    /// The room went offline without this node stopping it. After its source
+    /// ended and nothing replaced it the cause is `SourceEnded` instead.
     BiliStopped,
 }
 
@@ -76,7 +77,8 @@ impl BroadcastEndCause {
         }
     }
 
-    /// The 下播 notice's `结束原因` line.
+    /// The fixed `结束原因` label for this cause. A source end names the
+    /// channel instead; see [`Self::notice_label`].
     pub fn label(self) -> &'static str {
         match self {
             Self::WarningCut => "B站警告/切断",
@@ -85,6 +87,17 @@ impl BroadcastEndCause {
             Self::SourceEnded => "源直播结束",
             Self::ContentRejected => "检测到违禁词停播",
             Self::BiliStopped => "B站直播间下播",
+        }
+    }
+
+    /// The 下播 notice's `结束原因` text. A source end names the channel that
+    /// went offline — 「天帝フォルテ下播」 — because that is the cause the
+    /// operator saw; every other cause is a room fact with its fixed label.
+    /// `last_source` is the session's newest source, empty when unknown.
+    pub fn notice_label(self, last_source: &str) -> String {
+        match self {
+            Self::SourceEnded if !last_source.is_empty() => format!("{last_source}下播"),
+            _ => self.label().to_string(),
         }
     }
 }

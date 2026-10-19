@@ -629,7 +629,8 @@ pub fn render(key: LiveEventKey, broadcast: &Broadcast, catch_up: bool, sender: 
             lines.push("⚪ 本场转播已结束".to_string());
             lines.push(session_line(broadcast, &length));
             if let Some(cause) = broadcast.end_cause {
-                lines.push(format!("结束原因：{}", cause.label()));
+                let source = clean(&newest_source_channel(broadcast), NAME_CHARS);
+                lines.push(format!("结束原因：{}", cause.notice_label(&source)));
             }
             end
         }
@@ -655,6 +656,16 @@ fn push_platform_title(lines: &mut Vec<String>, platform: &str, title: &str) {
         (true, false) => lines.push(title.to_string()),
         (true, true) => {}
     }
+}
+
+/// The source relayed last in this session: the newest 换台, else the channel
+/// the 开播 named. A source end names it in the `结束原因` line.
+fn newest_source_channel(broadcast: &Broadcast) -> String {
+    broadcast
+        .recent
+        .last()
+        .map(|entry| entry.channel.clone())
+        .unwrap_or_else(|| broadcast.channel.clone())
 }
 
 /// The source a switch notice announces. Only the newest switch is ever due
