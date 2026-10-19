@@ -60,22 +60,16 @@ pub struct AddChannelRequest {
     pub niconico_name: Option<String>,
 }
 
-pub(crate) fn managed_json_path(file_name: &str) -> Result<PathBuf, String> {
-    std::env::current_exe()
-        .map(|path| path.with_file_name(file_name))
-        .map_err(|e| format!("Failed to resolve {} path: {}", file_name, e))
+pub(crate) fn read_managed_document<T: DeserializeOwned>(file_name: &str) -> Result<T, String> {
+    crate::storage::read_document(file_name).map_err(|e| e.to_string())
 }
 
-pub(crate) fn read_managed_json<T: DeserializeOwned>(file_name: &str) -> Result<T, String> {
-    crate::storage::read_json(file_name).map_err(|e| e.to_string())
-}
-
-pub(crate) async fn mutate_managed_json<T, F>(file_name: &str, edit: F) -> Result<(), String>
+pub(crate) async fn mutate_managed_document<T, F>(file_name: &str, edit: F) -> Result<(), String>
 where
     T: DeserializeOwned + Serialize + Send + 'static,
     F: FnOnce(&mut T) -> Result<(), String> + Send + 'static,
 {
-    crate::config::mutate_json_file(managed_json_path(file_name)?, edit).await?;
+    crate::config::mutate_document(file_name, edit).await?;
     if file_name == "areas.json" {
         crate::webui::public::remap_after_areas_change();
     }
@@ -152,7 +146,7 @@ fn normalize_managed_platforms(mut platforms: HashMap<String, String>) -> HashMa
 }
 
 pub async fn get_areas_manage() -> Json<ApiResponse<AreasData>> {
-    match read_managed_json::<AreasData>("areas.json") {
+    match read_managed_document::<AreasData>("areas.json") {
         Ok(areas) => Json(ApiResponse {
             success: true,
             data: Some(areas),
@@ -168,7 +162,7 @@ pub async fn get_areas_manage() -> Json<ApiResponse<AreasData>> {
 
 // Mutations execute validation, editing, and persistence in one transaction.
 pub async fn add_area(Json(payload): Json<AddAreaRequest>) -> Json<ApiResponse<()>> {
-    let result = mutate_managed_json("areas.json", move |data: &mut AreasData| {
+    let result = mutate_managed_document("areas.json", move |data: &mut AreasData| {
         if data.areas.iter().any(|area| area.id == payload.id) {
             return Err(format!("Area with ID {} already exists", payload.id));
         }
@@ -187,7 +181,7 @@ pub async fn add_area(Json(payload): Json<AddAreaRequest>) -> Json<ApiResponse<(
 }
 
 pub async fn get_channels_manage() -> Json<ApiResponse<ChannelsData>> {
-    match read_managed_json::<ChannelsData>("channels.json") {
+    match read_managed_document::<ChannelsData>("channels.json") {
         Ok(channels) => Json(ApiResponse {
             success: true,
             data: Some(channels),
@@ -226,7 +220,7 @@ pub async fn add_channel(Json(mut payload): Json<AddChannelRequest>) -> Json<Api
             Err(error) => return managed_json_error(error),
         }
     }
-    let result = mutate_managed_json("channels.json", move |data: &mut ChannelsData| {
+    let result = mutate_managed_document("channels.json", move |data: &mut ChannelsData| {
         let platforms = normalize_managed_platforms(payload.platforms);
         if platforms.is_empty() {
             return Err(
@@ -271,7 +265,7 @@ pub async fn update_channel_manage(
             Err(error) => return managed_json_error(error),
         }
     }
-    let result = mutate_managed_json("channels.json", move |data: &mut ChannelsData| {
+    let result = mutate_managed_document("channels.json", move |data: &mut ChannelsData| {
         let platforms = normalize_managed_platforms(payload.platforms);
         if platforms.is_empty() {
             return Err(
@@ -295,7 +289,7 @@ pub async fn update_channel_manage(
 }
 
 pub async fn update_area_manage(Json(payload): Json<AddAreaRequest>) -> Json<ApiResponse<()>> {
-    let result = mutate_managed_json("areas.json", move |data: &mut AreasData| {
+    let result = mutate_managed_document("areas.json", move |data: &mut AreasData| {
         let area = data
             .areas
             .iter_mut()
@@ -313,7 +307,7 @@ pub async fn update_area_manage(Json(payload): Json<AddAreaRequest>) -> Json<Api
 pub async fn delete_area(
     axum::extract::Path(id): axum::extract::Path<u32>,
 ) -> Json<ApiResponse<()>> {
-    let result = mutate_managed_json("areas.json", move |data: &mut AreasData| {
+    let result = mutate_managed_document("areas.json", move |data: &mut AreasData| {
         let previous = data.areas.len();
         data.areas.retain(|area| area.id != id);
         if data.areas.len() == previous {
@@ -328,7 +322,7 @@ pub async fn delete_area(
 pub async fn delete_channel(
     axum::extract::Path(name): axum::extract::Path<String>,
 ) -> Json<ApiResponse<()>> {
-    let result = mutate_managed_json("channels.json", move |data: &mut ChannelsData| {
+    let result = mutate_managed_document("channels.json", move |data: &mut ChannelsData| {
         let previous = data.channels.len();
         data.channels.retain(|channel| channel.name != name);
         if data.channels.len() == previous {

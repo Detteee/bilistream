@@ -93,7 +93,7 @@ fn public_json_response(
 /// Area ids, names and aliases: the page needs the aliases to build the
 /// danmaku command. The banned keyword lists in the same file stay private.
 async fn public_areas() -> Response {
-    let Ok(parsed) = crate::storage::read_json::<serde_json::Value>("areas.json") else {
+    let Ok(parsed) = crate::storage::read_document::<serde_json::Value>("areas.json") else {
         return (StatusCode::INTERNAL_SERVER_ERROR, "areas unavailable").into_response();
     };
 

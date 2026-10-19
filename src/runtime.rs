@@ -3633,7 +3633,7 @@ fn is_multi_channel_stream(title: &str) -> bool {
 
 /// Check if multiple channel names from channels.json appear in the title
 fn has_multiple_channels_in_title(title: &str) -> Result<bool, Box<dyn std::error::Error>> {
-    let channels_json: serde_json::Value = crate::storage::read_json("channels.json")?;
+    let channels_json: serde_json::Value = crate::storage::read_document("channels.json")?;
 
     let mut found_channels = 0;
     let title_lower = title.to_lowercase();

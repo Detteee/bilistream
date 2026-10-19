@@ -135,7 +135,7 @@ pub async fn send_c2c(
         .get("x-tps-trace-id")
         .and_then(|value| value.to_str().ok())
         .map(clean_trace);
-    let body: serde_json::Value = read_json(response).await;
+    let body: serde_json::Value = read_document(response).await;
     let code = body
         .get("err_code")
         .or_else(|| body.get("code"))
@@ -215,7 +215,7 @@ pub async fn gateway_url(
             trace_id: None,
         })?;
     let status = response.status().as_u16();
-    let body: serde_json::Value = read_json(response).await;
+    let body: serde_json::Value = read_document(response).await;
     match body.get("url").and_then(|url| url.as_str()) {
         Some(url) if status == 200 && (url.starts_with("wss://") || url.starts_with("ws://")) => {
             Ok(url.to_string())
@@ -233,7 +233,7 @@ pub async fn gateway_url(
 }
 
 /// QQ bodies are small; cap them (64 KiB) so a broken proxy cannot fill memory.
-pub(crate) async fn read_json<T: serde::de::DeserializeOwned + Default>(
+pub(crate) async fn read_document<T: serde::de::DeserializeOwned + Default>(
     response: reqwest::Response,
 ) -> T {
     crate::plugins::http::response_bytes_limited(response, 64 * 1024)

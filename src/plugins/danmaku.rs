@@ -122,7 +122,7 @@ fn load_channels() -> Result<ChannelsConfig, Box<dyn std::error::Error>> {
             return Ok(config.clone());
         }
     }
-    let config: ChannelsConfig = crate::storage::read_json("channels.json")?;
+    let config: ChannelsConfig = crate::storage::read_document("channels.json")?;
     *cache = Some((config.clone(), revision));
     Ok(config)
 }
@@ -383,7 +383,7 @@ fn apply_danmaku_target(
 
 /// Load areas configuration from areas.json
 fn load_areas_config() -> Option<serde_json::Value> {
-    crate::storage::read_json("areas.json").ok()
+    crate::storage::read_document("areas.json").ok()
 }
 
 /// Bilibili's catch-all 其他单机. The restream loop starts here when nothing
@@ -1383,7 +1383,7 @@ pub async fn wait_config_update_or_timeout(timeout: Duration) -> bool {
 }
 
 pub fn get_area_name(area_id: u64) -> Option<String> {
-    let areas: serde_json::Value = crate::storage::read_json("areas.json").ok()?;
+    let areas: serde_json::Value = crate::storage::read_document("areas.json").ok()?;
 
     if let Some(areas_array) = areas["areas"].as_array() {
         for area in areas_array {
@@ -1405,7 +1405,7 @@ fn area_name_or_unknown(area_id: u64) -> String {
 
 fn get_area_id(area_name: &str) -> Result<u64, Box<dyn std::error::Error>> {
     let area_name_trimmed = area_name.trim();
-    let areas: serde_json::Value = crate::storage::read_json("areas.json")?;
+    let areas: serde_json::Value = crate::storage::read_document("areas.json")?;
 
     let area_name_lower = area_name_trimmed.to_lowercase();
 

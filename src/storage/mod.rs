@@ -26,6 +26,12 @@ const MANAGED_RECORDS: &[&str] = &[
     "cluster-local",
     "cluster-operations",
 ];
+/// The document ids this installation can hold.
+///
+/// They keep their file-era spelling on purpose: the id is bound into the
+/// encryption context and is the filename contract of `export_legacy` and the
+/// legacy import, so renaming one is a data migration, not a rename. No file
+/// by these names exists — the payload lives in the `documents` table.
 pub const NAMES: &[&str] = &[
     "config.json",
     "cookies.json",
@@ -684,7 +690,8 @@ pub fn cache_file(name: &str) -> io::Result<PathBuf> {
     Ok(directory.join(name))
 }
 
-pub fn read_json<T: serde::de::DeserializeOwned>(name: &str) -> io::Result<T> {
+/// Read one document by its record id (e.g. `"areas.json"`).
+pub fn read_document<T: serde::de::DeserializeOwned>(name: &str) -> io::Result<T> {
     let doc = global()?
         .read(name)?
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, format!("尚未配置 {name}")))?;
@@ -692,12 +699,13 @@ pub fn read_json<T: serde::de::DeserializeOwned>(name: &str) -> io::Result<T> {
 }
 
 pub fn read_text(name: &str) -> io::Result<String> {
-    read_json(name)
+    read_document(name)
 }
 pub fn contains(name: &str) -> io::Result<bool> {
     Ok(global()?.revision(name)?.is_some())
 }
-pub fn write_json<T: Serialize>(name: &str, value: &T) -> io::Result<u64> {
+/// Write one document by its record id (e.g. `"areas.json"`), returning the new revision.
+pub fn write_document<T: Serialize>(name: &str, value: &T) -> io::Result<u64> {
     global()?.write(
         name,
         serde_json::to_value(value).map_err(|_| invalid("数据格式无效"))?,

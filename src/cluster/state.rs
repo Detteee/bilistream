@@ -97,7 +97,7 @@ pub(crate) fn now_secs() -> u64 {
 }
 
 pub(crate) fn read_json_file(name: &str) -> Option<serde_json::Value> {
-    crate::storage::read_json(name).ok()
+    crate::storage::read_document(name).ok()
 }
 
 /// Peers' heartbeat B站 live books (analytics §17). The read guard is

@@ -126,7 +126,7 @@ fn load() -> State {
         .filter(|_| !cfg!(test))
         .map(|exe| exe.with_file_name(FILE_NAME));
     let hours = if path.is_some() {
-        crate::storage::read_json(FILE_NAME).unwrap_or_default()
+        crate::storage::read_document(FILE_NAME).unwrap_or_default()
     } else {
         Hours::default()
     };
@@ -179,7 +179,7 @@ pub(crate) fn record(videos: &[YtVideo]) {
         tokio::task::spawn_blocking(move || {
             let result = serde_json::from_slice::<serde_json::Value>(&bytes)
                 .map_err(std::io::Error::other)
-                .and_then(|value| crate::storage::write_json(FILE_NAME, &value).map(|_| ()));
+                .and_then(|value| crate::storage::write_document(FILE_NAME, &value).map(|_| ()));
             with_state(|state| {
                 state.saving = false;
                 if result.is_ok() {

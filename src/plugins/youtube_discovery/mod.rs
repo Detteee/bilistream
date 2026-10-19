@@ -65,7 +65,7 @@ pub(crate) async fn roster_channel_ids(cfg: &Config) -> Vec<String> {
         }
     };
 
-    if let Ok(json) = crate::storage::read_json::<serde_json::Value>("channels.json") {
+    if let Ok(json) = crate::storage::read_document::<serde_json::Value>("channels.json") {
         if let Some(channels) = json.get("channels").and_then(|v| v.as_array()) {
             for channel in channels {
                 if let Some(id) = channel

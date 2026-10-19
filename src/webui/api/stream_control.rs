@@ -657,13 +657,13 @@ pub async fn update_channel(
 }
 
 pub async fn get_channels() -> Result<Json<serde_json::Value>, StatusCode> {
-    crate::storage::read_json("channels.json")
+    crate::storage::read_document("channels.json")
         .map(Json)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
 }
 
 pub async fn get_areas() -> Result<Json<serde_json::Value>, StatusCode> {
-    crate::storage::read_json("areas.json")
+    crate::storage::read_document("areas.json")
         .map(Json)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
 }
@@ -675,8 +675,8 @@ pub struct BannedKeywordsResponse {
 }
 
 pub async fn get_banned_keywords() -> Result<Json<BannedKeywordsResponse>, StatusCode> {
-    let data: serde_json::Value =
-        crate::storage::read_json("areas.json").map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let data: serde_json::Value = crate::storage::read_document("areas.json")
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     let danmaku_banned = data["banned_keywords"]
         .as_array()
@@ -713,12 +713,8 @@ pub struct UpdateBannedKeywordsRequest {
 pub async fn update_banned_keywords(
     Json(payload): Json<UpdateBannedKeywordsRequest>,
 ) -> Result<ApiResponse<()>, StatusCode> {
-    let areas_path = std::env::current_exe()
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .with_file_name("areas.json");
-
     let patch = serde_json::to_value(&payload).map_err(|_| StatusCode::BAD_REQUEST)?;
-    let result = crate::config::mutate_json_file(areas_path, move |data: &mut serde_json::Value| {
+    let result = crate::config::mutate_document("areas.json", move |data: &mut serde_json::Value| {
         let current = json!({
             "danmaku_banned_keywords": data.get("banned_keywords").cloned().unwrap_or_else(|| json!([])),
             "streaming_banned_keywords": data.get("streaming_banned_keywords").cloned().unwrap_or_else(|| json!([])),

@@ -838,7 +838,7 @@ mod tests {
             holodex_every: std::time::Duration::from_secs(60),
         };
         for (id, name) in [(101, "First area"), (202, "Second area")] {
-            crate::storage::write_json(
+            crate::storage::write_document(
                 "areas.json",
                 &serde_json::json!({
                     "areas": [{"id": id, "name": name, "title_keywords": ["area-contract-keyword"]}]

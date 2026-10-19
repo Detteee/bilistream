@@ -762,7 +762,7 @@ impl Credentials {
 
 /// Loads credentials from the specified cookies.json file.
 async fn load_credentials<P: AsRef<Path>>(_path: P) -> Result<Credentials, Box<dyn Error>> {
-    let cookies_file: CookiesFile = crate::storage::read_json("cookies.json")?;
+    let cookies_file: CookiesFile = crate::storage::read_document("cookies.json")?;
     Credentials::from_cookies(&cookies_file.cookie_info.cookies)
 }
 
@@ -1021,27 +1021,29 @@ fn merge_config_changes(
     ))
 }
 
-/// One serialized read/edit/atomic-write operation for managed JSON files.
-pub async fn mutate_json_file<T, R, F>(path: PathBuf, edit: F) -> Result<R, String>
+/// One serialized read/edit/write operation for a stored document.
+///
+/// `name` is the store's record id (for example `"areas.json"`). It looks like
+/// a filename because it is the compatibility id, not because a file exists.
+pub async fn mutate_document<T, R, F>(name: &str, edit: F) -> Result<R, String>
 where
     T: serde::de::DeserializeOwned + Serialize + Send + 'static,
     R: Send + 'static,
     F: FnOnce(&mut T) -> Result<R, String> + Send + 'static,
 {
-    let name = path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .ok_or("数据名称无效")?
-        .to_owned();
-    mutate_document(
+    mutate_stored_document(
         crate::storage::global().map_err(|e| e.to_string())?,
-        name,
+        name.to_owned(),
         edit,
     )
     .await
 }
 
-async fn mutate_document<T, R, F>(store: Arc<Store>, name: String, edit: F) -> Result<R, String>
+async fn mutate_stored_document<T, R, F>(
+    store: Arc<Store>,
+    name: String,
+    edit: F,
+) -> Result<R, String>
 where
     T: serde::de::DeserializeOwned + Serialize + Send + 'static,
     R: Send + 'static,
@@ -1064,26 +1066,11 @@ where
     .await
     .map_err(|e| e.to_string())?
     .map_err(|e| e.to_string())?;
-    managed_json_committed();
+    managed_document_committed();
     Ok(result)
 }
 
-pub async fn replace_json_file(path: PathBuf, data: serde_json::Value) -> Result<(), String> {
-    let name = path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .ok_or("数据名称无效")?
-        .to_owned();
-    let store = crate::storage::global().map_err(|e| e.to_string())?;
-    tokio::task::spawn_blocking(move || store.write(&name, data))
-        .await
-        .map_err(|e| e.to_string())?
-        .map_err(|e| e.to_string())?;
-    managed_json_committed();
-    Ok(())
-}
-
-fn managed_json_committed() {
+fn managed_document_committed() {
     let _publication = CONFIG_PUBLICATION_LOCK
         .write()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -1153,7 +1140,7 @@ pub async fn refresh_credentials() -> Result<(), Box<dyn std::error::Error>> {
 
 /// Loads the installation's managed channel roster.
 pub fn load_channels() -> Result<ChannelsData, Box<dyn Error>> {
-    Ok(crate::storage::read_json("channels.json")?)
+    Ok(crate::storage::read_document("channels.json")?)
 }
 
 /// Finds channel info by name from channels.json
@@ -1351,7 +1338,7 @@ mod tests {
         store
             .write("managed.json", serde_json::json!({"count":4}))
             .unwrap();
-        mutate_document(
+        mutate_stored_document(
             Arc::clone(&store),
             "managed.json".into(),
             |data: &mut serde_json::Value| {
@@ -1378,7 +1365,7 @@ mod tests {
         let (release_tx, release_rx) = std::sync::mpsc::channel();
         let first = Arc::clone(&store);
         let caller = tokio::spawn(async move {
-            mutate_document(first, "counter.json".into(), move |count: &mut u64| {
+            mutate_stored_document(first, "counter.json".into(), move |count: &mut u64| {
                 started_tx.send(()).unwrap();
                 release_rx
                     .recv_timeout(std::time::Duration::from_secs(5))
@@ -1392,7 +1379,7 @@ mod tests {
         caller.abort();
         assert!(caller.await.unwrap_err().is_cancelled());
         release_tx.send(()).unwrap();
-        mutate_document(
+        mutate_stored_document(
             Arc::clone(&store),
             "counter.json".into(),
             |count: &mut u64| {

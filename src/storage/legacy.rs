@@ -24,7 +24,7 @@ pub(crate) fn validate(name: &str, value: &Value) -> io::Result<()> {
     if !NAMES.contains(&name) {
         return Err(invalid("备份包含未知数据类型"));
     }
-    let bad = || invalid(&format!("{name} 格式无效，原文件已保留"));
+    let bad = || invalid(&format!("{name} 格式无效，旧记录已保留"));
     match name {
         "config.json" => {
             serde_json::from_value::<crate::config::Config>(value.clone()).map_err(|_| bad())?;

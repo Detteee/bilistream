@@ -160,7 +160,7 @@ pub(crate) fn wake() {
 
 /// The roster's Twitch logins that also name a YouTube channel.
 async fn roster_logins() -> Vec<RosterLogin> {
-    match crate::storage::read_json::<serde_json::Value>("channels.json") {
+    match crate::storage::read_document::<serde_json::Value>("channels.json") {
         Ok(json) => roster_from_value(&json),
         Err(_) => Vec::new(),
     }

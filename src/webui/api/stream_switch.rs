@@ -144,7 +144,7 @@ pub async fn switch_stream(
     let previous_cfg = cfg.clone();
     let old_monitored_config_version = monitored_config_version(&cfg);
 
-    let channels_json: serde_json::Value = crate::storage::read_json("channels.json")
+    let channels_json: serde_json::Value = crate::storage::read_document("channels.json")
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     // Find channel name - try both new and old formats

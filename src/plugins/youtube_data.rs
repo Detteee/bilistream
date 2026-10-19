@@ -438,13 +438,13 @@ static POOL: Mutex<Option<KeyPool>> = Mutex::new(None);
 const POOL_FILE: &str = "youtube_quota.json";
 
 fn load_pool() -> KeyPool {
-    crate::storage::read_json::<SavedPool>(POOL_FILE)
+    crate::storage::read_document::<SavedPool>(POOL_FILE)
         .map(KeyPool::restore)
         .unwrap_or_default()
 }
 
 fn save_pool(saved: &SavedPool) {
-    if let Err(error) = crate::storage::write_json(POOL_FILE, saved) {
+    if let Err(error) = crate::storage::write_document(POOL_FILE, saved) {
         tracing::warn!("保存 YouTube API 配额用量失败: {error}");
     }
 }
