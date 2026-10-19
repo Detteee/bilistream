@@ -1,16 +1,19 @@
-// holodex.js — the Holodex panel's pure helpers, split out of overview.js.
+// holodex.js — the Holodex panel, split out of overview.js.
 //
-// Only declarations that do not depend on the rest of overview.js live here. The
-// panel's mutable state (its cache, keep-alive timer, on-air snapshot, favourites
-// flag) stays in overview.js, because an imported binding cannot be assigned to.
-// overview.js imports these back, so its public surface is unchanged.
+// Everything panel-specific lives here: its helpers, and the state they mutate.
+// The state is an exported object (`holodexState`) rather than module-level `let`s
+// because ESM imported bindings are read-only, so overview.js could not assign to
+// them. overview.js imports the declarations back, so its public surface is
+// unchanged. What still remains in overview.js is the part that also serves other
+// views (the status/warning wiring and the switch flow).
 
 import {
+  buildHolodexAddChannelPayload,
   hasConfiguredChannel,
   sameChannelCandidate,
   toAdminChannelCandidate,
 } from './admin-stream-actions.js';
-import { managementRequest, postJsonApi } from './api.js';
+import { managementJsonRequest, managementRequest, postJsonApi } from './api.js';
 import { isCropSessionCurrent, loadCapturedCropFrame, openCropConfig } from './crop.js';
 import {
   createSvgIcon,
@@ -20,6 +23,7 @@ import {
   setElementDisplay,
   showNotification,
 } from './dom.js';
+import { loadChannels } from './manage.js';
 import { isViewActive, state } from './state.js';
 import { startDurationTicker, stopDurationTicker } from './stream-card.js';
 
@@ -416,10 +420,70 @@ function markHolodexChannelAdded(channelData) {
   });
 }
 
+function setHolodexCollapsed(collapsed) {
+  const section = document.getElementById('holodex-section');
+  const button = document.getElementById('holodexFoldBtn');
+  if (!section) return;
+
+  section.classList.toggle('is-collapsed', collapsed);
+  if (collapsed) stopHolodexDurationTicker();
+  else startHolodexDurationTicker();
+  if (button) {
+    const label = collapsed ? '展开' : '折叠';
+    button.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+    button.setAttribute('aria-label', label);
+    button.title = label;
+  }
+}
+
+function updateHolodexLoginButton() {
+  updateHolodexAuthBar();
+}
+
+async function confirmHolodexAddChannel(button) {
+  const control = button.closest('.holodex-channel-add');
+  if (!control) return;
+
+  const channelData = readHolodexAddChannelData(control);
+  const payload = buildHolodexAddChannelPayload(channelData);
+  if (!payload.name || Object.keys(payload.platforms).length === 0) {
+    showNotification('频道信息不完整，无法添加', 'error');
+    return;
+  }
+
+  setHolodexAddChannelButtonsDisabled(control, true);
+
+  try {
+    const result = await managementJsonRequest('/api/manage/channels', 'POST', payload);
+    const alreadyExists = /already exists/i.test(result.message || '');
+
+    if (result.success || alreadyExists) {
+      addHolodexChannelToCache(payload);
+      markHolodexChannelAdded(channelData);
+      showNotification(
+        alreadyExists ? 'channels.json 已有该频道' : (result.message || '已添加到 channels.json'),
+        'success'
+      );
+
+      const channelsContent = document.getElementById('channels-content');
+      if (channelsContent && !isElementHidden(channelsContent)) {
+        loadChannels();
+      }
+    } else {
+      showNotification('添加失败: ' + (result.message || 'Unknown error'), 'error');
+      setHolodexAddChannelButtonsDisabled(control, false);
+    }
+  } catch (error) {
+    showNotification('添加失败: ' + error.message, 'error');
+    setHolodexAddChannelButtonsDisabled(control, false);
+  }
+}
+
 export {
   HOLODEX_STATUS_STATE_CLASSES,
   addHolodexChannelToCache,
   closeHolodexLoginModal,
+  confirmHolodexAddChannel,
   createHolodexAddChannelControls,
   createHolodexChannelAddIcon,
   createHolodexChannelAddedIndicator,
@@ -443,10 +507,12 @@ export {
   saveHolodexApiKey,
   setHolodexAddChannelButtonsDisabled,
   setHolodexAddChannelConfirmVisible,
+  setHolodexCollapsed,
   setHolodexStatus,
   startHolodexDurationTicker,
   stopHolodexDurationTicker,
   testHolodexApiKey,
   updateHolodexAuthBar,
+  updateHolodexLoginButton,
   updateHolodexModalHint,
 };

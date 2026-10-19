@@ -46,6 +46,7 @@ import {
   HOLODEX_STATUS_STATE_CLASSES,
   addHolodexChannelToCache,
   closeHolodexLoginModal,
+  confirmHolodexAddChannel,
   createHolodexAddChannelControls,
   createHolodexChannelAddIcon,
   createHolodexChannelAddedIndicator,
@@ -70,11 +71,13 @@ import {
   saveHolodexApiKey,
   setHolodexAddChannelButtonsDisabled,
   setHolodexAddChannelConfirmVisible,
+  setHolodexCollapsed,
   setHolodexStatus,
   startHolodexDurationTicker,
   stopHolodexDurationTicker,
   testHolodexApiKey,
   updateHolodexAuthBar,
+  updateHolodexLoginButton,
   updateHolodexModalHint,
 } from './holodex.js';
 
@@ -515,21 +518,6 @@ function applyHolodexConfig(config) {
 function maybeLoadHolodexStreams() {
   if (isHolodexPanelOpen()) {
     refreshHolodexStreams();
-  }
-}
-function setHolodexCollapsed(collapsed) {
-  const section = document.getElementById('holodex-section');
-  const button = document.getElementById('holodexFoldBtn');
-  if (!section) return;
-
-  section.classList.toggle('is-collapsed', collapsed);
-  if (collapsed) stopHolodexDurationTicker();
-  else startHolodexDurationTicker();
-  if (button) {
-    const label = collapsed ? '展开' : '折叠';
-    button.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
-    button.setAttribute('aria-label', label);
-    button.title = label;
   }
 }
 function toggleHolodexFold() {
@@ -1127,9 +1115,6 @@ function openHolodexLoginModal() {
   modal.classList.add('active');
   loadHolodexAuthStatus();
 }
-function updateHolodexLoginButton() {
-  updateHolodexAuthBar();
-}
 async function toggleHolodexSkipJwtVerify() {
   const toggle = document.getElementById('holodex-skip-jwt-verify');
   if (!toggle) return;
@@ -1333,44 +1318,6 @@ function cancelNcHlsCacheEdit() {
 }
 function saveNcHlsCacheEdit() {
   return saveHlsCacheEdit('nc', 'niconico', 'Niconico');
-}
-async function confirmHolodexAddChannel(button) {
-  const control = button.closest('.holodex-channel-add');
-  if (!control) return;
-
-  const channelData = readHolodexAddChannelData(control);
-  const payload = buildHolodexAddChannelPayload(channelData);
-  if (!payload.name || Object.keys(payload.platforms).length === 0) {
-    showNotification('频道信息不完整，无法添加', 'error');
-    return;
-  }
-
-  setHolodexAddChannelButtonsDisabled(control, true);
-
-  try {
-    const result = await managementJsonRequest('/api/manage/channels', 'POST', payload);
-    const alreadyExists = /already exists/i.test(result.message || '');
-
-    if (result.success || alreadyExists) {
-      addHolodexChannelToCache(payload);
-      markHolodexChannelAdded(channelData);
-      showNotification(
-        alreadyExists ? 'channels.json 已有该频道' : (result.message || '已添加到 channels.json'),
-        'success'
-      );
-
-      const channelsContent = document.getElementById('channels-content');
-      if (channelsContent && !isElementHidden(channelsContent)) {
-        loadChannels();
-      }
-    } else {
-      showNotification('添加失败: ' + (result.message || 'Unknown error'), 'error');
-      setHolodexAddChannelButtonsDisabled(control, false);
-    }
-  } catch (error) {
-    showNotification('添加失败: ' + error.message, 'error');
-    setHolodexAddChannelButtonsDisabled(control, false);
-  }
 }
 async function refreshDashboardStatusEndpoint(options) {
   const btn = document.getElementById(options.buttonId);
