@@ -24,8 +24,6 @@ const SVG_NS = 'http://www.w3.org/2000/svg';
 const DAY = 86400;
 const AUDIENCE_HINT = '数据来自 B 站非公开接口，可能缺失。在线人数有上限，仅供参考。';
 const NOT_SUPPORTED = '当前后端版本不支持统计，请升级 bilistream。';
-const CLEAN_LABEL = '清理历史…';
-const CLEAN_RUNNING = '清理中…';
 const CLEAN_CONFIRM = '将清理集群内所有节点的历史（统计、场次和事件），且无法撤销。确定清理吗？';
 
 let deps = null;
@@ -1093,16 +1091,15 @@ function bindControls() {
     if (!result.error) selectRange(result);
   });
   $('analytics-refresh-btn').addEventListener('click', () => refresh({ force: true }));
-  // Destructive and one-shot: ask, then re-read every panel from the emptied
-  // archives. The coordinator clears every node; one that is relaying, offline
-  // or older answers in `failed` and is named in the notice. Only the label
-  // span is rewritten, so the trash icon survives the busy state.
+  // Destructive and one-shot: the confirm dialog is the only copy, so the
+  // toolbar keeps a bare trash glyph. The coordinator clears every node; one
+  // that is relaying, offline or older answers in `failed` and is named in the
+  // notice. Disabled while the request is in flight, so one click is one clear.
   const cleanBtn = $('analytics-clean-btn');
-  const cleanLabel = $('analytics-clean-label');
   cleanBtn.addEventListener('click', async () => {
     if (cleanBtn.disabled || !confirm(CLEAN_CONFIRM)) return;
     cleanBtn.disabled = true;
-    cleanLabel.textContent = CLEAN_RUNNING;
+    cleanBtn.setAttribute('aria-busy', 'true');
     try {
       const reply = await deps.postJson('/api/history/clean', {});
       const report = cleanNotice(reply?.data);
@@ -1111,7 +1108,7 @@ function bindControls() {
     } catch (error) {
       showNotice(`清理失败：${error?.message || error}`, 'danger');
     } finally {
-      cleanLabel.textContent = CLEAN_LABEL;
+      cleanBtn.removeAttribute('aria-busy');
       cleanBtn.disabled = false;
     }
   });

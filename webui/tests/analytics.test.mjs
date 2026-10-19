@@ -376,28 +376,36 @@ test('mock end_reason uses only the seven backend codes, each mapped (open → -
 
 // ---------- clear history (W18/W19) ----------
 
-test('W18: 清理历史 carries the trash icon, is confirmed, and clears every node', async () => {
+test('W18: 清理历史 is a bare toolbar trash icon confirmed by its dialog', async () => {
   const html = await readFile(new URL('../src/index.html', import.meta.url), 'utf8');
-  assert.match(html, /<div class="analytics-maintenance">/);
-  assert.match(html, /清理会同步到集群内所有节点，从此刻起一起重新记录。/);
+  // It sits in the panel toolbar with the range and refresh controls as an
+  // icon-only action: no extra row and no standing explainer copy.
+  assert.doesNotMatch(html, /analytics-maintenance/, 'the separate maintenance row is gone');
+  assert.doesNotMatch(html, /历史只保存在本节点/, 'no inline scope line');
+  assert.match(html, /<div class="panel__actions">[\s\S]*id="analytics-clean-btn"[\s\S]*?<\/div>\s*<\/div>\s*<div class="panel__body">/);
   // The same trash glyph as the 裁剪 clear buttons in the status card.
-  assert.match(html, /id="analytics-clean-btn"[^>]*class="[^"]*btn-danger[^"]*"[^>]*>[\s\S]{0,140}<use href="#i-trash" \/>[\s\S]{0,80}<span id="analytics-clean-label">清理历史…<\/span>/);
+  assert.match(html, /id="analytics-clean-btn" class="[^"]*btn-ghost[^"]*icon-btn[^"]*"[^>]*>[\s\S]{0,120}<use href="#i-trash" \/>\s*<\/svg>\s*<\/button>/, 'quiet ghost icon like the 裁剪 clear');
+  assert.match(html, /id="analytics-clean-btn"[^>]*title="清理集群历史"[^>]*aria-label="清理集群历史"/);
   assert.match(html, /id="yt-crop-clear-btn"[\s\S]{0,200}<use href="#i-trash" \/>/, 'the crop clear keeps the shared symbol');
   const css = await readFile(new URL('../src/styles.css', import.meta.url), 'utf8');
-  assert.match(css, /\.analytics \.analytics-maintenance \{[^}]*border-top: 1px solid var\(--line-1\)/);
+  assert.match(css, /\.analytics \.panel__actions \.analytics-clean \{ margin-left: var\(--sp-2\); \}/);
+  assert.match(css, /\.analytics \.panel__actions \.analytics-clean:hover:not\(:disabled\),[\s\S]{0,90}color: var\(--danger\)/, 'it turns red only on hover');
+  assert.doesNotMatch(css, /\.analytics-maintenance/, 'the removed row left no dead style');
   const shared = await readFile(new URL('../src/shared.css', import.meta.url), 'utf8');
-  assert.match(shared, /\.btn-danger\s*\{/, 'the button reuses the shared danger style');
+  assert.match(shared, /\.btn-ghost\s*\{/, 'the button reuses the shared ghost style');
+  assert.match(shared, /\.icon-btn\.compact-btn \{[^}]*width: 30px/, 'the icon-only size comes from the shared rule');
   assert.match(shared, /\.btn-icon \{[^}]*width: 17px/, 'the glyph is sized by the shared button icon');
-  assert.match(shared, /button \{[^}]*display: inline-flex[^}]*gap: var\(--sp-2\)/, 'icon and label share the base button gap');
   const view = await readFile(new URL('../src/js/analytics.js', import.meta.url), 'utf8');
   assert.match(view, /const CLEAN_CONFIRM = '[^']*集群内所有节点[^']*无法撤销[^']*';/);
-  assert.match(view, /if \(cleanBtn\.disabled \|\| !confirm\(CLEAN_CONFIRM\)\) return;/);
+  assert.match(view, /if \(cleanBtn\.disabled \|\| !confirm\(CLEAN_CONFIRM\)\) return;/, 'the dialog is the only confirmation');
   assert.match(view, /await deps\.postJson\('\/api\/history\/clean', \{\}\)/);
   assert.match(view, /await refresh\(\{ force: true \}\)/);
-  assert.match(view, /const cleanLabel = \$\('analytics-clean-label'\)/);
-  assert.match(view, /cleanLabel\.textContent = CLEAN_RUNNING;/);
-  assert.match(view, /cleanLabel\.textContent = CLEAN_LABEL;/, 'the label is restored after a failure too');
+  assert.match(view, /cleanBtn\.disabled = true;/);
+  assert.match(view, /cleanBtn\.setAttribute\('aria-busy', 'true'\)/, 'the busy state is announced');
+  assert.match(view, /cleanBtn\.removeAttribute\('aria-busy'\)/);
+  assert.match(view, /cleanBtn\.disabled = false;/, 'the button is usable again after a failure too');
   assert.doesNotMatch(view, /cleanBtn\.textContent/, 'rewriting the button would drop the trash icon');
+  assert.doesNotMatch(view, /analytics-clean-label/, 'there is no label span left to update');
   assert.match(view, /const report = cleanNotice\(reply\?\.data\);/);
   assert.match(view, /showNotice\(report\.text, report\.tone\)/);
   assert.match(view, /showNotice\(`清理失败：\$\{error\?\.message \|\| error\}`, 'danger'\)/);

@@ -3131,8 +3131,11 @@ html.light-theme .analytics {
 .analytics .analytics-caption { color: var(--text-mute); font-size: var(--fs-xs); }
 .analytics .analytics-retention { display: block; margin-top: var(--sp-3); }
 /* 清理历史 is destructive and rare, so it sits apart from the range and
-   refresh controls in the panel head; the confirm dialog carries the copy. */
+   refresh controls in the panel head, as quiet as the 裁剪 clear icons until
+   hovered; the confirm dialog carries the copy. */
 .analytics .panel__actions .analytics-clean { margin-left: var(--sp-2); }
+.analytics .panel__actions .analytics-clean:hover:not(:disabled),
+.analytics .panel__actions .analytics-clean:focus-visible { color: var(--danger); }
 
 .analytics .analytics-platform-dot {
   display: inline-block;
