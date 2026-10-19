@@ -54,7 +54,7 @@ export async function checkClusterMembership({ base, context, command, evaluate,
 
   await evaluate("document.getElementById('cluster-add-password').value='synthetic-target-password'; document.getElementById('cluster-add-btn').click()");
   assert.equal(await evaluate("document.getElementById('cluster-add-password').value"), '', 'password cleared at submit outcome');
-  await waitFor("document.querySelector('#cluster-operation-list .cluster-operation')?.textContent.includes('添加服务器')");
+  await waitFor("document.querySelector('#cluster-operation-list .cluster-operation')?.textContent.includes('添加节点')");
   await waitFor(`${memberCount(2)} && ${noOperation}`);
 
   // Lost reply, then a reload: the same ID is resumed and never resubmitted.
