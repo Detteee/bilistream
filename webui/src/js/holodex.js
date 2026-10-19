@@ -5,7 +5,11 @@
 // flag) stays in overview.js, because an imported binding cannot be assigned to.
 // overview.js imports these back, so its public surface is unchanged.
 
-import { hasConfiguredChannel, toAdminChannelCandidate } from './admin-stream-actions.js';
+import {
+  hasConfiguredChannel,
+  sameChannelCandidate,
+  toAdminChannelCandidate,
+} from './admin-stream-actions.js';
 import { managementRequest, postJsonApi } from './api.js';
 import { isCropSessionCurrent, loadCapturedCropFrame, openCropConfig } from './crop.js';
 import {
@@ -13,10 +17,32 @@ import {
   isDashboardVisible,
   isElementHidden,
   parseInteger,
+  setElementDisplay,
   showNotification,
 } from './dom.js';
 import { isViewActive, state } from './state.js';
-import { stopDurationTicker } from './stream-card.js';
+import { startDurationTicker, stopDurationTicker } from './stream-card.js';
+
+/// The Holodex panel's mutable state, in one place.
+///
+/// ESM imported bindings are read-only, so the panel's state cannot stay as
+/// module-level `let`s in one file and be assigned from another. Both this module
+/// and `overview.js` therefore read and write it through this object.
+export const holodexState = {
+  holodexCurrentSource: 'channels',
+  holodexKeyConfigured: false,
+  holodexLastFetchMs: 0,
+  holodexKeepAliveId: null,
+  holodexRefreshGeneration: 0,
+  renderedHolodexCards: new Map(),
+  holodexScheduleDivider: null,
+  holodexOnAir: null,
+  lastHolodexLive: [],
+  lastHolodexScheduled: [],
+  holodexAuthState: { logged_in: false, username: null, expired: false, skip_jwt_verify: false },
+  holodexUseFavorites: false,
+  holodexUseFavoritesInitialized: false,
+};
 
 // The server keeps a list for 10 min after the last request; SSE announces
 // its changes, so an open panel only has to renew that lease.
@@ -253,29 +279,174 @@ function setHolodexAddChannelButtonsDisabled(control, disabled) {
   });
 }
 
+// Renews the server's lease: every 4 min, or every minute while SSE is down
+// and can't announce changes.
+function holodexKeepAliveDue(sinceLastFetchMs, eventsHealthy) {
+  return sinceLastFetchMs >= (eventsHealthy ? holodexKeepAliveMs : holodexKeepAliveWithoutEventsMs);
+}
+
+function setHolodexStatus(statusDiv, message, stateClass) {
+  statusDiv.classList.remove(...HOLODEX_STATUS_STATE_CLASSES);
+  statusDiv.classList.add(stateClass);
+  statusDiv.style.display = 'block';
+  statusDiv.textContent = message;
+}
+
+function hideHolodexStatus(statusDiv) {
+  statusDiv.classList.remove(...HOLODEX_STATUS_STATE_CLASSES);
+  statusDiv.style.display = 'none';
+  statusDiv.textContent = '';
+}
+
+function startHolodexDurationTicker() {
+  startDurationTicker(() => isHolodexPanelOpen());
+}
+
+function createHolodexAddChannelControls(model) {
+  const candidate = toAdminChannelCandidate(model);
+  if (holodexState.holodexCurrentSource !== 'favorites' || !candidate.name
+    || hasConfiguredChannel(candidate, state.channelsData?.channels)) {
+    return null;
+  }
+
+  if (!candidate.youtubeId && !candidate.twitchId) return null;
+
+  const control = document.createElement('span');
+  control.className = 'holodex-channel-add';
+  control.dataset.channelName = candidate.name;
+  control.dataset.youtubeId = candidate.youtubeId;
+  control.dataset.twitchId = candidate.twitchId;
+
+  const startButton = document.createElement('button');
+  startButton.type = 'button';
+  startButton.className = 'holodex-channel-add-btn holodex-add-channel-start';
+  startButton.title = '添加到 channels.json';
+  startButton.setAttribute('aria-label', '添加到 channels.json');
+  startButton.textContent = '➕';
+
+  const actions = document.createElement('span');
+  actions.className = 'holodex-channel-add-actions';
+  actions.setAttribute('aria-label', '确认添加频道');
+
+  const confirmButton = createHolodexChannelAddIcon('M20 6 9 17l-5-5', '确认添加');
+  confirmButton.classList.add('holodex-add-channel-confirm');
+
+  const rejectButton = createHolodexChannelAddIcon('M18 6 6 18M6 6l12 12', '取消');
+  rejectButton.classList.add('holodex-add-channel-reject');
+
+  actions.append(confirmButton, rejectButton);
+  control.append(startButton, actions);
+  return control;
+}
+
+function updateHolodexAuthBar() {
+  const authBar = document.getElementById('holodex-auth-bar');
+  const loginBtn = document.getElementById('holodex-login-btn');
+  const favoritesLabel = document.getElementById('holodex-favorites-label');
+  const favoritesBtn = document.getElementById('holodex-favorites-btn');
+  const heartIcon = document.querySelector('#holodex-favorites-btn .holodex-heart-icon');
+  const favoritesMode = document.querySelector('.holodex-favorites-mode');
+  const favoritesToggle = document.getElementById('holodex-use-favorites-toggle');
+  const jwtSkip = document.querySelector('.holodex-jwt-skip');
+  const skipToggle = document.getElementById('holodex-skip-jwt-verify');
+  const logoutBtn = document.getElementById('holodex-logout-btn');
+
+  if (skipToggle) {
+    skipToggle.checked = !!holodexState.holodexAuthState.skip_jwt_verify;
+  }
+  if (favoritesToggle) {
+    favoritesToggle.checked = !!holodexState.holodexUseFavorites;
+  }
+
+  const loggedIn = holodexState.holodexAuthState.logged_in && !holodexState.holodexAuthState.expired;
+  setElementDisplay(authBar, true, 'inline-flex');
+  setElementDisplay(loginBtn, false);
+  setElementDisplay(heartIcon, loggedIn, 'inline-flex');
+  setElementDisplay(favoritesMode, loggedIn, 'inline-flex');
+  setElementDisplay(jwtSkip, false);
+
+  if (loggedIn) {
+    if (favoritesLabel) {
+      favoritesLabel.textContent = holodexState.holodexAuthState.username
+        ? `${holodexState.holodexAuthState.username}的收藏`
+        : '收藏夹';
+    }
+    if (favoritesBtn) favoritesBtn.title = '管理 Holodex 登录';
+  } else if (holodexState.holodexAuthState.expired) {
+    if (favoritesLabel) favoritesLabel.textContent = '⚠️ 重新登录';
+    if (favoritesBtn) favoritesBtn.title = 'Holodex 登录已过期';
+  } else {
+    if (favoritesLabel) favoritesLabel.textContent = '🔗 使用Holodex收藏夹';
+    if (favoritesBtn) favoritesBtn.title = '登录后使用 Holodex 收藏夹';
+  }
+
+  if (logoutBtn) {
+    logoutBtn.classList.toggle('hidden', !holodexState.holodexAuthState.logged_in);
+  }
+}
+
+function updateHolodexModalHint() {
+  const hint = document.getElementById('holodex-modal-auth-hint');
+  if (!hint) return;
+
+  if (holodexState.holodexAuthState.logged_in && !holodexState.holodexAuthState.expired) {
+    hint.classList.add('hidden');
+    hint.classList.remove('warning');
+    return;
+  }
+
+  hint.classList.remove('hidden');
+
+  if (holodexState.holodexAuthState.expired) {
+    hint.textContent = '⚠️ JWT 已过期，请重新登录 Holodex 并保存新的 token';
+    hint.classList.add('warning');
+  } else {
+    hint.textContent = '未登录 — 当前使用 channels.json 频道列表 (YouTube + Twitch 外部配信)';
+    hint.classList.remove('warning');
+  }
+}
+
+function markHolodexChannelAdded(channelData) {
+  document.querySelectorAll('.holodex-channel-add').forEach(control => {
+    const data = readHolodexAddChannelData(control);
+    if (sameChannelCandidate(channelData, data)) {
+      control.classList.add('holodex-channel-add-added');
+      control.replaceChildren(createHolodexChannelAddedIndicator());
+    }
+  });
+}
+
 export {
+  HOLODEX_STATUS_STATE_CLASSES,
+  addHolodexChannelToCache,
+  closeHolodexLoginModal,
+  createHolodexAddChannelControls,
+  createHolodexChannelAddIcon,
+  createHolodexChannelAddedIndicator,
+  createHolodexStreamActionButton,
+  createHolodexStreamSvg,
+  cropAndSwitchToHolodexStream,
+  getHolodexChannelPhotoUrl,
+  getHolodexChannelUrl,
+  hideHolodexStatus,
+  holodexKeepAliveCheckMs,
+  holodexKeepAliveDue,
   holodexKeepAliveMs,
   holodexKeepAliveWithoutEventsMs,
-  holodexKeepAliveCheckMs,
-  isHolodexPanelOpen,
-  HOLODEX_STATUS_STATE_CLASSES,
-  stopHolodexDurationTicker,
-  createHolodexStreamSvg,
-  getHolodexChannelUrl,
-  getHolodexChannelPhotoUrl,
-  refreshHolodexChannelsData,
   holodexStreamHasConfiguredChannel,
-  createHolodexChannelAddIcon,
-  createHolodexStreamActionButton,
-  readHolodexStreamActionData,
-  cropAndSwitchToHolodexStream,
-  testHolodexApiKey,
-  closeHolodexLoginModal,
+  isHolodexPanelOpen,
+  markHolodexChannelAdded,
   openHolodexLogin,
-  saveHolodexApiKey,
   readHolodexAddChannelData,
-  addHolodexChannelToCache,
-  createHolodexChannelAddedIndicator,
-  setHolodexAddChannelConfirmVisible,
+  readHolodexStreamActionData,
+  refreshHolodexChannelsData,
+  saveHolodexApiKey,
   setHolodexAddChannelButtonsDisabled,
+  setHolodexAddChannelConfirmVisible,
+  setHolodexStatus,
+  startHolodexDurationTicker,
+  stopHolodexDurationTicker,
+  testHolodexApiKey,
+  updateHolodexAuthBar,
+  updateHolodexModalHint,
 };
