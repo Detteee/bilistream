@@ -12,9 +12,9 @@ import {
 import {
   DEFAULTS, bindView, configToForm, errorCopy,
   appSecretSet, credentialRows, formToPatch, formatDuration, formatUtc8, hasNodeCredentials, isBadCredentials, localOutcome,
-  middleTruncate, openidPending, openidView, readinessRow, writerOpenidSet, isSkipped, liveEventsFieldError, liveEventsGate, pickBudget, skippedRow, pendingLiveNote, liveEventsSupported, withLiveEvents, wakeupBudgetView,
+  middleTruncate, openidPending, openidView, readinessRow, writerOpenidSet, isSkipped, liveEventsFieldError, liveEventsGate, pickBudget, skippedRow, pendingLiveNote, withLiveEvents, wakeupBudgetView,
   clearSecretFlow, createSeq, liveRefusal, secretLostRefusal, mergeDraft, refusalSurvivesEdit, unbindFlow, notifyRefusal, openidGate, sameForm, selectState, senderBlockView, senderOutcome, staleLocalFailure, validateForm, nodeSignature, reuseRows,
-  credentialsSync, baseGeneration, appIdSet, appIdLine, saveBody, clearSecretBody, clearSecretConfirm, appIdWriteOnly, credentialPending, pendingCredentialBadge, rebindHint, appIdEmpty,
+  baseGeneration, appIdSet, appIdLine, saveBody, clearSecretBody, clearSecretConfirm, credentialPending, pendingCredentialBadge, rebindHint, appIdEmpty,
   APPSECRET_HELP_SYNC, APPID_HELP_SYNC, APPID_EMPTY, pendingSettingsForm, LOCAL_SETTINGS_PENDING_TEXT,
 } from './notify-state.js';
 
@@ -69,7 +69,7 @@ function readForm() {
   form.commands_enabled = $('notify-commands') ? $('notify-commands').checked : true;
   form.watch_enabled = Boolean($('notify-watch-enabled')?.checked);
   form.watch_channels = JSON.stringify(watchDraft);
-  return withLiveEvents(form, liveEventsSupported(settings?.config), $('notify-live-events')?.checked);
+  return withLiveEvents(form, $('notify-live-events')?.checked);
 }
 
 function fillForm(form) {
@@ -369,7 +369,7 @@ function renderLiveEvents() {
     line: $('notify-wakeup-budget'), main: $('notify-wakeup-main'), next: $('notify-wakeup-next'),
     passive: $('notify-passive-hint'), error: $('notify-live-events-error'), owner: $('notify-live-events-owner'),
     input: $('notify-live-events'), help: $('notify-live-events-help'),
-  }, { status, settings, statusAt, now: Date.now(), error: liveEventsError, supported: liveEventsSupported(settings?.config), disabled: !settings || busy });
+  }, { status, settings, statusAt, now: Date.now(), error: liveEventsError, disabled: !settings || busy });
 }
 
 function renderStatus() {
@@ -435,7 +435,7 @@ function renderStatus() {
   // Addendum D: pending notices from their own field, fresh /status first.
   const pendingSrc = s && 'pending_live_events' in s ? s : settings;
   const pending = pendingLiveNote(pendingSrc, s.sender?.node || '', s.node_id || '');
-  if (pending && liveEventsSupported(settings?.config)) rows.push(row('待补发', pending));
+  if (pending) rows.push(row('待补发', pending));
   rows.push(row('未送达', `${Number(s.undelivered) || 0} 条`));
   const readiness = readinessRow(s);
   if (readiness) rows.push(readinessRowEl(readiness));
@@ -639,7 +639,6 @@ function render() {
   renderAlert(alert);
 
   const secretSet = appSecretSet(settings);
-  const sync = credentialsSync(settings);
   // §16.y: a synced value on its way is a neutral 待同步 badge, never 未设置.
   const secretPending = pendingCredentialBadge(settings, status, 'appsecret');
   if (secretPending) setBadge($('notify-app-secret-state'), secretPending.badge, secretPending.tone);
@@ -647,12 +646,11 @@ function render() {
   const appIdState = $('notify-app-id-state');
   if (appIdState) {
     const pend = pendingCredentialBadge(settings, status, 'appid');
-    if (sync) setBadge(appIdState, pend ? pend.badge : appIdSet(settings) ? '已设置' : '未设置', pend ? pend.tone : appIdSet(settings) ? 'active' : '');
-    appIdState.hidden = !sync;
+    setBadge(appIdState, pend ? pend.badge : appIdSet(settings) ? '已设置' : '未设置', pend ? pend.tone : appIdSet(settings) ? 'active' : '');
+    appIdState.hidden = false;
   }
   const appIdInput = $('notify-app-id');
-  const writeOnly = appIdWriteOnly(settings);
-  const appIdPlaceholder = !writeOnly ? 'QQ 开放平台的机器人 AppID' : appIdSet(settings) ? '已设置（留空则不变）' : '填写 AppID';
+  const appIdPlaceholder = appIdSet(settings) ? '已设置（留空则不变）' : '填写 AppID';
   // F rev 4: no hint may mean a saved short AppID, so read the set flag too.
   const current = $('notify-app-id-current');
   if (current && settings) {
@@ -666,18 +664,13 @@ function render() {
       current.replaceChildren(document.createTextNode('当前 AppID：'), tail);
     }
     // §16.y rev 3: no hint line at all while this node's AppID is syncing.
-    // N2: an older backend shows the AppID in the input itself.
-    current.hidden = !writeOnly || credentialPending(settings, status, 'appid');
+    current.hidden = credentialPending(settings, status, 'appid');
   }
   if (appIdInput.placeholder !== appIdPlaceholder) appIdInput.placeholder = appIdPlaceholder;
   const appIdHelp = $('notify-app-id-help');
-  if (appIdHelp) { appIdHelp.hidden = !sync; appIdHelp.textContent = sync ? APPID_HELP_SYNC : ''; }
+  if (appIdHelp) { appIdHelp.hidden = false; appIdHelp.textContent = APPID_HELP_SYNC; }
   const secretHelp = $('notify-app-secret-help');
-  if (secretHelp) {
-    secretHelp.dataset.help ??= secretHelp.textContent;
-    const text = sync ? APPSECRET_HELP_SYNC : secretHelp.dataset.help;
-    if (secretHelp.textContent !== text) secretHelp.textContent = text;
-  }
+  if (secretHelp && secretHelp.textContent !== APPSECRET_HELP_SYNC) secretHelp.textContent = APPSECRET_HELP_SYNC;
   $('notify-clear-app-secret').hidden = !secretSet;
   const secretInput = $('notify-app-secret');
   secretInput.placeholder = secretSet ? '已设置（留空则不变）' : '填写 AppSecret';
@@ -827,7 +820,7 @@ function applySettings(data, { force }) {
   baseline = configToForm(data.config);
   // F rev 3: the AppID is write-only; its value never goes in the input.
   // N2: only when the backend reports appid_set; older backends unchanged.
-  if (appIdWriteOnly(data)) baseline.app_id = '';
+  baseline.app_id = '';
   if (force || !previous) fillForm(baseline);
   else {
     // Keep the draft but take server-side changes (e.g. a bound openid).

@@ -6,18 +6,18 @@ import {
 
 const full = {
   config: { enabled: true, confirm_secs: 60, recovery_hold_secs: 30, cooldown_secs: 1800, critical_cooldown_secs: 600,
-    qq: { app_id: '1234567890', keep_online: true,
+    qq: { appid_set: true, app_id_hint: '7890', keep_online: true,
       api_base: 'https://api.sgroup.qq.com', token_url: 'https://bots.qq.com/app/getAppAccessToken' } },
-  app_secret_configured: true,
+  appsecret_set: true,
   openid_set: true, openid_bound_at: 1_790_000_000, openid_revision: 3,
 };
 
 test('state selection follows the design table', () => {
   assert.equal(selectState({ loading: true }).key, 'loading');
   assert.equal(selectState({ loadError: new Error('x') }).key, 'load-error');
-  assert.equal(selectState({ settings: { config: { qq: {} }, app_secret_configured: false } }).key, 'off');
+  assert.equal(selectState({ settings: { config: { qq: {} }, appsecret_set: false } }).key, 'off');
   assert.equal(selectState({ settings: { ...full, config: { ...full.config, enabled: false } } }).key, 'off-configured');
-  const incomplete = selectState({ settings: { ...full, app_secret_configured: false } });
+  const incomplete = selectState({ settings: { ...full, appsecret_set: false } });
   assert.equal(incomplete.key, 'incomplete');
   assert.deepEqual(incomplete.missing, ['AppSecret']);
   assert.equal(selectState({ settings: full, status: { authority: 'primary', gateway: { state: 'online' } } }).key, 'sender');
@@ -112,7 +112,7 @@ test('watch list: identity, validation, add/remove and patch', () => {
   assert.deepEqual(formToPatch({ ...base, commands_enabled: false }, base), { commands_enabled: false });
 });
 test('eligible senders share the same connection states and neutral wording', () => {
-  const settings = { app_secret_configured: true, openid_set: true, config: { enabled: true, qq: { app_id: '1' } } };
+  const settings = { appsecret_set: true, openid_set: true, config: { enabled: true, qq: { appid_set: true, app_id_hint: '1' } } };
   for (const state of ['online', 'offline', 'failed']) {
     const primary = selectState({ settings, status: { authority: 'primary', gateway: { state } } });
     const delegate = selectState({ settings, status: { authority: 'delegate', gateway: { state } } });
@@ -129,7 +129,7 @@ import {
   senderOutcome as b2senderOutcome, staleLocalFailure as b2staleLocalFailure,
 } from '../src/js/notify-state.js';
 
-const b2settings = { config: { enabled: true, qq: { app_id: '1' } }, app_secret_configured: true, openid_set: true };
+const b2settings = { config: { enabled: true, qq: { appid_set: true, app_id_hint: '1' } }, appsecret_set: true, openid_set: true };
 
 test('senderOutcome prefers sender.last_send and maps via to mode', () => {
   const status = { sender: { node: 'tokyo-1', last_send: { at: 200, ok: true, code: null, via: 'passive' } }, last_outcome: { ok: false, at: 100, code: 22009, node_id: 'osaka-2' } };
@@ -263,9 +263,9 @@ test('notifyRefusal branches on data.code for every refusal', () => {
   assert.equal(notifyRefusal(new Error('network')), null);
 });
 
-test('appsecret_set wins over the deprecated name', () => {
-  assert.equal(appSecretSet({ appsecret_set: false, app_secret_configured: true }), false);
-  assert.equal(appSecretSet({ app_secret_configured: true }), true);
+test('appsecret_set is the only AppSecret flag', () => {
+  assert.equal(appSecretSet({ appsecret_set: true }), true);
+  assert.equal(appSecretSet({ appsecret_set: false }), false);
   assert.equal(appSecretSet(null), false);
 });
 

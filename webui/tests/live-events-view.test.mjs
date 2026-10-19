@@ -95,23 +95,22 @@ test('B4: the toggle row checkbox has a focus-visible outline', async () => {
   assert.match(css, /\.notify-toggle-row input:focus-visible \{\s*outline: 2px solid var\(--brand\);/);
 });
 
-test('rev 4: the whole 通知类型 group hides on a legacy backend and shows when the key returns', () => {
+test('the 通知类型 group renders the meters', () => {
   const e = els();
   const st = { quota: { wakeup_remaining: 3, wakeup_reserve: 2, passive_window_open: true } };
-  assert.equal(renderLiveEventsInto(doc, e, { status: st, statusAt: 0, now: 0, supported: false }), null);
-  assert.equal(e.group.hidden, true);
-  assert.equal(e.main.textContent, '', 'nothing rendered inside the hidden group');
-  const v = renderLiveEventsInto(doc, e, { status: st, statusAt: 0, now: 0, supported: true });
+  const v = renderLiveEventsInto(doc, e, { status: st, statusAt: 0, now: 0 });
   assert.equal(e.group.hidden, false);
   assert.equal(v.tone, 'ok');
-  renderLiveEventsInto(doc, e, { status: st, statusAt: 0, now: 0, supported: false });
-  assert.equal(e.group.hidden, true);
 });
 
-test('rev 4: markup starts hidden (no inline style) and 待补发 is gated on support', async () => {
+test('markup ships hidden and no capability gate remains', async () => {
   const html = await readFile(new URL('../src/index.html', import.meta.url), 'utf8');
   assert.match(html, /id="notify-types" hidden>/);
-  const src = await readFile(new URL('../src/js/notify.js', import.meta.url), 'utf8');
-  assert.match(src, /if \(pending && liveEventsSupported\(settings\?\.config\)\)/);
-  assert.match(src, /supported: liveEventsSupported\(settings\?\.config\)/);
+});
+
+test('no live-event capability check remains in the source', async () => {
+  for (const file of ['notify.js', 'notify-state.js', 'live-events-view.js']) {
+    const src = await readFile(new URL(`../src/js/${file}`, import.meta.url), 'utf8');
+    assert.doesNotMatch(src, /liveEventsSupported|supported: liveEventsSupported/, file);
+  }
 });

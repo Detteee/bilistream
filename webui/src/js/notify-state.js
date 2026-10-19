@@ -121,9 +121,7 @@ export function configToForm(config = {}) {
     watch_enabled: Boolean(config.watch?.enabled),
     // JSON so sameForm can compare it like the other fields.
     watch_channels: JSON.stringify(normalizeWatch(config.watch?.channels || [])),
-    // rev 4: an older backend has no key at all → the form has no key either,
-    // so it can never be dirty or sent.
-    ...(liveEventsSupported(config) ? { live_events_enabled: config.live_events_enabled !== false } : {}),
+    live_events_enabled: config.live_events_enabled !== false,
   };
 }
 
@@ -146,7 +144,7 @@ export function formToPatch(form, baseline) {
       api_base: f.api_base.trim() || DEFAULTS.api_base,
     },
     commands_enabled: f.commands_enabled !== false,
-    ...('live_events_enabled' in f ? { live_events_enabled: f.live_events_enabled !== false } : {}),
+    live_events_enabled: f.live_events_enabled !== false,
     watch: { enabled: Boolean(f.watch_enabled), channels: JSON.parse(f.watch_channels || '[]') },
   });
   const next = full(form);
@@ -431,7 +429,7 @@ export function secretLostRefusal(refusal, secretTyped) {
 
 // AppSecret flag: `appsecret_set`, with the deprecated name as fallback.
 export function appSecretSet(settings) {
-  return Boolean(settings?.appsecret_set ?? settings?.app_secret_configured);
+  return settings?.appsecret_set === true;
 }
 
 // Bind box view model from status.bind (+ seconds since it was fetched).
@@ -697,14 +695,8 @@ export function liveEventsGate(status) {
   return { enabled: false, hint: `暂无可写节点。${noWriterReason(status)}` };
 }
 
-// rev 4: the feature exists only when GET /api/notify's config carries the key.
-export function liveEventsSupported(config) {
-  return Boolean(config) && typeof config === 'object' && 'live_events_enabled' in config;
-}
-
-// readForm helper: add the switch value only when the backend supports it.
-export function withLiveEvents(form, supported, checked) {
-  if (!supported) return form;
+// readForm helper: carry the live-event switch in the form.
+export function withLiveEvents(form, checked) {
   return { ...form, live_events_enabled: Boolean(checked) };
 }
 
@@ -795,38 +787,24 @@ export function readinessRow(status) {
 // ---------------------------------------------------------------------------
 // §16.y Synced credential set (Addendum F rev 2)
 
-// F backend: GET /api/notify carries a numeric `credentials_generation`.
-// Older backends: today's per-node behaviour, nothing inferred (§16.y).
-export function credentialsSync(settings) {
-  return Number.isInteger(settings?.credentials_generation) && settings.credentials_generation >= 0;
-}
-// `base_generation` for a save: the generation from the last GET, or
-// undefined on an older backend (the only case where it is omitted).
+// §16.y synced credential set: GET /api/notify always carries the generation
+// the page loaded and the follow-list revision.
 export function baseGeneration(settings) {
-  return credentialsSync(settings) ? settings.credentials_generation : undefined;
+  return settings?.credentials_generation;
 }
-// Follow-list revision from GET. Absent on an older backend, so the save
-// omits `base_watch_revision` and keeps today's per-node behaviour.
 export function watchRevision(settings) {
-  return Number.isInteger(settings?.watch_revision) && settings.watch_revision >= 0
-    ? settings.watch_revision : undefined;
+  return settings?.watch_revision;
 }
-// AppID flag. Under F the value is write-only and never read; `appid_set`
-// wins, then (older backends) whether config carries an AppID at all.
+// The AppID is write-only and never read back: the flag says whether it is set.
 export function appIdSet(settings) {
-  const qq = settings?.config?.qq;
-  if (typeof qq?.appid_set === 'boolean') return qq.appid_set;          // F rev 3 rule 16
-  if (typeof settings?.appid_set === 'boolean') return settings.appid_set;
-  return Boolean(String(qq?.app_id ?? '').trim());                      // older backend
+  return settings?.config?.qq?.appid_set === true;
 }
-// F rev 3: `config.qq.app_id_hint` (last 4 only, or null). Older backends that
-// still return `app_id` get the last 4 derived here. Never more than 4 chars.
+// `config.qq.app_id_hint` is the last 4 characters, or null. Never more.
 export function appIdHint(settings) {
-  const qq = settings?.config?.qq;
-  const last4 = v => { const t = String(v).trim(); return t ? [...t].slice(-4).join('') : null; };
-  if (qq && 'app_id_hint' in qq) return typeof qq.app_id_hint === 'string' ? last4(qq.app_id_hint) : null;
-  if (typeof qq?.app_id === 'string') return last4(qq.app_id);
-  return null;
+  const hint = settings?.config?.qq?.app_id_hint;
+  if (typeof hint !== 'string') return null;
+  const t = hint.trim();
+  return t ? [...t].slice(-4).join('') : null;
 }
 // F rev 4: short AppIDs have no hint even when saved. The set flag decides
 // whether the label says 已设置; only an available hint uses monospace.
@@ -896,11 +874,9 @@ export function appIdEmpty(settings, typed, { secretEntered = false, enabled = f
 // on an older backend it is omitted. Values only travel in the request.
 export function saveBody(settings, patch, { secret = '', openid = '' } = {}) {
   const body = { config: patch, expected_revision: settings.revision };
-  const base = baseGeneration(settings);
-  if (base !== undefined) body.base_generation = base;
+  body.base_generation = baseGeneration(settings);
   if (patch && Object.prototype.hasOwnProperty.call(patch, 'watch')) {
-    const watchBase = watchRevision(settings);
-    if (watchBase !== undefined) body.base_watch_revision = watchBase;
+    body.base_watch_revision = watchRevision(settings);
   }
   if (secret) {
     body.app_secret = secret;
@@ -912,16 +888,9 @@ export function saveBody(settings, patch, { secret = '', openid = '' } = {}) {
   }
   return body;
 }
-// N1: under F the AppSecret is one synced set, so 清除 affects every node.
-export function clearSecretConfirm(settings) {
-  return credentialsSync(settings)
-    ? '将清除所有节点的 AppSecret，QQ 通知将停止，直到重新填写。'
-    : '确定要清除本节点保存的 AppSecret 吗？清除后本节点无法发送通知；如果它是发送节点，通知将无法送达，直到重新填写。';
-}
-// N2: the AppID input is blanked only on an F rev 3 backend (appid_set present);
-// an older backend keeps showing its AppID as before.
-export function appIdWriteOnly(settings) {
-  return typeof settings?.config?.qq?.appid_set === 'boolean' || typeof settings?.appid_set === 'boolean';
+// N1: the AppSecret is one synced set, so 清除 affects every node.
+export function clearSecretConfirm() {
+  return '将清除所有节点的 AppSecret，QQ 通知将停止，直到重新填写。';
 }
 // §16.y 清除 (spec 2931bccf): the AppSecret field is disabled while busy, so
 // success focus moves only after the finally render has re-enabled it.
@@ -957,7 +926,7 @@ export const LOCAL_SETTINGS_PENDING_TEXT = '机器人凭据已保存，本节点
 export function pendingSettingsForm(settings, previous, submitted) {
   if (settings?.local_settings_pending !== true) return null;
   const next = configToForm(settings.config);
-  if (appIdWriteOnly(settings)) next.app_id = '';
+  next.app_id = '';
   const draft = mergeDraft(previous, next, submitted, Object.keys(next));
   draft.app_id = next.app_id;
   return draft;

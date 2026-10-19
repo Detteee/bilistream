@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import {
   configToForm, formToPatch, formatLocalShort, isSkipped, liveEventsFieldError, liveEventsGate, pickBudget,
-  liveEventsSupported, pendingLiveNote, sameForm, selectState, withLiveEvents, senderOutcome, skippedRow, staleLocalFailure, wakeupBudgetView,
+  pendingLiveNote, sameForm, selectState, senderOutcome, skippedRow, staleLocalFailure, wakeupBudgetView,
 } from '../src/js/notify-state.js';
 import { createNotifyState } from '../mock/notify-fixtures.mjs';
 
@@ -19,27 +19,7 @@ test('switch: present key round-trips on/off; the old "missing reads as on" is g
   const off = configToForm({ ...base, live_events_enabled: false });
   assert.equal(off.live_events_enabled, false);
   assert.deepEqual(formToPatch({ ...off, live_events_enabled: true }, off), { live_events_enabled: true });
-  assert.ok(!('live_events_enabled' in configToForm(base)), 'missing key is not read as on');
-});
-
-test('legacy backend: no key → not supported, never dirty, never sent', () => {
-  assert.equal(liveEventsSupported(base), false);
-  assert.equal(liveEventsSupported({ ...base, live_events_enabled: false }), true);
-  const baseline = configToForm(base);
-  // readForm on a legacy backend: the switch (even if checked/unchecked in the DOM) is ignored.
-  for (const checked of [true, false]) {
-    const form = withLiveEvents({ ...baseline }, liveEventsSupported(base), checked);
-    assert.ok(sameForm(form, baseline), 'not dirty');
-    assert.deepEqual(formToPatch(form, baseline), {});
-    const edited = formToPatch({ ...form, cooldown_mins: '45' }, baseline);
-    assert.ok(!('live_events_enabled' in edited), 'PUT never carries the field');
-    assert.deepEqual(edited, { cooldown_secs: 2700 });
-  }
-  // The key comes back on a later load: supported again, value read normally.
-  const back = { ...base, live_events_enabled: false };
-  const form = withLiveEvents(configToForm(back), liveEventsSupported(back), false);
-  assert.equal(form.live_events_enabled, false);
-  assert.ok(sameForm(form, configToForm(back)));
+  assert.equal(configToForm(base).live_events_enabled, true, 'the switch defaults on when the server omits it');
 });
 
 test('switch follows the writer gate and invalid_field shows inline', () => {
@@ -121,7 +101,7 @@ test('ledger fields and the openid never reach the panel', async () => {
 
 test('mock serves the rev 2 fields, never the ledger or openid', () => {
   const notify = createNotifyState(() => 1_790_000_000);
-  for (const mode of ['ok', 'low', 'pending-after-alert', 'unknown', 'legacy']) {
+  for (const mode of ['ok', 'low', 'pending-after-alert', 'unknown']) {
     assert.ok(notify.setMode(mode));
     const body = JSON.stringify([notify.route('GET', '/api/notify'), notify.route('GET', '/api/notify/status')]);
     for (const key of [...LEDGER, 'admin_openid', '"openid"']) assert.ok(!body.includes(key), `${mode}: ${key}`);
@@ -177,15 +157,3 @@ test('mock pending-after-alert: wakeup alert succeeded, 下播 still pending', (
   assert.deepEqual(notify.route('GET', '/api/notify')[1].data.pending_live_events, []);
 });
 
-test('mock legacy: no live_events_enabled and none of the new fields', () => {
-  const notify = createNotifyState(() => 1_790_000_000);
-  assert.ok(notify.setMode('legacy'));
-  const cfg = notify.route('GET', '/api/notify')[1].data;
-  const st = notify.route('GET', '/api/notify/status')[1].data;
-  assert.equal(liveEventsSupported(cfg.config), false);
-  for (const key of ['live_events_enabled', 'pending_live_events', 'wakeup_remaining', 'wakeup_reserve', 'wakeup_next_close_at', 'passive_window_open']) {
-    assert.ok(!JSON.stringify([cfg, st]).includes(key), key);
-  }
-  notify.setMode('ok');
-  assert.equal(liveEventsSupported(notify.route('GET', '/api/notify')[1].data.config), true);
-});

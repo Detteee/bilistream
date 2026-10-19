@@ -30,7 +30,7 @@ export const WATCH_CHANNELS = [
   { name: '晚风 & Friends', platforms: ['youtube'] },
   ...Array.from({ length: 21 }, (_, i) => ({ name: `频道 ${String(i + 4).padStart(2, '0')}`, platforms: i % 2 ? ['youtube'] : ['youtube', 'twitch'] })),
 ];
-export const NOTIFY_MODES = ['ok', 'low', 'pending-after-alert', 'unknown', 'legacy', ...NY_MODES, ...PUSH_MODES, ...CRED_MODES, ...WATCH_MODES];
+export const NOTIFY_MODES = ['ok', 'low', 'pending-after-alert', 'unknown', ...NY_MODES, ...PUSH_MODES, ...CRED_MODES, ...WATCH_MODES];
 
 export function createNotifyState(now = () => Math.floor(Date.now() / 1000)) {
   const config = {
@@ -47,16 +47,20 @@ export function createNotifyState(now = () => Math.floor(Date.now() / 1000)) {
   } };
   const budget = () => {
     const t = now();
-    if (mode === 'unknown' || mode === 'legacy') return {};
+    if (mode === 'unknown') return {};
     if (mode === 'pending-after-alert') return { wakeup_remaining: 1, wakeup_reserve: 2, wakeup_next_close_at: t + 3 * 86400, passive_window_open: false };
     if (mode.startsWith('push-')) return { wakeup_remaining: 2, wakeup_reserve: 2, wakeup_next_close_at: t + 2 * 86400, passive_window_open: true };
     if (mode === 'low') return { wakeup_remaining: 2, wakeup_reserve: 2, wakeup_next_close_at: t + 2 * 86400, passive_window_open: false };
     return { wakeup_remaining: 3, wakeup_reserve: 2, wakeup_next_close_at: t + 6 * 3600, passive_window_open: true };
   };
   const pending = () => (mode === 'low' || mode === 'pending-after-alert' ? ['live_end'] : []);
-  const legacy = () => mode === 'legacy';
-  const shownConfig = () => { if (!legacy()) return config; const { live_events_enabled, ...rest } = config; return rest; };
-  const settings = () => ({ ...(legacy() ? {} : { pending_live_events: pending() }), revision, config: shownConfig(), secret_revision: 1, openid_revision: 1, appsecret_set: true, openid_set: true, openid_bound_at: now() - 86400, ...budget(), ...watchFields() });
+  // The server never echoes the AppID: flags and a last-4 hint only.
+  const shownConfig = () => {
+    const { app_id, ...rest } = config.qq;
+    const has = Boolean(String(app_id ?? '').trim());
+    return { ...config, qq: { ...rest, appid_set: has, app_id_hint: has ? String(app_id).slice(-4) : null } };
+  };
+  const settings = () => ({ pending_live_events: pending(), revision, config: shownConfig(), secret_revision: 1, openid_revision: 1, credentials_generation: 7, watch_revision: 1, appsecret_set: true, openid_set: true, openid_bound_at: now() - 86400, ...budget(), ...watchFields() });
   const status = () => {
     const t = now();
     const last = mode === 'low' ? { ok: false, status: 'skipped_quota', at: t - 600 }
@@ -66,7 +70,7 @@ export function createNotifyState(now = () => Math.floor(Date.now() / 1000)) {
       node_id: 'jp', authority: 'primary', authority_node_id: 'jp', gateway: { state: 'online', since: t - 7200 },
       openid_writer: { node_id: 'jp', is_local: true },
       sender: { node: 'jp', last_send: last }, local_last_send: { ...last, node_id: 'jp' },
-      undelivered: 0, ...(legacy() ? {} : { pending_live_events: pending() }), quota: { wakeups_left: budget().wakeup_remaining ?? null, ...budget() },
+      undelivered: 0, pending_live_events: pending(), quota: { wakeups_left: budget().wakeup_remaining ?? null, ...budget() },
     };
   };
   const cred = () => CRED_MODES.includes(mode) || watch();
@@ -83,7 +87,7 @@ export function createNotifyState(now = () => Math.floor(Date.now() / 1000)) {
     }
   };
   const credSettings = base => {
-    const { app_id, ...rest } = base.config.qq;   // write-only under F: never echoed
+    const { app_id, ...rest } = config.qq;   // the stored value; never echoed
     const n = credNy();
     const has = n.appid_set ?? true;
     // F rev 3 rule 16: appid_set + last-4 hint only.

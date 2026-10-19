@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import {
-  appIdEmpty, appIdSet, baseGeneration, credentialPending, credentialRows, credentialsSync, notifyRefusal, onlyPendingCodes,
+  appIdEmpty, appIdSet, baseGeneration, credentialPending, credentialRows, notifyRefusal, onlyPendingCodes,
   openidView, pendingCredentialBadge, readinessRow, rebindHint, selectState,
   APPID_EMPTY, APPSECRET_HELP_SYNC, APPID_HELP_SYNC,
 } from '../src/js/notify-state.js';
@@ -15,14 +15,10 @@ const load = mode => {
 };
 const refusal = (status, code) => ({ status, body: { success: false, data: code ? { code } : {} } });
 
-test('F detection and base_generation: sent under F, omitted only on an older backend', () => {
+test('base_generation: the generation from GET is always sent', () => {
   const { settings } = load('cred-ok');
-  assert.ok(credentialsSync(settings));
   assert.equal(baseGeneration(settings), 7);
   assert.equal(baseGeneration({ ...settings, credentials_generation: 0 }), 0, 'generation 0 is still sent');
-  const old = load('ok').settings;
-  assert.ok(!credentialsSync(old));
-  assert.equal(baseGeneration(old), undefined);
 });
 
 test('appid_pending / appsecret_pending: neutral 待同步 badge, 待命, no 未配置 / 未就绪', () => {
@@ -181,7 +177,7 @@ test('panel wiring: base_generation on every save, AppSecret cleared after every
   assert.match(js, /const patch = formToPatch\(form, baseline\);/);
   assert.match(js, /const body = saveBody\(settings, patch, \{ secret, openid \}\);/);
   assert.match(js, /finally \{[\s\S]{0,200}\$\('notify-app-secret'\)\.value = '';/);
-  assert.match(js, /if \(appIdWriteOnly\(data\)\) baseline\.app_id = '';/);
+  assert.match(js, /baseline\.app_id = '';/);
   assert.match(js, /action\.target === 'refresh'\) \{ clearRefusal\(\); loadNotifySettings\(\); return; \}/);
   assert.ok(!/innerHTML|\.style\./.test(js));
   assert.match(html, /aria-describedby="notify-app-id-current notify-app-id-error notify-app-id-help"/);
@@ -206,9 +202,8 @@ test('F rev 3: appid_set from config.qq and app_id_hint last 4 only', () => {
   assert.equal(appIdSet(q({ app_id_hint: null, appid_set: false })), false);
   assert.equal(appIdHint(q({ app_id_hint: '123456789' })), '6789', 'sliced defensively');
   assert.equal(appIdHint(q({ app_id_hint: 42 })), null, 'non-string → null');
-  assert.equal(appIdHint(q({ app_id: '1020304050' })), '4050', 'older backend: derived, never more');
-  assert.equal(appIdHint(q({ app_id: '' })), null);
-  assert.equal(appIdSet(q({ app_id: '1020304050' })), true, 'older backend fallback');
+  assert.equal(appIdHint(q({ app_id: '1020304050' })), null, 'app_id is never read');
+  assert.equal(appIdSet(q({ app_id: '1020304050' })), false, 'app_id is never read');
   assert.equal(appIdHint(load('cred-appid-pending').settings), null);
 });
 
@@ -283,7 +278,7 @@ test('F rev 3: the 可发送节点 row only takes the warn tone when readinessRo
 
 test('rev 3: the 当前 AppID line is hidden while the node has appid_pending', async () => {
   const js = await readFile(new URL('../src/js/notify.js', import.meta.url), 'utf8');
-  assert.match(js, /current\.hidden = !writeOnly \|\| credentialPending\(settings, status, 'appid'\);/);
+  assert.match(js, /current\.hidden = credentialPending\(settings, status, 'appid'\);/);
   const p = load('cred-appid-pending');
   assert.ok(credentialPending(p.settings, p.status, 'appid'));
   const ok = load('cred-ok');
@@ -292,11 +287,10 @@ test('rev 3: the 当前 AppID line is hidden while the node has appid_pending', 
 
 import { saveBody, clearSecretBody, pendingSettingsForm } from '../src/js/notify-state.js';
 
-test('clear AppSecret PUT carries base_generation under F, omits it on an older backend, same refusal path', async () => {
+test('clear AppSecret PUT always carries base_generation and the same refusal path', async () => {
   const f = load('cred-ok').settings;
   assert.deepEqual(clearSecretBody(f), { clear_app_secret: true, expected_secret_revision: f.secret_revision, base_generation: 7 });
-  const old = load('ok').settings;
-  assert.ok(!('base_generation' in clearSecretBody(old)));
+  assert.equal(clearSecretBody(load('ok').settings).base_generation, 7);
   const js = await readFile(new URL('../src/js/notify.js', import.meta.url), 'utf8');
   const clear = js.slice(js.indexOf('async function clearSecret'), js.indexOf('function handleRefusal'));
   assert.match(clear, /putJson\('\/api\/notify', clearSecretBody\(settings\)\)/);
@@ -329,7 +323,6 @@ test('AppSecret-only save: top-level base_generation, no config.qq', () => {
   assert.equal(body.base_generation, 7);
   assert.equal(body.app_secret, 'S'.repeat(32));
   assert.ok(!('qq' in body.config));
-  assert.ok(!('base_generation' in saveBody(load('ok').settings, {}, { secret: 'x' })), 'older backend omits it');
 });
 
 test('holder committed but local settings pending: keep preference drafts and retry at the committed generation', () => {
@@ -350,7 +343,7 @@ test('holder committed but local settings pending: keep preference drafts and re
   assert.equal(pendingSettingsForm(settings, before, submitted), null, 'ordinary success takes the full returned settings');
 });
 
-import { clearSecretConfirm, appIdWriteOnly } from '../src/js/notify-state.js';
+import { clearSecretConfirm } from '../src/js/notify-state.js';
 
 test('B1: every gap code is its own nowrap span, joined by 、 text', async () => {
   const r = readinessRow(load('cred-joining').status);
@@ -364,16 +357,13 @@ test('B1: every gap code is its own nowrap span, joined by 、 text', async () =
   assert.ok(!/span\.textContent = gap;/.test(js), 'no single span per node');
 });
 
-test('N1: 清除 confirm copy under F vs older backend', () => {
-  assert.equal(clearSecretConfirm(load('cred-ok').settings), '将清除所有节点的 AppSecret，QQ 通知将停止，直到重新填写。');
-  assert.match(clearSecretConfirm(load('ok').settings), /^确定要清除本节点保存的 AppSecret 吗？/);
+test('N1: 清除 confirm copy names the synced set', () => {
+  assert.equal(clearSecretConfirm(), '将清除所有节点的 AppSecret，QQ 通知将停止，直到重新填写。');
 });
 
-test('N2: the AppID input is blanked only when appid_set is reported', async () => {
-  assert.equal(appIdWriteOnly(load('cred-ok').settings), true);
-  assert.equal(appIdWriteOnly(load('ok').settings), false, 'older backend keeps showing its AppID');
-  assert.equal(appIdWriteOnly(load('ny-pending').settings), false);
-  assert.equal(configToForm(load('ok').settings.config).app_id, '1020304050');
+test('N2: the AppID is write-only; the set flag is the only state', () => {
+  assert.equal(appIdSet(load('cred-ok').settings), true);
+  assert.equal(appIdSet(load('cred-appid-pending').settings), false);
 });
 
 test('L1: refused save/清除 with a typed AppSecret adds the second line and focus; none typed leaves banner as is', async () => {
