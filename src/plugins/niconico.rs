@@ -10,7 +10,7 @@ use std::process::Command;
 use std::time::Duration;
 
 use super::ffmpeg::PipedIngest;
-use super::utils::{command_output_with_timeout, configure_no_window, executable_command};
+use super::subprocess::{command_output_with_timeout, configure_no_window, executable_command};
 use crate::config::Niconico as NiconicoConfig;
 use crate::plugins::source_status::SourceStatus;
 

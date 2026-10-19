@@ -476,7 +476,7 @@ async fn bili_start_live_inner(cfg: &mut Config, area_v2: u64) -> Result<(), Box
         .join("&");
 
     // Sign the query string with appsec
-    let sign = super::utils::md5_hex(&format!("{}{}", query_string, secret));
+    let sign = super::wbi::md5_hex(&format!("{}{}", query_string, secret));
 
     // Add sign to params
     params.insert("sign", sign.clone());
@@ -1137,7 +1137,7 @@ impl Credential {
     }
 
     pub fn sign(&self, param: &str, app_sec: &str) -> String {
-        super::utils::md5_hex(&format!("{}{}", param, app_sec))
+        super::wbi::md5_hex(&format!("{}{}", param, app_sec))
     }
 
     async fn login_by_qrcode(&self, value: Value) -> Result<LoginInfo, Box<dyn Error>> {
@@ -1497,8 +1497,7 @@ pub async fn get_thumbnail(
             }
         }
     } else {
-        let Some(url) = super::utils::stream_thumbnail_url(platform, channel_id, stream_id, None)
-        else {
+        let Some(url) = stream_thumbnail_url(platform, channel_id, stream_id, None) else {
             warn!(
                 "无法构建缩略图 URL: platform={}, channel_id={}, stream_id={:?}",
                 platform, channel_id, stream_id
@@ -1549,6 +1548,30 @@ pub async fn get_thumbnail(
     }
 
     Ok(cover_path.to_string_lossy().into_owned())
+}
+
+/// Build a direct CDN thumbnail URL for YT/TW streams (same logic as holodex webui).
+/// Niconico listing thumbnails are not a static CDN path; see
+/// `niconico::niconico_cover_thumbnail_url`.
+pub fn stream_thumbnail_url(
+    platform: &str,
+    channel_id: &str,
+    stream_id: Option<&str>,
+    holodex_thumbnail: Option<&str>,
+) -> Option<String> {
+    if let Some(url) = holodex_thumbnail.filter(|url| !url.is_empty()) {
+        return Some(url.to_string());
+    }
+
+    match platform {
+        "YT" => stream_id
+            .filter(|id| !id.is_empty())
+            .map(|id| format!("https://i.ytimg.com/vi/{id}/sddefault.jpg")),
+        "TW" if !channel_id.is_empty() => Some(format!(
+            "https://static-cdn.jtvnw.net/previews-ttv/live_user_{channel_id}-640x360.jpg"
+        )),
+        _ => None,
+    }
 }
 
 #[cfg(test)]

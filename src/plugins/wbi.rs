@@ -1,14 +1,14 @@
 use lazy_static::lazy_static;
+use md5::{Digest, Md5};
 use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::error::Error;
+use std::fmt::Write as _;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
-
-use super::utils::md5_hex;
 
 const WBI_CACHE_DURATION: u64 = 12 * 60 * 60; // 12 hours in seconds
 
@@ -169,6 +169,17 @@ pub(crate) async fn signed_query(
     Ok(query.join("&"))
 }
 
+/// Lowercase hex MD5, the digest form Bilibili's signed endpoints expect.
+pub fn md5_hex(input: &str) -> String {
+    let mut hasher = Md5::new();
+    hasher.update(input.as_bytes());
+    let mut digest = String::with_capacity(32);
+    for byte in hasher.finalize() {
+        let _ = write!(digest, "{:02x}", byte);
+    }
+    digest
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -214,5 +225,19 @@ mod tests {
             wbi_cache_dir(Path::new("bilistream")),
             std::env::temp_dir().join("bilistream-wbi-cache")
         );
+    }
+}
+
+#[cfg(test)]
+mod md5_hex_tests {
+    use super::md5_hex;
+
+    #[test]
+    fn matches_known_digests() {
+        assert_eq!(md5_hex(""), "d41d8cd98f00b204e9800998ecf8427e");
+        assert_eq!(md5_hex("abc"), "900150983cd24fb0d6963f7d28e17f72");
+        assert_eq!(md5_hex("k"), "8ce4b16b22b58894aa86c421e8759df3");
+        // Leading 0x0e byte: guards against a non-padded hex formatter.
+        assert_eq!(md5_hex("240610708"), "0e462097431906509019562988736854");
     }
 }

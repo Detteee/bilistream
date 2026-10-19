@@ -73,7 +73,7 @@ pub fn private_dir(path: &Path) -> io::Result<()> {
         let user =
             std::env::var("USERNAME").map_err(|_| io::Error::other("无法确认 Windows 运行账号"))?;
         let mut cmd = std::process::Command::new("icacls");
-        crate::plugins::utils::configure_no_window(&mut cmd);
+        crate::plugins::subprocess::configure_no_window(&mut cmd);
         let output = cmd
             .arg(path)
             .args(["/inheritance:r", "/grant:r", &format!("{user}:(OI)(CI)F")])

@@ -262,7 +262,7 @@ async fn run_with_store(
                     jar = Some(temporary);
                 }
             }
-            let mut output = super::utils::command_output_cancellable(command, deadline, "yt-dlp", sender.closed(), jar.as_ref().map(|jar| jar.directory.join("child.pid")).as_deref()).await?;
+            let mut output = super::subprocess::command_output_cancellable(command, deadline, "yt-dlp", sender.closed(), jar.as_ref().map(|jar| jar.directory.join("child.pid")).as_deref()).await?;
             if let Some(jar) = jar {
                 let current = store.read(NAME)?.map(|d| d.revision).unwrap_or(0);
                 if current != expected { return Err(io::Error::new(io::ErrorKind::WouldBlock, "Cookie 已更新，请重试查询")); }

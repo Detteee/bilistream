@@ -15,7 +15,7 @@ use super::danmaku::warning::{
     warning_tracker, BroadcastSource, PushWarningRelease, SourceOwner, WarningRelease,
     WarningTracker,
 };
-use super::utils::{configure_tokio_no_window, executable_command, set_high_priority};
+use super::subprocess::{configure_tokio_no_window, executable_command};
 use crate::logging::{
     exit_status, has_sensitive_data, human_duration, safe_diagnostic, safe_diagnostic_continuation,
     safe_text,
@@ -3105,6 +3105,75 @@ pub(crate) mod warning_test_support {
         pub(crate) async fn finish(&self) {
             *self.supervisor.lock().await = None;
             reset_stopped_tracking_state();
+        }
+    }
+}
+
+pub fn set_high_priority(pid: u32) {
+    #[cfg(target_os = "linux")]
+    {
+        let status = std::process::Command::new("renice")
+            .arg("-n")
+            .arg("-10")
+            .arg("-p")
+            .arg(pid.to_string())
+            .output();
+
+        match status {
+            Ok(output) if output.status.success() => {}
+            Ok(output) => {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                tracing::warn!("设置进程优先级失败: {}", stderr.trim());
+                tracing::info!("提示: 使用 sudo 运行，或设置 CAP_SYS_NICE 能力以获得更好性能");
+            }
+            Err(e) => {
+                tracing::warn!("无法设置进程优先级: {}", e);
+            }
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let status = std::process::Command::new("wmic")
+            .arg("process")
+            .arg("where")
+            .arg(format!("ProcessId={}", pid))
+            .arg("CALL")
+            .arg("setpriority")
+            .arg("128")
+            .output();
+
+        match status {
+            Ok(output) if output.status.success() => {}
+            Ok(output) => {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                tracing::warn!("设置进程优先级失败: {}", stderr.trim());
+            }
+            Err(e) => {
+                tracing::warn!("无法设置进程优先级: {}", e);
+            }
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let status = std::process::Command::new("renice")
+            .arg("-n")
+            .arg("-10")
+            .arg("-p")
+            .arg(pid.to_string())
+            .output();
+
+        match status {
+            Ok(output) if output.status.success() => {}
+            Ok(output) => {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                tracing::warn!("设置进程优先级失败: {}", stderr.trim());
+                tracing::info!("提示: 使用 sudo 运行以获得更好性能");
+            }
+            Err(e) => {
+                tracing::warn!("无法设置进程优先级: {}", e);
+            }
         }
     }
 }

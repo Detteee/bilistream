@@ -57,7 +57,7 @@ pub async fn capture_frame(
             };
 
             let mut cmd = std::process::Command::new(yt_dlp_cmd);
-            crate::plugins::utils::configure_no_window(&mut cmd);
+            crate::plugins::subprocess::configure_no_window(&mut cmd);
             cmd.arg("-f")
                 .arg(&cfg.youtube.quality)
                 .arg("-g")

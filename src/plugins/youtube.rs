@@ -5,7 +5,7 @@ pub use super::holodex::{
     refresh_holodex_jwt, sync_holodex_jwt_if_needed,
 };
 use super::stream_item::StreamItem;
-use super::utils::{configure_no_window, executable_command};
+use super::subprocess::{configure_no_window, executable_command};
 use crate::config::load_config;
 use crate::plugins::source_status::SourceStatus;
 use chrono::{DateTime, Local};

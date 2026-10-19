@@ -10,7 +10,7 @@ use std::io;
 use std::process::{Command, Output};
 use std::time::Duration;
 
-use super::utils::{command_output_with_timeout, configure_no_window};
+use super::subprocess::{command_output_with_timeout, configure_no_window};
 use crate::plugins::source_status::SourceStatus;
 
 const STREAMLINK_TIMEOUT: Duration = Duration::from_secs(45);
