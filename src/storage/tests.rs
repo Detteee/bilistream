@@ -9,6 +9,17 @@ fn schema_version(store: &Store) -> u32 {
 }
 
 #[test]
+fn a_fresh_store_seeds_an_empty_player_filter_document() {
+    let dir = Directory::new();
+    let store = dir.open().unwrap();
+    assert_eq!(
+        store.read("invalid_words.txt").unwrap().unwrap().value,
+        json!(""),
+        "the player-filter settings page reads this document and errors when it is absent"
+    );
+}
+
+#[test]
 fn first_protected_write_upgrades_atomically_and_reopen_never_downgrades() {
     for name in MANAGED_RECORDS {
         let dir = Directory::new();
