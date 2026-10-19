@@ -144,7 +144,7 @@ mod tests {
 
     #[test]
     fn generic_edits_keep_topology_and_settings_payload_has_no_role_or_members() {
-        let mut current = super::super::tests::test_config("ca", 7).cluster;
+        let mut current = crate::test_support::config("ca", 7).cluster;
         current.peers = vec![crate::config::ClusterPeer {
             node_id: "jp".into(),
             name: "JP".into(),

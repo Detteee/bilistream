@@ -1,8 +1,6 @@
 use super::*;
-use crate::config::{
-    BiliLive, ClusterConfig, ClusterHealthThresholds, Config, Credentials, FfmpegCache,
-    PriorityChannel, Twitch, Youtube,
-};
+use crate::config::Config;
+use crate::test_support::config;
 use std::collections::HashMap;
 use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
@@ -22,7 +20,7 @@ fn peer_view(owner: &str, members: &[&str], now: u64) -> PeerOwnerView {
 fn competing_healthy_owners_cannot_both_pass_the_execution_gate() {
     let now = 100;
     for (local, other) in [("a", "b"), ("b", "a")] {
-        let mut cfg = test_config(local, 0);
+        let mut cfg = config(local, 0);
         cfg.cluster.peers = [other, "c"]
             .into_iter()
             .map(|id| crate::config::ClusterPeer {
@@ -60,7 +58,7 @@ fn competing_healthy_owners_cannot_both_pass_the_execution_gate() {
 
 #[test]
 fn owner_confirmation_expires_and_cannot_cross_membership_changes() {
-    let mut cfg = test_config("a", 0);
+    let mut cfg = config("a", 0);
     cfg.cluster.failover_timeout_secs = 10;
     cfg.cluster.peers = vec![crate::config::ClusterPeer {
         node_id: "b".into(),
@@ -97,7 +95,7 @@ fn owner_confirmation_expires_and_cannot_cross_membership_changes() {
 
 #[test]
 fn a_new_local_owner_waits_for_handoff_even_with_agreement() {
-    let cfg = test_config("a", 10);
+    let cfg = config("a", 10);
     let now = 100;
     let mut state = ClusterState {
         active_owner: Some("old".into()),
@@ -114,7 +112,7 @@ fn a_new_local_owner_waits_for_handoff_even_with_agreement() {
 }
 
 fn startup_monitoring_fixture() -> (Config, ClusterStatus) {
-    let mut cfg = test_config("jp", 100);
+    let mut cfg = config("jp", 100);
     cfg.cluster.heartbeat_interval_secs = 15;
     cfg.cluster.peers = ["us", "eu"]
         .into_iter()
@@ -263,7 +261,7 @@ async fn failed_source_demotion_never_sends_target_promotion() {
     let server = tokio::spawn(async move {
         axum::serve(listener, app).await.unwrap();
     });
-    let mut cfg = test_config("coordinator", 0);
+    let mut cfg = config("coordinator", 0);
     cfg.cluster.peers = ["source", "target"]
         .into_iter()
         .map(|id| crate::config::ClusterPeer {
@@ -332,7 +330,7 @@ async fn automatic_handoff_confirms_source_shutdown_after_owner_has_changed() {
 
     let _guard = ClusterStateGuard::new();
     crate::install_crypto_provider();
-    let mut source_cfg = test_config("jp", 100);
+    let mut source_cfg = config("jp", 100);
     source_cfg.bililive.enable_danmaku_command = true;
     let source_toggles = monitor_toggle_state_from_config(&source_cfg);
     let source_targets = channel_target_state_from_config(&source_cfg);
@@ -423,7 +421,7 @@ async fn automatic_handoff_confirms_source_shutdown_after_owner_has_changed() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-    let mut cfg = test_config("coordinator", 0);
+    let mut cfg = config("coordinator", 0);
     cfg.cluster.peers = before
         .nodes
         .iter()
@@ -487,86 +485,9 @@ impl Drop for ClusterStateGuard {
     }
 }
 
-pub(crate) fn test_config(node_id: &str, priority: i32) -> Config {
-    Config {
-        snapshot: None,
-        auto_cover: false,
-        enable_anti_collision: false,
-        interval: 60,
-        bililive: BiliLive {
-            enable_danmaku_command: false,
-            room: 1,
-            bili_rtmp_url: String::new(),
-            bili_rtmp_key: String::new(),
-            credentials: Credentials::default(),
-        },
-        twitch: Twitch {
-            enable_monitor: true,
-            channel_name: "tw".to_string(),
-            area_v2: 235,
-            channel_id: "twid".to_string(),
-            proxy_region: String::new(),
-            quality: "best".to_string(),
-            proxy: None,
-            crop: None,
-            ffmpeg_cache: FfmpegCache::default(),
-        },
-        youtube: Youtube {
-            enable_monitor: true,
-            channel_name: "yt".to_string(),
-            channel_id: "ytid".to_string(),
-            area_v2: 235,
-            quality: "best".to_string(),
-            cookies_file: None,
-            cookies_from_browser: None,
-            proxy: None,
-            deno_path: None,
-            crop: None,
-            ffmpeg_cache: FfmpegCache::default(),
-        },
-        holodex_api_key: None,
-        holodex_jwt: None,
-        holodex_jwt_refreshed_at: None,
-        holodex_username: None,
-        holodex_skip_jwt_verify: false,
-        holodex_monitor_gate: true,
-        youtube_api_key: None,
-        youtube_rss_enabled: true,
-        show_priority_channel: false,
-        show_twitch: true,
-        show_niconico: false,
-        youtube_websub_callback_url: None,
-        youtube_websub_port: crate::config::default_websub_port(),
-        riot_api_key: None,
-        enable_lol_monitor: false,
-        lol_monitor_interval: None,
-        anti_collision_list: HashMap::new(),
-        priority_channel: PriorityChannel::default(),
-        enable_youtube_monitor: true,
-        enable_twitch_monitor: true,
-        niconico: crate::config::Niconico::default(),
-        cluster: ClusterConfig {
-            enabled: true,
-            node_id: node_id.to_string(),
-            node_name: node_id.to_string(),
-            public_api_url: format!("http://{}", node_id),
-            peers: Vec::new(),
-            priority,
-            heartbeat_interval_secs: 5,
-            failover_timeout_secs: 15,
-            lease_ttl_secs: 20,
-            sync_monitored_channels: true,
-            auto_failover: true,
-            thresholds: ClusterHealthThresholds::default(),
-            public_status: crate::config::PublicStatusConfig::default(),
-        },
-        history: Default::default(),
-    }
-}
-
 #[test]
 fn monitored_config_version_matches_payload_target_hash() {
-    let mut cfg = test_config("a", 0);
+    let mut cfg = config("a", 0);
     cfg.priority_channel.channel_name = "priority".to_string();
     cfg.priority_channel.youtube_channel_id = "priority-yt".to_string();
     let payload = monitored_config_from_config(&cfg);
@@ -579,11 +500,11 @@ fn monitored_config_version_matches_payload_target_hash() {
 
 #[test]
 fn monitored_config_version_is_stable_for_map_order() {
-    let mut cfg_a = test_config("a", 0);
+    let mut cfg_a = config("a", 0);
     cfg_a.anti_collision_list.insert("alpha".to_string(), 1);
     cfg_a.anti_collision_list.insert("beta".to_string(), 2);
 
-    let mut cfg_b = test_config("a", 0);
+    let mut cfg_b = config("a", 0);
     cfg_b.anti_collision_list.insert("beta".to_string(), 2);
     cfg_b.anti_collision_list.insert("alpha".to_string(), 1);
 
@@ -615,7 +536,7 @@ fn canonical_json_sorts_keys_without_changing_shape() {
 
 #[test]
 fn cluster_sync_config_hashes_exported_payload() {
-    let cfg = test_config("a", 0);
+    let cfg = config("a", 0);
     let request = cluster_sync_config_from_config(&cfg);
 
     assert_eq!(
@@ -626,8 +547,8 @@ fn cluster_sync_config_hashes_exported_payload() {
 
 #[test]
 fn monitored_config_version_ignores_runtime_monitor_toggles() {
-    let cfg_a = test_config("a", 0);
-    let mut cfg_b = test_config("b", 10);
+    let cfg_a = config("a", 0);
+    let mut cfg_b = config("b", 10);
     cfg_b.bililive.enable_danmaku_command = !cfg_a.bililive.enable_danmaku_command;
     cfg_b.enable_youtube_monitor = !cfg_a.enable_youtube_monitor;
     cfg_b.enable_twitch_monitor = !cfg_a.enable_twitch_monitor;
@@ -646,7 +567,7 @@ fn monitored_config_version_ignores_runtime_monitor_toggles() {
 
 #[test]
 fn shared_setting_edits_trigger_sync_without_replicating_local_toggles_or_credentials() {
-    let base = test_config("a", 0);
+    let base = config("a", 0);
     let mut changed = base.clone();
     changed.interval += 1;
     assert_ne!(
@@ -673,8 +594,8 @@ fn shared_setting_edits_trigger_sync_without_replicating_local_toggles_or_creden
 fn monitored_config_version_ignores_priority_channel_switches() {
     // enabled/auto_restart are per-node monitor toggles, so two nodes that
     // differ only by them are still in sync and must not trigger a push.
-    let cfg_a = test_config("a", 0);
-    let mut cfg_b = test_config("b", 10);
+    let cfg_a = config("a", 0);
+    let mut cfg_b = config("b", 10);
     cfg_b.priority_channel.enabled = !cfg_a.priority_channel.enabled;
 
     assert_eq!(
@@ -682,7 +603,7 @@ fn monitored_config_version_ignores_priority_channel_switches() {
         monitored_config_version(&cfg_b)
     );
 
-    let mut cfg_c = test_config("c", 20);
+    let mut cfg_c = config("c", 20);
     cfg_c.priority_channel.auto_restart = !cfg_a.priority_channel.auto_restart;
 
     assert_eq!(
@@ -691,7 +612,7 @@ fn monitored_config_version_ignores_priority_channel_switches() {
     );
 
     // The shared channel target fields still take part in the version.
-    let mut cfg_d = test_config("d", 30);
+    let mut cfg_d = config("d", 30);
     cfg_d.priority_channel.default_area = cfg_a.priority_channel.default_area.wrapping_add(1);
 
     assert_ne!(
@@ -699,7 +620,7 @@ fn monitored_config_version_ignores_priority_channel_switches() {
         monitored_config_version(&cfg_d)
     );
 
-    let mut cfg_e = test_config("e", 40);
+    let mut cfg_e = config("e", 40);
     cfg_e.priority_channel.channel_name = "another priority".to_string();
 
     assert_ne!(
@@ -710,7 +631,7 @@ fn monitored_config_version_ignores_priority_channel_switches() {
 
 #[test]
 fn monitored_config_version_changes_for_managed_json_payloads() {
-    let mut base = monitored_config_from_config(&test_config("a", 0));
+    let mut base = monitored_config_from_config(&config("a", 0));
     base.channels_json = Some(serde_json::json!({ "channels": [] }));
     base.areas_json = Some(serde_json::json!({ "areas": [] }));
 
@@ -749,8 +670,8 @@ fn monitored_config_version_changes_for_managed_json_payloads() {
 
 #[test]
 fn monitored_config_version_changes_for_channel_targets() {
-    let cfg_a = test_config("a", 0);
-    let mut cfg_b = test_config("a", 0);
+    let cfg_a = config("a", 0);
+    let mut cfg_b = config("a", 0);
     cfg_b.youtube.channel_name = "new yt".to_string();
     cfg_b.youtube.channel_id = "new-yt-id".to_string();
 
@@ -759,7 +680,7 @@ fn monitored_config_version_changes_for_channel_targets() {
         monitored_config_version(&cfg_b)
     );
 
-    let mut cfg_c = test_config("a", 0);
+    let mut cfg_c = config("a", 0);
     cfg_c.twitch.channel_name = "new tw".to_string();
     cfg_c.twitch.channel_id = "new-tw-id".to_string();
 
@@ -768,7 +689,7 @@ fn monitored_config_version_changes_for_channel_targets() {
         monitored_config_version(&cfg_c)
     );
 
-    let mut cfg_d = test_config("a", 0);
+    let mut cfg_d = config("a", 0);
     cfg_d.priority_channel.channel_name = "priority".to_string();
     cfg_d.priority_channel.youtube_channel_id = "priority-yt".to_string();
     cfg_d.priority_channel.twitch_channel_id = "priority-tw".to_string();
@@ -778,7 +699,7 @@ fn monitored_config_version_changes_for_channel_targets() {
         monitored_config_version(&cfg_d)
     );
 
-    let mut cfg_e = test_config("a", 0);
+    let mut cfg_e = config("a", 0);
     cfg_e.niconico.channel_id = "ch2648162".to_string();
     cfg_e.niconico.live_id = "lv351182284".to_string();
     cfg_e.niconico.area_v2 = 235;
@@ -797,7 +718,7 @@ fn monitored_config_version_changes_for_channel_targets() {
 
 #[test]
 fn applying_monitored_config_syncs_channels_and_preserves_runtime_toggles() {
-    let mut local = test_config("local", 0);
+    let mut local = config("local", 0);
     local.bililive.enable_danmaku_command = false;
     local.enable_youtube_monitor = false;
     local.enable_twitch_monitor = true;
@@ -815,7 +736,7 @@ fn applying_monitored_config_syncs_channels_and_preserves_runtime_toggles() {
     local.youtube.deno_path = Some("local-deno".into());
     local.twitch.proxy = local.youtube.proxy.clone();
 
-    let mut source = test_config("source", 10);
+    let mut source = config("source", 10);
     source.bililive.enable_danmaku_command = true;
     source.enable_youtube_monitor = true;
     source.enable_twitch_monitor = false;
@@ -906,7 +827,7 @@ fn applying_monitored_config_syncs_channels_and_preserves_runtime_toggles() {
 
 #[test]
 fn monitor_toggle_state_applies_without_changing_channel_targets() {
-    let mut cfg = test_config("local", 0);
+    let mut cfg = config("local", 0);
     cfg.youtube.channel_name = "yt target".to_string();
     cfg.youtube.channel_id = "yt-id".to_string();
     cfg.twitch.channel_name = "tw target".to_string();
@@ -941,7 +862,7 @@ fn monitor_toggle_state_applies_without_changing_channel_targets() {
 
 #[test]
 fn node_mode_without_explicit_state_preserves_desired_config() {
-    let mut cfg = test_config("local", 0);
+    let mut cfg = config("local", 0);
     let toggles = monitor_toggle_state_from_config(&cfg);
     let targets = channel_target_state_from_config(&cfg);
 
@@ -953,7 +874,7 @@ fn node_mode_without_explicit_state_preserves_desired_config() {
 
 #[test]
 fn handoff_applies_source_toggles_to_target_and_clears_source() {
-    let mut source = test_config("source", 10);
+    let mut source = config("source", 10);
     let source_toggles = MonitorToggleState {
         enable_danmaku_command: true,
         enable_youtube_monitor: true,
@@ -966,7 +887,7 @@ fn handoff_applies_source_toggles_to_target_and_clears_source() {
     };
     apply_monitor_toggle_state_to_config(&mut source, &source_toggles);
 
-    let mut target = test_config("target", 5);
+    let mut target = config("target", 5);
     apply_monitor_toggle_state_to_config(&mut target, &all_monitor_toggles_off());
 
     let source_applied = resolved_node_mode_monitor_toggles(false, None);
@@ -1057,7 +978,7 @@ fn record_recent_time_preserves_chronological_order() {
 
 #[test]
 fn cluster_request_timeouts_are_bounded() {
-    let mut cfg = test_config("a", 0);
+    let mut cfg = config("a", 0);
 
     cfg.cluster.heartbeat_interval_secs = 1;
     assert_eq!(cluster_heartbeat_timeout(&cfg), Duration::from_secs(3));
@@ -1070,7 +991,7 @@ fn cluster_request_timeouts_are_bounded() {
 
 #[test]
 fn execution_quorum_requires_fresh_direct_heartbeat_acks() {
-    let mut cfg = test_config("a", 0);
+    let mut cfg = config("a", 0);
     cfg.cluster.failover_timeout_secs = 10;
     cfg.cluster.peers = ["b", "c", "d"]
         .into_iter()
@@ -1101,7 +1022,7 @@ fn execution_quorum_requires_fresh_direct_heartbeat_acks() {
 
 #[test]
 fn bounded_execution_quorum_ignores_wall_clock_and_excessive_settings() {
-    let mut cfg = test_config("a", 0);
+    let mut cfg = config("a", 0);
     cfg.cluster.failover_timeout_secs = u64::MAX;
     cfg.cluster.heartbeat_interval_secs = u64::MAX;
     cfg.cluster.peers = vec![crate::config::ClusterPeer {
@@ -1145,7 +1066,7 @@ fn bounded_execution_quorum_ignores_wall_clock_and_excessive_settings() {
 
 #[test]
 fn two_node_partition_fails_closed_after_ack_expiry() {
-    let mut cfg = test_config("a", 0);
+    let mut cfg = config("a", 0);
     cfg.cluster.failover_timeout_secs = 10;
     cfg.cluster.peers = vec![crate::config::ClusterPeer {
         node_id: "b".to_string(),
@@ -1163,7 +1084,7 @@ fn two_node_partition_fails_closed_after_ack_expiry() {
 #[test]
 fn remote_heartbeat_sender_local_flag_is_not_trusted() {
     let _guard = ClusterStateGuard::new();
-    let cfg = test_config("local", 0);
+    let cfg = config("local", 0);
     let now = now_secs();
     let mut node = empty_node("remote", "remote", "http://remote", 1, true, now);
     node.draining = true;
@@ -1185,7 +1106,7 @@ fn remote_heartbeat_sender_local_flag_is_not_trusted() {
 
 #[test]
 fn heartbeat_response_requires_peer_identity_and_snapshot() {
-    let mut cfg = test_config("local", 0);
+    let mut cfg = config("local", 0);
     cfg.cluster.failover_timeout_secs = 15;
     let now = now_secs();
     let mut peer = empty_node("peer", "peer", "http://peer", 1, false, now);
@@ -1218,7 +1139,7 @@ fn heartbeat_response_requires_peer_identity_and_snapshot() {
 
 #[test]
 fn record_heartbeat_ignores_unconfigured_nodes() {
-    let cfg = test_config("local", 0);
+    let cfg = config("local", 0);
     let now = now_secs();
     let node = empty_node("unknown", "unknown", "http://unknown", 1, false, now);
 
@@ -1229,7 +1150,7 @@ fn record_heartbeat_ignores_unconfigured_nodes() {
 #[test]
 fn record_heartbeat_uses_locally_configured_membership_metadata() {
     let _guard = ClusterStateGuard::new();
-    let mut cfg = test_config("local", 0);
+    let mut cfg = config("local", 0);
     cfg.cluster.peers = vec![crate::config::ClusterPeer {
         node_id: "peer".to_string(),
         name: "Configured peer".to_string(),
@@ -1258,7 +1179,7 @@ fn record_heartbeat_uses_locally_configured_membership_metadata() {
 #[test]
 fn record_heartbeat_ignores_when_cluster_disabled() {
     let _guard = ClusterStateGuard::new();
-    let mut cfg = test_config("local", 0);
+    let mut cfg = config("local", 0);
     cfg.cluster.enabled = false;
     let peer_id = "disabled-peer";
     cfg.cluster.peers = vec![crate::config::ClusterPeer {
@@ -1285,7 +1206,7 @@ fn record_heartbeat_ignores_when_cluster_disabled() {
 #[test]
 fn record_heartbeat_rejects_local_node_identity() {
     let _guard = ClusterStateGuard::new();
-    let cfg = test_config("local", 0);
+    let cfg = config("local", 0);
     let now = now_secs();
     let local = empty_node("local", "local", "http://local", 10, true, now);
     update_node(local, &cfg.cluster.node_id);
@@ -1310,7 +1231,7 @@ fn record_heartbeat_rejects_local_node_identity() {
 
 #[test]
 fn auto_failover_adoption_requires_active_owner_change() {
-    let mut cfg = test_config("local", 0);
+    let mut cfg = config("local", 0);
     cfg.cluster.auto_failover = false;
 
     assert!(should_adopt_auto_failover_from_peer(true, true, &cfg));
@@ -1483,7 +1404,7 @@ fn heartbeat_merge_refreshes_only_direct_peer_liveness() {
 fn direct_peer_status_merge_refreshes_peer_liveness() {
     let _guard = ClusterStateGuard::new();
     let peer_id = "direct-merge-peer";
-    let mut cfg = test_config("direct-merge-local", 0);
+    let mut cfg = config("direct-merge-local", 0);
     cfg.cluster.peers = vec![crate::config::ClusterPeer {
         node_id: peer_id.to_string(),
         name: peer_id.to_string(),
@@ -1537,7 +1458,7 @@ fn direct_peer_status_merge_refreshes_peer_liveness() {
 
 #[test]
 fn peer_observation_prune_drops_stale_and_unconfigured_entries() {
-    let mut cfg = test_config("a", 1);
+    let mut cfg = config("a", 1);
     cfg.cluster.failover_timeout_secs = 15;
     cfg.cluster.peers = vec![
         crate::config::ClusterPeer {
@@ -1582,7 +1503,7 @@ fn peer_observation_prune_drops_stale_and_unconfigured_entries() {
 
 #[test]
 fn peer_observation_record_drops_empty_observer_buckets() {
-    let mut cfg = test_config("a", 1);
+    let mut cfg = config("a", 1);
     cfg.cluster.peers = vec![
         crate::config::ClusterPeer {
             node_id: "b".to_string(),
@@ -1614,7 +1535,7 @@ fn peer_observation_record_drops_empty_observer_buckets() {
 
 #[test]
 fn never_seen_peer_waits_without_timeout_fault() {
-    let cfg = test_config("a", 0);
+    let cfg = config("a", 0);
     let now = now_secs();
     let mut state = ClusterState::default();
     state.nodes.insert(
@@ -1633,7 +1554,7 @@ fn never_seen_peer_waits_without_timeout_fault() {
 #[tokio::test]
 async fn external_api_outage_fences_owner_despite_fresh_inbound_heartbeats() {
     let _guard = ClusterStateGuard::new();
-    let mut cfg = test_config("jp", 100);
+    let mut cfg = config("jp", 100);
     cfg.cluster.peers = ["us", "eu"]
         .into_iter()
         .enumerate()
@@ -1718,7 +1639,7 @@ async fn external_api_outage_fences_owner_despite_fresh_inbound_heartbeats() {
 
 #[test]
 fn local_network_isolation_requires_external_api_and_majority_peer_failures() {
-    let mut cfg = test_config("a", 0);
+    let mut cfg = config("a", 0);
     cfg.cluster.peers = vec![
         crate::config::ClusterPeer {
             node_id: "b".to_string(),
@@ -1771,7 +1692,7 @@ fn local_network_isolation_requires_external_api_and_majority_peer_failures() {
 
 #[test]
 fn two_node_link_failure_without_external_api_degradation_does_not_isolate_local() {
-    let mut cfg = test_config("a", 0);
+    let mut cfg = config("a", 0);
     cfg.cluster.peers = vec![crate::config::ClusterPeer {
         node_id: "b".to_string(),
         name: "b".to_string(),
@@ -1802,7 +1723,7 @@ fn two_node_link_failure_without_external_api_degradation_does_not_isolate_local
 
 #[test]
 fn manual_mode_two_node_link_failure_keeps_original_local_owner() {
-    let mut cfg = test_config("a", 1);
+    let mut cfg = config("a", 1);
     cfg.cluster.auto_failover = false;
     cfg.cluster.peers = vec![crate::config::ClusterPeer {
         node_id: "b".to_string(),
@@ -1864,7 +1785,7 @@ fn recovered_network_isolation_latch_clears_only_fault_quarantine() {
 
 #[test]
 fn monitoring_block_reason_names_the_latched_fault() {
-    let cfg = test_config("a", 1);
+    let cfg = config("a", 1);
     let state = ClusterState {
         active_owner: Some("a".to_string()),
         local_fault_latched: true,
@@ -1896,7 +1817,7 @@ fn network_isolation_latch_stays_while_evidence_remains() {
 
 #[test]
 fn four_node_last_survivor_stays_healthy_and_active() {
-    let mut cfg = test_config("a", 1);
+    let mut cfg = config("a", 1);
     cfg.cluster.peers = vec![
         crate::config::ClusterPeer {
             node_id: "b".to_string(),
@@ -1959,7 +1880,7 @@ fn four_node_last_survivor_stays_healthy_and_active() {
 
 #[test]
 fn local_network_isolation_ignores_fresh_inbound_heartbeats() {
-    let mut cfg = test_config("a", 0);
+    let mut cfg = config("a", 0);
     cfg.cluster.peers = vec![
         crate::config::ClusterPeer {
             node_id: "b".to_string(),
@@ -2066,7 +1987,7 @@ fn last_known_active_toggles_preserves_all_off_cache() {
 fn unreachable_peer_with_fresh_inbound_heartbeat_is_not_marked_unhealthy() {
     let _guard = ClusterStateGuard::new();
     let node_id = "fresh-inbound-guard-peer";
-    let mut cfg = test_config("guard-local", 0);
+    let mut cfg = config("guard-local", 0);
     cfg.cluster.peers = vec![crate::config::ClusterPeer {
         node_id: node_id.to_string(),
         name: node_id.to_string(),
@@ -2124,7 +2045,7 @@ fn unreachable_peer_with_fresh_inbound_heartbeat_is_not_marked_unhealthy() {
 async fn standby_denied_push_does_not_keep_candidate_stream() {
     let _guard = ClusterStateGuard::new();
     let peer_id = "active-peer";
-    let mut cfg = test_config("standby-local", 0);
+    let mut cfg = config("standby-local", 0);
     cfg.cluster.auto_failover = false;
     cfg.cluster.peers = vec![crate::config::ClusterPeer {
         node_id: peer_id.to_string(),
@@ -2181,7 +2102,7 @@ fn cached_toggles_fallback_when_previous_owner_snapshot_missing() {
 #[test]
 fn monitoring_requires_local_ownership_and_healthy_runtime() {
     let _guard = ClusterStateGuard::new();
-    let cfg = test_config("a", 1);
+    let cfg = config("a", 1);
 
     {
         let mut state = cluster_state_write();
@@ -2214,7 +2135,7 @@ fn monitoring_requires_local_ownership_and_healthy_runtime() {
 #[test]
 fn drained_handoff_target_is_rejected_before_side_effects() {
     let _guard = ClusterStateGuard::new();
-    let mut cfg = test_config("source", 10);
+    let mut cfg = config("source", 10);
     cfg.cluster.peers = vec![crate::config::ClusterPeer {
         node_id: "target".to_string(),
         name: "target".to_string(),
@@ -2236,7 +2157,7 @@ fn drained_handoff_target_is_rejected_before_side_effects() {
 #[test]
 fn freshly_enabled_handoff_target_becomes_eligible_immediately() {
     let _guard = ClusterStateGuard::new();
-    let mut cfg = test_config("source", 10);
+    let mut cfg = config("source", 10);
     cfg.cluster.peers = vec![crate::config::ClusterPeer {
         node_id: "target".to_string(),
         name: "target".to_string(),
@@ -2265,7 +2186,7 @@ fn freshly_enabled_handoff_target_becomes_eligible_immediately() {
 #[test]
 fn an_isolated_active_node_fences_itself_once_its_quorum_is_stale() {
     let now = 100;
-    let mut cfg = test_config("a", 0);
+    let mut cfg = config("a", 0);
     cfg.cluster.failover_timeout_secs = 15;
     cfg.cluster.peers = ["b", "c"]
         .into_iter()
@@ -2313,7 +2234,7 @@ async fn automatic_failover_takes_over_an_unreachable_source_after_its_fence_dea
     use super::sync::{
         cached_stop_bound, may_take_over_unconfirmed, source_fence_deadline_secs, NodeModeError,
     };
-    let cfg = test_config("ca", 0);
+    let cfg = config("ca", 0);
     let deadline = source_fence_deadline_secs(&cfg.cluster, None);
     assert_eq!(
         deadline,
@@ -2345,7 +2266,7 @@ async fn automatic_failover_takes_over_an_unreachable_source_after_its_fence_dea
         "a panel switch"
     );
 
-    let mut long = test_config("ca", 0);
+    let mut long = config("ca", 0);
     long.cluster.failover_timeout_secs = 10_000;
     long.cluster.heartbeat_interval_secs = 10_000;
     let bound = super::membership::FENCING_STOP_BOUND_SECS;
@@ -2386,7 +2307,7 @@ async fn automatic_failover_takes_over_an_unreachable_source_after_its_fence_dea
 async fn an_owed_demotion_is_dropped_once_this_node_is_not_the_owner() {
     crate::install_crypto_provider();
     let _guard = ClusterStateGuard::new();
-    let mut cfg = test_config("ca", 0);
+    let mut cfg = config("ca", 0);
     cfg.cluster.peers = vec![crate::config::ClusterPeer {
         node_id: "jp".into(),
         name: "jp".into(),
@@ -2658,7 +2579,7 @@ async fn removal_finish_lets_the_replacement_resume_while_the_source_stays_down(
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-    let mut cfg = test_config("coordinator", 0);
+    let mut cfg = config("coordinator", 0);
     cfg.cluster.peers = vec![crate::config::ClusterPeer {
         node_id: "a".into(),
         name: "a".into(),

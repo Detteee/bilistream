@@ -425,79 +425,29 @@ pub(crate) fn platform_channel_configured(channel_name: &str, channel_id: &str) 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{
-        BiliLive, ClusterConfig, Config, Credentials, FfmpegCache, PriorityChannel, Twitch, Youtube,
-    };
-    use std::collections::HashMap;
+    use crate::config::{ClusterConfig, Config, PriorityChannel};
 
+    /// Monitor flags off, danmaku commands on, and a configured priority
+    /// channel: the combination `apply_status_cache_config` is tested against.
     fn status_cache_test_config() -> Config {
-        Config {
-            snapshot: None,
-            auto_cover: false,
-            enable_anti_collision: false,
-            interval: 60,
-            bililive: BiliLive {
-                enable_danmaku_command: true,
-                room: 1,
-                bili_rtmp_url: String::new(),
-                bili_rtmp_key: String::new(),
-                credentials: Credentials::default(),
-            },
-            twitch: Twitch {
-                enable_monitor: false,
-                channel_name: "tw-channel".to_string(),
-                area_v2: 235,
-                channel_id: "twid".to_string(),
-                proxy_region: String::new(),
-                quality: "best".to_string(),
-                proxy: None,
-                crop: None,
-                ffmpeg_cache: FfmpegCache::default(),
-            },
-            youtube: Youtube {
-                enable_monitor: false,
-                channel_name: "yt-channel".to_string(),
-                channel_id: "ytid".to_string(),
-                area_v2: 235,
-                quality: "best".to_string(),
-                cookies_file: None,
-                cookies_from_browser: None,
-                proxy: None,
-                deno_path: None,
-                crop: None,
-                ffmpeg_cache: FfmpegCache::default(),
-            },
-            holodex_api_key: None,
-            holodex_jwt: None,
-            holodex_jwt_refreshed_at: None,
-            holodex_username: None,
-            holodex_skip_jwt_verify: false,
-            holodex_monitor_gate: true,
-            youtube_api_key: None,
-            youtube_rss_enabled: true,
-            show_priority_channel: false,
-            show_twitch: true,
-            show_niconico: false,
-            youtube_websub_callback_url: None,
-            youtube_websub_port: crate::config::default_websub_port(),
-            riot_api_key: None,
-            enable_lol_monitor: false,
-            lol_monitor_interval: None,
-            anti_collision_list: HashMap::new(),
-            priority_channel: PriorityChannel {
-                enabled: true,
-                auto_restart: true,
-                channel_name: "priority-channel".to_string(),
-                default_area: 235,
-                youtube_channel_id: "priority-yt".to_string(),
-                twitch_channel_id: "priority-tw".to_string(),
-            },
-            enable_youtube_monitor: false,
-            enable_twitch_monitor: false,
-            niconico: crate::config::Niconico::default(),
-            cluster: ClusterConfig::default(),
-            history: Default::default(),
-        }
+        let mut config = crate::test_support::config("status-cache", 0);
+        config.cluster = ClusterConfig::default();
+        config.bililive.enable_danmaku_command = true;
+        config.youtube.enable_monitor = false;
+        config.twitch.enable_monitor = false;
+        config.youtube.channel_name = "yt-channel".to_string();
+        config.twitch.channel_name = "tw-channel".to_string();
+        config.priority_channel = PriorityChannel {
+            enabled: true,
+            auto_restart: true,
+            channel_name: "priority-channel".to_string(),
+            default_area: 235,
+            youtube_channel_id: "priority-yt".to_string(),
+            twitch_channel_id: "priority-tw".to_string(),
+        };
+        config.enable_youtube_monitor = false;
+        config.enable_twitch_monitor = false;
+        config
     }
 
     #[test]

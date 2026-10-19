@@ -1128,7 +1128,7 @@ impl Peers for LocalConn {
 }
 
 fn cluster_cfg() -> crate::config::Config {
-    let mut cfg = crate::cluster::tests::test_config("local", 0);
+    let mut cfg = crate::test_support::config("local", 0);
     cfg.cluster.enabled = true;
     cfg.cluster.node_id = "local".into();
     cfg.cluster.peers = ["tokyo-1", "sg-3"]
@@ -1399,7 +1399,7 @@ async fn clamped_to_days_is_in_the_response_only_when_clamped() {
     let now = T0 + 1000;
     let local = LocalConn(std::sync::Mutex::new(schema::open_ro(&path).unwrap()), now);
     let peers = MockPeers(HashMap::new());
-    let cfg = crate::cluster::tests::test_config("local", 0);
+    let cfg = crate::test_support::config("local", 0);
     let rollup = cfg.history.retention.rollup_days;
     let long = params(&[("from", "0"), ("to", &now.to_string()), ("scope", "local")]);
     let short = params(&[
@@ -1562,7 +1562,7 @@ fn boot_part_never_repeats_after_restart_or_restore_from_backup() {
 
 #[test]
 fn peer_body_must_be_a_valid_history_query() {
-    let cfg = crate::cluster::tests::test_config("local", 0);
+    let cfg = crate::test_support::config("local", 0);
     let now = T0;
     let good = || PeerRequest {
         name: "sessions".into(),
@@ -1688,7 +1688,7 @@ fn peer_parts_are_read_only_and_expose_nothing_beyond_the_admin_view() {
         .build()
         .unwrap();
     let local = LocalConn(std::sync::Mutex::new(schema::open_ro(&path).unwrap()), now);
-    let cfg = crate::cluster::tests::test_config("local", 0);
+    let cfg = crate::test_support::config("local", 0);
     let window = params(&[
         ("from", &(T0 - 10).to_string()),
         ("to", &now.to_string()),

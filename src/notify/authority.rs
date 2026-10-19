@@ -626,7 +626,7 @@ mod tests {
 
     fn demoted_cluster(local: &str, now: u64) -> Config {
         use crate::cluster::{empty_node, ClusterHealth, ClusterState, PeerOwnerView};
-        let mut cfg = crate::cluster::tests::test_config(local, 0);
+        let mut cfg = crate::test_support::config(local, 0);
         let members = ["ca", "jp", "ny"];
         cfg.cluster.peers = members
             .iter()

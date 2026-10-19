@@ -916,7 +916,7 @@ mod priority_warning_tests {
     use std::sync::Arc;
 
     fn priority_config(auto_restart: bool) -> Config {
-        let mut cfg = crate::cluster::tests::test_config("priority-admin-test", 0);
+        let mut cfg = crate::test_support::config("priority-admin-test", 0);
         cfg.priority_channel.enabled = true;
         cfg.priority_channel.auto_restart = auto_restart;
         cfg.priority_channel.channel_name = "示例频道 A".into();

@@ -491,8 +491,8 @@ pub(crate) async fn run_yt_index() {
 mod tests {
     use super::*;
     use crate::cluster::empty_node;
-    use crate::cluster::tests::test_config;
     use crate::config::ClusterPeer;
+    use crate::test_support::config as test_config;
 
     #[test]
     fn peer_fetch_reporting_keeps_counts_recovers_once_and_resets_for_a_new_owner() {

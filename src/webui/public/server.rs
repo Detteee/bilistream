@@ -317,7 +317,7 @@ mod tests {
 
     #[test]
     fn standalone_public_page_needs_no_cluster_or_peers() {
-        let mut cfg = crate::cluster::tests::test_config("home", 0);
+        let mut cfg = crate::test_support::config("home", 0);
         cfg.cluster.enabled = false;
         cfg.cluster.peers.clear();
         cfg.cluster.public_status.node_id = "home".into();

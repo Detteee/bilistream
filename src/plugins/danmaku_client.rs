@@ -1023,7 +1023,7 @@ mod tests {
                 dede_user_id_ckmd5: String::new(),
                 buvid3: String::new(),
             },
-            Arc::new(crate::cluster::tests::test_config("ca", 0)),
+            Arc::new(crate::test_support::config("ca", 0)),
             Arc::new(AtomicBool::new(false)),
         )
     }

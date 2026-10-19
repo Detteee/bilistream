@@ -554,7 +554,7 @@ impl TestCluster {
         for (i, id) in ids.iter().enumerate() {
             let (temp, store) = store();
             configure(&store, mock, OPENID);
-            let mut config = crate::cluster::tests::test_config(id, 100 - i as i32);
+            let mut config = crate::test_support::config(id, 100 - i as i32);
             config.cluster.failover_timeout_secs = 5;
             config.cluster.peers = ids
                 .iter()

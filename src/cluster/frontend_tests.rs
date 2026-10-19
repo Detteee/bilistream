@@ -1,8 +1,9 @@
 //! Regressions for the node-state contract consumed by both frontends.
 use super::*;
 use crate::config::ClusterPeer;
+use crate::test_support::config as test_config;
 use crate::webui::api::cluster_drain_for_config;
-use tests::{test_config, ClusterStateGuard};
+use tests::ClusterStateGuard;
 
 fn two_nodes() -> crate::config::Config {
     let mut cfg = test_config("local", 0);

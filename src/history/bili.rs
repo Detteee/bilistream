@@ -514,7 +514,7 @@ mod tests {
 
     #[test]
     fn room_lookup_requires_local_cookie_room_and_execution_or_recorder_permission() {
-        let mut cfg = crate::cluster::tests::test_config("a", 0);
+        let mut cfg = crate::test_support::config("a", 0);
         assert!(!room_lookup_allowed(&cfg, true, true));
         cfg.bililive.credentials.sessdata = "synthetic-cookie".into();
         assert!(!room_lookup_allowed(&cfg, false, false));
@@ -639,7 +639,7 @@ mod tests {
         task.abort();
         let _ = task.await;
         assert!(Flight::reserve(&flights, 1, "synthetic-key").is_some());
-        let cfg = crate::cluster::tests::test_config("a", 0);
+        let cfg = crate::test_support::config("a", 0);
         let mut stopped = mark();
         stopped.stopped_at = Some(100);
         let mut book = BiliLiveBook {

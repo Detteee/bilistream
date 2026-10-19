@@ -1580,7 +1580,7 @@ mod tests {
 
     #[tokio::test]
     async fn history_requests_require_a_cookie_and_the_configured_room() {
-        let mut cfg = crate::cluster::tests::test_config("a", 0);
+        let mut cfg = crate::test_support::config("a", 0);
         assert!(!history_account_ready(&cfg, 1));
         assert_eq!(
             bili_room_info(&cfg).await.unwrap_err(),

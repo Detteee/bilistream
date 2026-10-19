@@ -12,6 +12,10 @@ pub mod storage;
 pub mod tray;
 pub mod updater;
 pub mod webui;
+
+#[cfg(test)]
+pub(crate) mod test_support;
+
 pub use app_state::AppState;
 pub use webui::server::start_webui;
 

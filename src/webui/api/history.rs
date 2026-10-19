@@ -1173,7 +1173,7 @@ mod tests {
                          other: &'static str| {
             let barrier = Arc::clone(&barrier);
             async move {
-                let mut cfg = crate::cluster::tests::test_config(id, 0);
+                let mut cfg = crate::test_support::config(id, 0);
                 cfg.cluster.enabled = true;
                 cfg.cluster.peers = vec![crate::config::ClusterPeer {
                     node_id: other.into(),
@@ -1276,7 +1276,7 @@ mod tests {
             now,
         });
         let queries = Arc::new(tokio::sync::Semaphore::new(2));
-        let mut cfg = crate::cluster::tests::test_config("local", 0);
+        let mut cfg = crate::test_support::config("local", 0);
         cfg.cluster.enabled = false;
         let cfg = Arc::new(cfg);
         let app = Router::new().route(

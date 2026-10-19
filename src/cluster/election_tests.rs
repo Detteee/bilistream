@@ -1,5 +1,6 @@
-use super::tests::{test_config, ClusterStateGuard};
+use super::tests::ClusterStateGuard;
 use super::*;
+use crate::test_support::config as test_config;
 
 #[test]
 fn indirect_quorum_can_keep_peer_eligible_without_refreshing_heartbeat() {

@@ -399,7 +399,7 @@ pub(crate) fn validate_websub(url: Option<&str>, port: Option<u16>) -> Result<()
 #[cfg(test)]
 #[test]
 fn cluster_and_niconico_edits_validate_against_the_loaded_configuration() {
-    let mut cfg = crate::cluster::tests::test_config("local", 0);
+    let mut cfg = crate::test_support::config("local", 0);
     cfg.niconico.proxy = Some(" http://proxy ".into());
     let current = config_form_values(&cfg);
     assert_eq!(current["niconico_proxy"], "");
@@ -1037,7 +1037,7 @@ mod tests {
 
     #[test]
     fn credentials_are_masked_and_proxy_addresses_are_visible_in_admin_config() {
-        let mut cfg = crate::cluster::tests::test_config("local", 0);
+        let mut cfg = crate::test_support::config("local", 0);
         cfg.niconico.user_session = Some("private-session-test-value".into());
         cfg.youtube.proxy = Some("http://user:private-proxy-password@proxy.invalid:8080".into());
         cfg.twitch.proxy = cfg.youtube.proxy.clone();
@@ -1147,7 +1147,7 @@ mod tests {
         .unwrap();
         assert_eq!(from_browser.youtube_rss_enabled, Some(false));
         assert_eq!(from_browser.show_priority_channel, Some(true));
-        let previous = crate::cluster::tests::test_config("local", 0);
+        let previous = crate::test_support::config("local", 0);
         let mut cfg = previous.clone();
         cfg.show_priority_channel = true;
         cfg.youtube_rss_enabled = false;
@@ -1179,7 +1179,7 @@ mod tests {
 
     #[test]
     fn old_configs_default_to_rss_on_and_priority_card_hidden() {
-        let mut raw = serde_json::to_value(crate::cluster::tests::test_config("local", 0)).unwrap();
+        let mut raw = serde_json::to_value(crate::test_support::config("local", 0)).unwrap();
         for field in [
             "youtube_rss_enabled",
             "show_priority_channel",
@@ -1202,7 +1202,7 @@ mod tests {
 
     #[test]
     fn settings_save_does_not_treat_already_enabled_danmaku_as_an_enable_request() {
-        let mut cfg = crate::cluster::tests::test_config("local", 0);
+        let mut cfg = crate::test_support::config("local", 0);
         cfg.bililive.enable_danmaku_command = true;
         let payload = UpdateConfigRequest {
             enable_danmaku_command: Some(true),

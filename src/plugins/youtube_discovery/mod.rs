@@ -1772,7 +1772,7 @@ mod tests {
 
     #[test]
     fn target_reserve_does_not_randomly_choose_priority() {
-        let mut cfg = crate::cluster::tests::test_config("local", 0);
+        let mut cfg = crate::test_support::config("local", 0);
         cfg.youtube_api_key = Some("key".into());
         cfg.youtube.enable_monitor = true;
         cfg.youtube.channel_id = "UCtarget".into();

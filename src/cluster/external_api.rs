@@ -83,7 +83,7 @@ mod tests {
 
     #[test]
     fn sampling_can_reach_threshold_within_the_failure_window() {
-        let mut cfg = crate::cluster::tests::test_config("jp", 100);
+        let mut cfg = crate::test_support::config("jp", 100);
         for heartbeat in [1, 5, 15, 60, 3_600] {
             cfg.cluster.heartbeat_interval_secs = heartbeat;
             let period = probe_interval(&cfg);

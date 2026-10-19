@@ -321,7 +321,7 @@ async fn a_binding_rechecks_the_real_handoff_before_the_next_worker_tick() {
     let (_temp, store) = store();
     configure(&store, &mock, "");
     let mut worker = Worker::new(Arc::clone(&store), "a".into());
-    worker.cluster_cfg = Some(crate::cluster::tests::test_config("a", 0));
+    worker.cluster_cfg = Some(crate::test_support::config("a", 0));
     *crate::cluster::cluster_state_write() = crate::cluster::ClusterState {
         active_owner: Some("a".into()),
         ..Default::default()

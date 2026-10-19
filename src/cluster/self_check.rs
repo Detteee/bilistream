@@ -504,7 +504,7 @@ mod tests {
         let server = Server(tokio::spawn(async move {
             axum::serve(listener, app).await.unwrap();
         }));
-        let mut cfg = super::super::tests::test_config("local", 0);
+        let mut cfg = crate::test_support::config("local", 0);
         cfg.cluster = cluster();
         cfg.cluster.public_api_url = format!("http://{address}/prefix/");
         (cfg, server)

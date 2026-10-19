@@ -797,7 +797,7 @@ mod setup_tests {
     }
 
     fn config() -> Config {
-        let mut cfg = crate::cluster::tests::test_config("setup", 0);
+        let mut cfg = crate::test_support::config("setup", 0);
         cfg.cluster.enabled = false;
         cfg
     }

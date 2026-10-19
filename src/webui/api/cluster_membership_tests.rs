@@ -815,7 +815,7 @@ async fn invalid_or_node_authorization_never_reaches_browser_authority() {
 async fn durable_join_hold_blocks_monitoring_before_the_cluster_enabled_shortcut() {
     let node = Node::new("hold", Some("pw")).await;
     let cookie = login(&node, "pw").await;
-    let mut cfg = crate::cluster::tests::test_config("hold", 0);
+    let mut cfg = crate::test_support::config("hold", 0);
     cfg.cluster.enabled = false;
     let reason = |store: Arc<Store>, cfg: crate::config::Config| {
         HOLD_STORE.scope(store, async move {

@@ -1444,7 +1444,7 @@ mod tests {
 
     #[tokio::test]
     async fn target_result_branches_preserve_outcome_reply_and_effect_order() {
-        let mut updated = crate::cluster::tests::test_config("ca", 0);
+        let mut updated = crate::test_support::config("ca", 0);
         assert!(apply_danmaku_target(
             &mut updated,
             "YT",
@@ -1566,7 +1566,7 @@ mod tests {
         use warning::{BroadcastSource, WarningTracker};
         let _serial = warning_test_support::SERIAL.lock().await;
         warning_test_support::reset_trace();
-        let mut cfg = crate::cluster::tests::test_config("ca", 0);
+        let mut cfg = crate::test_support::config("ca", 0);
         cfg.youtube.channel_name = "示例频道 001".into();
         cfg.youtube.channel_id = "UCexample001".into();
         cfg.youtube.area_v2 = 329;
@@ -1636,7 +1636,7 @@ mod tests {
         warnings
             .mark_event(&mut warnings.capture_event(), None)
             .unwrap();
-        let mut cfg = crate::cluster::tests::test_config("ca", 0);
+        let mut cfg = crate::test_support::config("ca", 0);
         cfg.twitch.channel_name = "新显示名称".into();
         cfg.twitch.channel_id = "somelogin".into();
         cfg.twitch.area_v2 = 86;
@@ -1664,7 +1664,7 @@ mod tests {
         warnings
             .mark_event(&mut warnings.capture_event(), None)
             .unwrap();
-        let cfg = crate::cluster::tests::test_config("ca", 0);
+        let cfg = crate::test_support::config("ca", 0);
         let result =
             prepare_target_update(cfg, "YT", "示例频道 001", "UCexample001", 329, |_| async {
                 Err("synthetic save failure".into())
@@ -1751,7 +1751,7 @@ mod tests {
     }
 
     fn config_with_public_url(url: &str) -> Config {
-        let mut cfg = crate::cluster::tests::test_config("jp", 0);
+        let mut cfg = crate::test_support::config("jp", 0);
         cfg.cluster.public_status.public_url = url.to_string();
         cfg
     }

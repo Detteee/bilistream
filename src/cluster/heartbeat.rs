@@ -1240,7 +1240,8 @@ mod handoff_log_tests {
     #[tokio::test]
     async fn actual_source_failure_reports_its_stage_and_keeps_target_execution_held() {
         use crate::cluster::state::ClusterState;
-        use crate::cluster::tests::{test_config, ClusterStateGuard};
+        use crate::cluster::tests::ClusterStateGuard;
+        use crate::test_support::config as test_config;
         use axum::{
             http::StatusCode,
             routing::{get, post},
@@ -1384,7 +1385,8 @@ mod handoff_log_tests {
     #[tokio::test]
     async fn owed_demotion_recovery_logs_once_after_a_real_acknowledgement() {
         use crate::cluster::state::ClusterState;
-        use crate::cluster::tests::{test_config, ClusterStateGuard};
+        use crate::cluster::tests::ClusterStateGuard;
+        use crate::test_support::config as test_config;
         use axum::{routing::post, Json, Router};
         use tracing::instrument::WithSubscriber;
 
