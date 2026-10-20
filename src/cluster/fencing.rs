@@ -510,6 +510,7 @@ pub(crate) async fn collect_local_snapshot(
         notify_openid_rebind: Some(crate::notify::local_credentials_sync().1),
         notify_watch_sync: Some(true),
         bili_live: crate::history::live_book::heartbeat_book(),
+        warning_exempt_rail: crate::plugins::warning_exempt::heartbeat_rail(),
     }
 }
 

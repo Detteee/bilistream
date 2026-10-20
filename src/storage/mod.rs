@@ -42,6 +42,7 @@ pub const NAMES: &[&str] = &[
     "invalid_words.txt",
     "youtube_quota.json",
     "youtube_golive_hours.json",
+    "warning_exempt_rail.json",
 ];
 
 /// Document ids an older build may still hold or put in a backup, which this

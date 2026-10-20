@@ -370,6 +370,7 @@ pub(crate) fn empty_node(
         notify_openid_rebind: None,
         notify_watch_sync: None,
         bili_live: None,
+        warning_exempt_rail: None,
     }
 }
 

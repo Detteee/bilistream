@@ -167,6 +167,173 @@ pub fn retain_known_channels(
     entries.retain(|entry| known.contains(&(entry.platform.clone(), entry.channel_id.clone())));
 }
 
+/// At most one automatic restart per exempt channel and episode inside this
+/// window after a hold-worthy event (PRD R4); a later event holds as today.
+pub const EXEMPT_RESTART_WINDOW_SECS: u64 = 30 * 60;
+
+/// Defensive cap on the synced rail (one entry per channel normally).
+pub const MAX_EXEMPT_RESTARTS: usize = 16;
+
+/// The last exempt restart of one channel, shared through the signed
+/// heartbeat so a failover node makes the same R4 call.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExemptRestart {
+    pub platform: String,
+    pub channel_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub episode_id: Option<String>,
+    /// Unix seconds when the hold was released.
+    pub at: u64,
+    /// The matched reason id that allowed it (diagnostics only).
+    pub reason: String,
+}
+
+/// Per-node list of exempt restarts, one entry per channel. Entries expire
+/// after [`EXEMPT_RESTART_WINDOW_SECS`].
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExemptRail {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub restarts: Vec<ExemptRestart>,
+}
+
+impl ExemptRail {
+    /// Drop entries older than the R4 window.
+    pub fn prune(&mut self, now: u64) {
+        self.restarts
+            .retain(|restart| restart.at.saturating_add(EXEMPT_RESTART_WINDOW_SECS) > now);
+    }
+
+    /// Whether this channel already used its one exempt restart for the
+    /// episode. An unknown episode on either side matches conservatively;
+    /// two known different episodes are separate episodes.
+    pub fn hit(
+        &self,
+        platform: &str,
+        channel_id: &str,
+        episode_id: Option<&str>,
+        now: u64,
+    ) -> bool {
+        let Some(identity) = ExemptChannel::new(platform, channel_id, "") else {
+            return false;
+        };
+        self.restarts.iter().any(|restart| {
+            restart.platform == identity.platform
+                && restart.channel_id == identity.channel_id
+                && restart.at.saturating_add(EXEMPT_RESTART_WINDOW_SECS) > now
+                && match (restart.episode_id.as_deref(), episode_id) {
+                    (Some(recorded), Some(current)) => recorded == current,
+                    _ => true,
+                }
+        })
+    }
+
+    /// Record the one allowed automatic restart of this channel+episode.
+    /// Replaces any older entry for the channel (at most one) and caps the
+    /// list defensively.
+    pub fn record(
+        &mut self,
+        platform: &str,
+        channel_id: &str,
+        episode_id: Option<&str>,
+        reason: &str,
+        now: u64,
+    ) {
+        self.prune(now);
+        let Some(identity) = ExemptChannel::new(platform, channel_id, "") else {
+            return;
+        };
+        self.restarts.retain(|restart| {
+            !(restart.platform == identity.platform && restart.channel_id == identity.channel_id)
+        });
+        if self.restarts.len() >= MAX_EXEMPT_RESTARTS {
+            self.restarts.remove(0);
+        }
+        self.restarts.push(ExemptRestart {
+            platform: identity.platform,
+            channel_id: identity.channel_id,
+            episode_id: episode_id.map(str::to_owned),
+            at: now,
+            reason: reason.to_owned(),
+        });
+    }
+}
+
+/// The node-local document that keeps the rail across restarts.
+pub const RAIL_DOCUMENT: &str = "warning_exempt_rail.json";
+
+/// This node's persisted rail (empty before the first exempt restart).
+pub fn local_rail() -> ExemptRail {
+    crate::storage::read_document(RAIL_DOCUMENT).unwrap_or_default()
+}
+
+/// Whether a recent exempt restart of this channel+episode exists on this
+/// node or on a peer (the rail travels in the signed heartbeat).
+pub fn rail_hit(platform: &str, channel_id: &str, episode_id: Option<&str>, now: u64) -> bool {
+    local_rail().hit(platform, channel_id, episode_id, now)
+        || crate::cluster::peer_exempt_rails_hit(platform, channel_id, episode_id, now)
+}
+
+/// Persist the one allowed exempt restart, replacing this channel's entry.
+pub fn record_restart(
+    platform: &str,
+    channel_id: &str,
+    episode_id: Option<&str>,
+    reason: &str,
+    now: u64,
+) -> Result<(), String> {
+    let mut rail = local_rail();
+    rail.record(platform, channel_id, episode_id, reason, now);
+    crate::storage::write_document(RAIL_DOCUMENT, &rail)
+        .map(|_| ())
+        .map_err(|_| "警告豁免记录保存失败".to_string())
+}
+
+/// The heartbeat view: an empty rail is omitted from the payload.
+pub fn heartbeat_rail() -> Option<ExemptRail> {
+    let rail = local_rail();
+    (!rail.restarts.is_empty()).then_some(rail)
+}
+
+/// The exemption decision for one held source. Pure; the caller supplies the
+/// configured list/reasons, the matched classes, the R4 rail result and
+/// whether this is a lock rather than a per-source warning hold.
+pub struct HoldDecision<'a> {
+    pub exempt: &'a [ExemptChannel],
+    /// Ticked built-in reason ids.
+    pub allowed_reasons: &'a [String],
+    pub platform: &'a str,
+    pub channel_id: &'a str,
+    /// Every class the held reason matched; empty means unknown.
+    pub reason_ids: &'a BTreeSet<ReasonId>,
+    /// The rail already used this channel+episode's one restart.
+    pub rail_hit: bool,
+    /// ROOM_LOCK (or any non-per-source hold) is never exempt.
+    pub room_lock: bool,
+}
+
+impl HoldDecision<'_> {
+    /// Cheap conditions that need no I/O: not a lock, a known reason, every
+    /// matched class ticked and the held identity on the exempt list.
+    pub fn configured_release(&self) -> bool {
+        !self.room_lock
+            && !self.reason_ids.is_empty()
+            && self.reason_ids.iter().all(|id| {
+                self.allowed_reasons
+                    .iter()
+                    .any(|allowed| allowed == id.as_str())
+            })
+            && self
+                .exempt
+                .iter()
+                .any(|entry| entry.matches(self.platform, self.channel_id))
+    }
+
+    /// Release only when the cheap conditions pass and the R4 rail has room.
+    pub fn releases(&self) -> bool {
+        self.configured_release() && !self.rail_hit
+    }
+}
+
 /// Every built-in class the cleaned 违规原因 matches, in one pass. Empty means
 /// unknown (or a missing reason / the mask), which never releases a hold.
 pub fn classify(reason: &str) -> BTreeSet<ReasonId> {
@@ -324,6 +491,101 @@ mod tests {
         let mut untouched = entries.clone();
         retain_known_channels(&mut untouched, None);
         assert_eq!(untouched, entries);
+    }
+
+    #[test]
+    fn the_rail_allows_one_restart_per_channel_episode_within_thirty_minutes() {
+        let mut rail = ExemptRail::default();
+        let now = 1_000;
+        rail.record("TW", "starsea", Some("ep-1"), "idle_recording", now);
+        assert!(rail.hit("TW", "STARSEA", Some("ep-1"), now + 1));
+        assert!(
+            !rail.hit("TW", "starsea", Some("ep-2"), now + 1),
+            "another episode"
+        );
+        assert!(
+            rail.hit("TW", "starsea", None, now + 1),
+            "an unknown episode matches conservatively"
+        );
+        assert!(!rail.hit("YT", "starsea", Some("ep-1"), now + 1));
+        assert!(
+            rail.hit(
+                "TW",
+                "starsea",
+                Some("ep-1"),
+                now + EXEMPT_RESTART_WINDOW_SECS - 1
+            ),
+            "inside the window"
+        );
+        assert!(
+            !rail.hit(
+                "TW",
+                "starsea",
+                Some("ep-1"),
+                now + EXEMPT_RESTART_WINDOW_SECS
+            ),
+            "expired at the edge"
+        );
+
+        // A second restart replaces the channel's entry; other channels add.
+        rail.record("TW", "starsea", Some("ep-2"), "game_mode_off", now + 10);
+        assert_eq!(rail.restarts.len(), 1);
+        assert!(!rail.hit("TW", "starsea", Some("ep-1"), now + 11));
+        assert!(rail.hit("TW", "starsea", Some("ep-2"), now + 11));
+        rail.record("YT", "UC1", None, "idle_recording", now);
+        assert_eq!(rail.restarts.len(), 2);
+        rail.prune(now + EXEMPT_RESTART_WINDOW_SECS + 100);
+        assert!(rail.restarts.is_empty());
+    }
+
+    #[test]
+    fn the_decision_needs_a_known_ticked_reason_an_exempt_channel_and_rail_room() {
+        let exempt = vec![ExemptChannel::new("YT", "UC1", "星海频道").unwrap()];
+        let allowed = vec!["idle_recording".to_string(), "game_mode_off".to_string()];
+        let idle: BTreeSet<ReasonId> = [ReasonId::IdleRecording].into_iter().collect();
+        let both: BTreeSet<ReasonId> = [ReasonId::IdleRecording, ReasonId::GameInfoViolation]
+            .into_iter()
+            .collect();
+        let unknown = BTreeSet::new();
+        fn decision<'a>(
+            exempt: &'a [ExemptChannel],
+            allowed: &'a [String],
+            ids: &'a BTreeSet<ReasonId>,
+            rail_hit: bool,
+            room_lock: bool,
+            channel_id: &'a str,
+        ) -> HoldDecision<'a> {
+            HoldDecision {
+                exempt,
+                allowed_reasons: allowed,
+                platform: "YT",
+                channel_id,
+                reason_ids: ids,
+                rail_hit,
+                room_lock,
+            }
+        }
+        assert!(decision(&exempt, &allowed, &idle, false, false, "UC1").releases());
+        assert!(
+            !decision(&exempt, &allowed, &unknown, false, false, "UC1").releases(),
+            "unknown never releases"
+        );
+        assert!(
+            !decision(&exempt, &allowed, &both, false, false, "UC1").releases(),
+            "every matched class must be ticked"
+        );
+        assert!(
+            !decision(&exempt, &allowed, &idle, true, false, "UC1").releases(),
+            "rail hit"
+        );
+        assert!(
+            !decision(&exempt, &allowed, &idle, false, true, "UC1").releases(),
+            "lock"
+        );
+        assert!(
+            !decision(&exempt, &allowed, &idle, false, false, "UC2").releases(),
+            "not exempt"
+        );
     }
 
     #[test]

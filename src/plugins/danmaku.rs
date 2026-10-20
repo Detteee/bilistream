@@ -1313,10 +1313,50 @@ pub(crate) fn configured_broadcast_source(cfg: &Config, platform: &str) -> Optio
     }
 }
 
+/// If the exemption releases the current hold for `source`, the matched
+/// reason id (for the R8 log line and the R4 rail record). Read-only: it
+/// never logs or records, so status cards can ask it every poll.
+pub(crate) fn exempt_hold_release(
+    cfg: &Config,
+    warning: &warning::WarningSnapshot,
+    source: &BroadcastSource,
+) -> Option<crate::plugins::warning_exempt::ReasonId> {
+    let reason_ids = warning.hold_reasons();
+    if reason_ids.is_empty() || !warning.holds(source) {
+        return None;
+    }
+    let decision = crate::plugins::warning_exempt::HoldDecision {
+        exempt: &cfg.warning_hold_exempt,
+        allowed_reasons: &cfg.warning_hold_exempt_reasons,
+        platform: &source.platform,
+        channel_id: &source.channel_id,
+        reason_ids: &reason_ids,
+        // The rail costs a document read plus a peer scan; ask only after the
+        // cheap configuration conditions pass.
+        rail_hit: false,
+        room_lock: false,
+    };
+    if !decision.configured_release() {
+        return None;
+    }
+    if crate::plugins::warning_exempt::rail_hit(
+        &source.platform,
+        &source.channel_id,
+        warning.episode_id_for(source),
+        crate::storage::now(),
+    ) {
+        return None;
+    }
+    Some(*reason_ids.iter().next().expect("checked non-empty"))
+}
+
 /// Whether this process still holds that card's source after a warning/cut.
 pub(crate) fn source_warning_held(cfg: &Config, platform: &str) -> bool {
-    configured_broadcast_source(cfg, platform)
-        .is_some_and(|source| warning_tracker().snapshot().holds_identity(&source))
+    let Some(source) = configured_broadcast_source(cfg, platform) else {
+        return false;
+    };
+    let warning = warning_tracker().snapshot();
+    warning.holds_identity(&source) && exempt_hold_release(cfg, &warning, &source).is_none()
 }
 
 pub(crate) fn priority_warning_held(cfg: &Config) -> bool {
@@ -1324,17 +1364,22 @@ pub(crate) fn priority_warning_held(cfg: &Config) -> bool {
 }
 
 pub(crate) fn priority_warning_matches(warning: &warning::WarningSnapshot, cfg: &Config) -> bool {
-    warning.holds(&BroadcastSource::new(
-        "YT",
-        &cfg.priority_channel.channel_name,
-        &cfg.priority_channel.youtube_channel_id,
-        None,
-    )) || warning.holds(&BroadcastSource::new(
-        "TW",
-        &cfg.priority_channel.channel_name,
-        &cfg.priority_channel.twitch_channel_id,
-        None,
-    ))
+    [
+        BroadcastSource::new(
+            "YT",
+            &cfg.priority_channel.channel_name,
+            &cfg.priority_channel.youtube_channel_id,
+            None,
+        ),
+        BroadcastSource::new(
+            "TW",
+            &cfg.priority_channel.channel_name,
+            &cfg.priority_channel.twitch_channel_id,
+            None,
+        ),
+    ]
+    .iter()
+    .any(|source| warning.holds(source) && exempt_hold_release(cfg, warning, source).is_none())
 }
 
 /// Check if we should skip streaming due to a recent warning (returns true only on first check for logging)
@@ -1441,6 +1486,45 @@ pub fn get_aliases(target_name: &str) -> Result<Vec<String>, Box<dyn std::error:
 mod tests {
     use super::*;
     use tracing::instrument::WithSubscriber;
+
+    #[test]
+    fn the_exemption_releases_a_held_card_only_when_every_class_is_ticked() {
+        use crate::plugins::danmaku::warning::{BroadcastSource, WarningTracker};
+        use crate::plugins::warning_exempt::{ExemptChannel, ReasonId};
+
+        let tracker = Arc::new(WarningTracker::default());
+        let source = BroadcastSource::new("YT", "星海频道", "UC1", Some("live-1"));
+        let _owner = tracker.own_source(7, source.clone());
+        let mut event = tracker.capture_event();
+        event.set_reason_ids([ReasonId::IdleRecording].into_iter().collect());
+        tracker.mark_event(&mut event, None).unwrap();
+        let warning = tracker.snapshot();
+
+        let mut cfg = crate::test_support::config("local", 0);
+        cfg.warning_hold_exempt = vec![ExemptChannel::new("YT", "UC1", "星海频道").unwrap()];
+        cfg.warning_hold_exempt_reasons = vec!["idle_recording".into()];
+        assert_eq!(
+            exempt_hold_release(&cfg, &warning, &source),
+            Some(ReasonId::IdleRecording)
+        );
+        // Every matched class is required.
+        cfg.warning_hold_exempt_reasons = vec!["game_mode_off".into()];
+        assert_eq!(exempt_hold_release(&cfg, &warning, &source), None);
+        // The channel must be on the exempt list.
+        cfg.warning_hold_exempt_reasons = vec!["idle_recording".into()];
+        cfg.warning_hold_exempt.clear();
+        assert_eq!(exempt_hold_release(&cfg, &warning, &source), None);
+
+        // A hold captured without a classified reason (mask / no reason) never
+        // releases, even when the channel and classes are configured.
+        let tracker = Arc::new(WarningTracker::default());
+        let _owner = tracker.own_source(8, source.clone());
+        let mut event = tracker.capture_event();
+        tracker.mark_event(&mut event, None).unwrap();
+        let unknown = tracker.snapshot();
+        cfg.warning_hold_exempt = vec![ExemptChannel::new("YT", "UC1", "星海频道").unwrap()];
+        assert_eq!(exempt_hold_release(&cfg, &unknown, &source), None);
+    }
 
     #[tokio::test]
     async fn target_result_branches_preserve_outcome_reply_and_effect_order() {

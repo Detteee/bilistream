@@ -108,6 +108,10 @@ pub struct ClusterNodeSnapshot {
     /// `/api/cluster/status`. Older nodes neither send nor read it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bili_live: Option<crate::history::live_book::BiliLiveBook>,
+    /// Recent exempt warning-hold restarts this node recorded; peer heartbeat
+    /// only, stripped from `/api/cluster/status`. Older nodes ignore it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub warning_exempt_rail: Option<crate::plugins::warning_exempt::ExemptRail>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

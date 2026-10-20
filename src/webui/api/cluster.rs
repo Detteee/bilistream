@@ -82,15 +82,9 @@ pub(crate) fn monitor_toggle_enable_rejected_response() -> ApiResponse<()> {
 
 pub async fn get_cluster_status() -> Json<ApiResponse<ClusterStatus>> {
     match load_cluster_status().await {
-        Ok(mut status) => Json(ApiResponse {
+        Ok(status) => Json(ApiResponse {
             success: true,
-            data: Some({
-                // The live book (live_key) never reaches a browser.
-                for node in &mut status.nodes {
-                    node.bili_live = None;
-                }
-                status
-            }),
+            data: Some(without_heartbeat_only_fields(status)),
             message: None,
         }),
         Err(e) => Json(ApiResponse {
@@ -99,6 +93,17 @@ pub async fn get_cluster_status() -> Json<ApiResponse<ClusterStatus>> {
             message: Some(e),
         }),
     }
+}
+
+/// Heartbeat-only node fields (the B站 live book and the warning-exemption
+/// rail) never leave the signed heartbeat: every HTTP status copy strips both,
+/// so no browser or peer response can serve a `live_key` or a rail record.
+pub(crate) fn without_heartbeat_only_fields(mut status: ClusterStatus) -> ClusterStatus {
+    for node in &mut status.nodes {
+        node.bili_live = None;
+        node.warning_exempt_rail = None;
+    }
+    status
 }
 
 pub(crate) async fn cluster_heartbeat(
@@ -120,7 +125,7 @@ pub(crate) async fn cluster_heartbeat(
 
     Ok(Json(ApiResponse {
         success: true,
-        data: Some(status),
+        data: Some(without_heartbeat_only_fields(status)),
         message: None,
     }))
 }
@@ -192,7 +197,9 @@ pub(crate) async fn cluster_drain_for_config(
         {
             return Ok(ApiResponse {
                 success: false,
-                data: Some(crate::cluster::get_cluster_status_for_config(cfg).await),
+                data: Some(without_heartbeat_only_fields(
+                    crate::cluster::get_cluster_status_for_config(cfg).await,
+                )),
                 message: Some(format!("集群节点禁用前切换失败: {}", e)),
             });
         }
@@ -212,7 +219,9 @@ pub(crate) async fn cluster_drain_for_config(
         {
             return Ok(ApiResponse {
                 success: false,
-                data: Some(crate::cluster::get_cluster_status_for_config(cfg).await),
+                data: Some(without_heartbeat_only_fields(
+                    crate::cluster::get_cluster_status_for_config(cfg).await,
+                )),
                 message: Some(format!("目标节点未确认状态更新: {error}")),
             });
         }
@@ -235,7 +244,7 @@ pub(crate) async fn cluster_drain_for_config(
     crate::webui::state::request_status_refresh();
     Ok(ApiResponse {
         success: true,
-        data: Some(status),
+        data: Some(without_heartbeat_only_fields(status)),
         message: Some(message),
     })
 }
@@ -261,7 +270,7 @@ pub async fn cluster_set_auto_failover(
 
     Ok(Json(ApiResponse {
         success: true,
-        data: Some(status),
+        data: Some(without_heartbeat_only_fields(status)),
         message: Some(if payload.enabled {
             "已启用自动故障转移".to_string()
         } else {
@@ -400,7 +409,7 @@ pub async fn cluster_set_public_status(
                 let status = crate::cluster::get_cluster_status_for_config(&cfg).await;
                 return Ok(Json(ApiResponse {
                     success: false,
-                    data: Some(status),
+                    data: Some(without_heartbeat_only_fields(status)),
                     message: Some(format!("本节点已保存，但同步失败: {}", e)),
                 }));
             }
@@ -415,7 +424,7 @@ pub async fn cluster_set_public_status(
 
     Ok(Json(ApiResponse {
         success: true,
-        data: Some(status),
+        data: Some(without_heartbeat_only_fields(status)),
         message: Some(message),
     }))
 }
@@ -479,7 +488,7 @@ pub async fn cluster_apply_node_mode(
     match apply_cluster_node_mode_locally(payload).await {
         Ok(status) => Ok(Json(ApiResponse {
             success: true,
-            data: Some(status),
+            data: Some(without_heartbeat_only_fields(status)),
             message: Some("集群节点模式已更新".to_string()),
         })),
         Err(e) => Ok(Json(ApiResponse {
@@ -525,7 +534,10 @@ pub async fn cluster_failover(
         {
             return Ok(Json(ApiResponse {
                 success: false,
-                data: load_cluster_status().await.ok(),
+                data: load_cluster_status()
+                    .await
+                    .ok()
+                    .map(without_heartbeat_only_fields),
                 message: Some(format!("集群节点切换失败: {}", e)),
             }));
         }
@@ -538,7 +550,7 @@ pub async fn cluster_failover(
         if status.active_owner.as_deref() != Some(target) {
             return Ok(Json(ApiResponse {
                 success: false,
-                data: Some(status),
+                data: Some(without_heartbeat_only_fields(status)),
                 message: Some(format!("目标节点 {} 当前不可接管", target)),
             }));
         }
@@ -567,7 +579,7 @@ pub async fn cluster_failover(
 
     Ok(Json(ApiResponse {
         success: true,
-        data: Some(status),
+        data: Some(without_heartbeat_only_fields(status)),
         message: Some(message),
     }))
 }
@@ -700,7 +712,7 @@ pub async fn cluster_sync_config(
 
     Ok(Json(ApiResponse {
         success: true,
-        data: Some(status),
+        data: Some(without_heartbeat_only_fields(status)),
         message: Some("监控频道配置已同步".to_string()),
     }))
 }
@@ -718,7 +730,7 @@ pub(crate) async fn cluster_cache_active_monitor_state(
     {
         return Ok(Json(ApiResponse {
             success: false,
-            data: Some(status),
+            data: Some(without_heartbeat_only_fields(status)),
             message: Some("监控状态缓存请求不是来自当前活跃节点".to_string()),
         }));
     }
@@ -726,7 +738,7 @@ pub(crate) async fn cluster_cache_active_monitor_state(
 
     Ok(Json(ApiResponse {
         success: true,
-        data: Some(status),
+        data: Some(without_heartbeat_only_fields(status)),
         message: Some("活跃节点监控开关已缓存".to_string()),
     }))
 }
@@ -753,7 +765,7 @@ pub async fn cluster_push_config() -> Result<Json<ApiResponse<ClusterStatus>>, S
 
     Ok(Json(ApiResponse {
         success: true,
-        data: Some(status),
+        data: Some(without_heartbeat_only_fields(status)),
         message: Some(format!("监控频道配置已同步到 {} 个节点", synced)),
     }))
 }
@@ -837,5 +849,52 @@ mod yt_index_tests {
         let reply = cluster_yt_index().await.0;
         assert!(!reply.success);
         assert!(reply.data.is_none());
+    }
+}
+
+#[cfg(test)]
+mod heartbeat_only_tests {
+    use super::*;
+
+    #[test]
+    fn response_status_strips_the_live_book_and_exempt_rail() {
+        let mut node = crate::cluster::empty_node("n", "n", "http://n", 0, true, 1);
+        node.bili_live = Some(Default::default());
+        node.warning_exempt_rail = Some(Default::default());
+        let status = ClusterStatus {
+            enabled: true,
+            local_node_id: "n".into(),
+            active_owner: None,
+            lease_until: None,
+            config_version: String::new(),
+            auto_failover: false,
+            public_status: Default::default(),
+            nodes: vec![node],
+        };
+        let stripped = without_heartbeat_only_fields(status);
+        assert!(stripped
+            .nodes
+            .iter()
+            .all(|node| node.bili_live.is_none() && node.warning_exempt_rail.is_none()));
+    }
+
+    /// A source-level guard, because the helper is only as good as its call
+    /// sites: every ClusterStatus response must go through the stripper.
+    #[test]
+    fn every_cluster_status_response_goes_through_the_heartbeat_stripper() {
+        const SOURCE: &str = include_str!("cluster.rs");
+        // Built from pieces so the guard's own needles don't match themselves.
+        for raw in [
+            ["data: Some(s", "tatus),"].concat(),
+            ["data: load_cluster_status().await.ok(", "),"].concat(),
+        ] {
+            assert!(
+                !SOURCE.contains(&raw),
+                "un-sanitised ClusterStatus response: {raw}"
+            );
+        }
+        assert!(
+            SOURCE.contains(&["data: Some(without_heartbeat_only_", "fields(status)),"].concat())
+        );
     }
 }

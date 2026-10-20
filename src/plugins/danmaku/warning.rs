@@ -1,9 +1,11 @@
 //! One process-local warning hold. Source ownership and generations keep late
 //! room lookups, probes and old ffmpeg output from releasing a newer warning.
 
+use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 use crate::logging::safe_text;
+use crate::plugins::warning_exempt::ReasonId;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct BroadcastSource {
@@ -51,6 +53,9 @@ struct WarningHold {
     channel_name: String,
     source: Option<OwnedSource>,
     skip_logged: bool,
+    /// Every class the held 违规原因 matched; empty means unknown, which never
+    /// releases an exemption.
+    reason_ids: BTreeSet<ReasonId>,
 }
 
 impl WarningHold {
@@ -120,6 +125,14 @@ impl WarningSnapshot {
         }
     }
 
+    /// The matched reason classes of the current hold (empty = unknown).
+    pub fn hold_reasons(&self) -> BTreeSet<ReasonId> {
+        self.hold
+            .as_ref()
+            .map(|hold| hold.reason_ids.clone())
+            .unwrap_or_default()
+    }
+
     pub fn episode_id_for(&self, source: &BroadcastSource) -> Option<&str> {
         let held = self.hold.as_ref()?.source.as_ref()?;
         held.source
@@ -138,11 +151,20 @@ pub(crate) struct WarningEvent {
     owner_epoch: u64,
     source: Option<OwnedSource>,
     marked: bool,
+    /// Matched reason classes, set at packet capture before the frame can
+    /// change the running source.
+    reason_ids: BTreeSet<ReasonId>,
 }
 
 impl WarningEvent {
     pub fn has_source(&self) -> bool {
         self.source.is_some()
+    }
+
+    /// Attach the classes classified from this frame's 违规原因 (empty for a
+    /// missing reason or the mask).
+    pub fn set_reason_ids(&mut self, reason_ids: BTreeSet<ReasonId>) {
+        self.reason_ids = reason_ids;
     }
 }
 
@@ -288,6 +310,7 @@ impl WarningTracker {
             owner_epoch: state.owner_epoch,
             source: state.active.clone(),
             marked: false,
+            reason_ids: BTreeSet::new(),
         }
     }
 
@@ -301,6 +324,7 @@ impl WarningTracker {
             owner_epoch: state.owner_epoch,
             source: state.active.clone(),
             marked: false,
+            reason_ids: BTreeSet::new(),
         }
     }
 
@@ -356,6 +380,7 @@ impl WarningTracker {
             channel_name: name.to_owned(),
             source: event.source.clone(),
             skip_logged: false,
+            reason_ids: event.reason_ids.clone(),
         });
         Some(name.to_owned())
     }
@@ -801,6 +826,20 @@ mod tests {
         assert_ne!(
             BroadcastSource::new("YT", "a", "UCAb", None).channel_id,
             BroadcastSource::new("YT", "a", "UCab", None).channel_id
+        );
+    }
+
+    #[test]
+    fn a_marked_hold_keeps_the_captured_reason_classes() {
+        let tracker = Arc::new(WarningTracker::default());
+        let source = BroadcastSource::new("YT", "n", "UC1", Some("ep-1"));
+        let _owner = mark(&tracker, source.clone(), 1);
+        let mut event = tracker.capture_event();
+        event.set_reason_ids([ReasonId::IdleRecording].into_iter().collect());
+        tracker.mark_event(&mut event, None).unwrap();
+        assert_eq!(
+            tracker.snapshot().hold_reasons(),
+            [ReasonId::IdleRecording].into_iter().collect()
         );
     }
 }

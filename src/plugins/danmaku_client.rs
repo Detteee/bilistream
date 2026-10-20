@@ -40,6 +40,13 @@ pub(crate) fn capture_warning_message(
         warn!("{}", line);
     }
     let mut event = warnings.capture_event();
+    // Classify the 违规原因 once, at capture, so every later mark of this
+    // frame (including the stop task's) carries the same classes.
+    event.set_reason_ids(
+        violation_reason(message)
+            .map(|reason| crate::plugins::warning_exempt::classify(&reason.reason))
+            .unwrap_or_default(),
+    );
     if cmd != "ROOM_LOCK" {
         if let Some(name) = warnings.mark_event(&mut event, None) {
             log_warning_mark(&name);

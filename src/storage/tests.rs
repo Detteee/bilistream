@@ -503,6 +503,23 @@ fn a_28a20792_backup_with_a_niconico_cookie_document_restores_without_it() {
 }
 
 #[test]
+fn warning_exempt_rail_document_validates_its_shape() {
+    use super::documents::validate;
+    validate(
+        "warning_exempt_rail.json",
+        &json!({"restarts":[{"platform":"YT","channel_id":"UC1","at":1,"reason":"idle_recording"}]}),
+    )
+    .unwrap();
+    validate("warning_exempt_rail.json", &json!({"restarts":[]})).unwrap();
+    assert!(validate("warning_exempt_rail.json", &json!({"restarts":"x"})).is_err());
+    assert!(validate(
+        "warning_exempt_rail.json",
+        &json!({"restarts":[{"platform":"YT"}]})
+    )
+    .is_err());
+}
+
+#[test]
 fn old_format_channel_keys_are_refused_by_name_without_their_content() {
     use super::documents::{reject_legacy_channels, validate, LEGACY_CHANNEL_KEYS};
     let current = json!({"channels":[{"name":"SyntheticCurrent","platforms":{"youtube":"UCsyntheticCurrent0001"},"aliases":[]}]});
