@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import {
   DASH, orDash, formatCount, formatHours, formatPercent, formatAbsolute, formatRelative, formatRange,
   formatOffset, formatDelta, resolutionLabel, bucketFor, presetRange, retentionLine, coverageLine,
-  stripCells, sparkPath, ringArcs,
+  stripCells, sparkPath, ringArcs, endReasonLabel, sessionEnd,
 } from '../src/js/analytics-format.js';
 
 // Local-time constructors keep these tests independent of the runner's zone.
@@ -131,4 +131,25 @@ test('sparkPath handles very large arrays without min/max', () => {
   const big = Array.from({ length: 200000 }, (_, i) => i % 97);
   assert.ok(sparkPath(big, null, null, 120, 30).startsWith('M'));
   assert.equal(sparkPath([null, null], null, null, 10, 10), '');
+});
+
+test('sessionEnd: cut wins, then warning stop, then the end-reason code', () => {
+  assert.deepEqual(
+    sessionEnd({ end_reason: 'bili_stopped', end_cut_off: true, end_warning_stop: true, end_detail: ' 当前直播间涉嫌违规 ' }),
+    { label: 'B站 切断直播', tone: 'danger', detail: '当前直播间涉嫌违规' },
+  );
+  assert.deepEqual(
+    sessionEnd({ end_reason: 'bili_stopped', end_warning_stop: true, end_detail: '直播内容不适宜' }),
+    { label: 'B站 违规警示 · 已自动停播', tone: 'warn', detail: '直播内容不适宜' },
+  );
+  // Stock fallbacks arrive as an absent field from the backend; the label
+  // still shows and no muted line is rendered.
+  assert.deepEqual(
+    sessionEnd({ end_reason: 'bili_stopped', end_warning_stop: true }),
+    { label: 'B站 违规警示 · 已自动停播', tone: 'warn', detail: '' },
+  );
+  assert.deepEqual(sessionEnd({ end_reason: 'user_stop' }), { label: endReasonLabel('user_stop'), tone: '', detail: '' });
+  assert.deepEqual(sessionEnd({ end_reason: 'bili_stopped' }), { label: endReasonLabel('bili_stopped'), tone: '', detail: '' });
+  // Older peers omit both fields.
+  assert.deepEqual(sessionEnd(undefined), { label: DASH, tone: '', detail: '' });
 });

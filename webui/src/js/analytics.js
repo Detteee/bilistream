@@ -15,7 +15,7 @@ import {
   formatDelta, resolutionLabel, bucketFor, presetRange, retentionLine, coverageLine, stripCells, sparkPath,
   ringArcs, biliTotals, biliStateLabel, rangeAudience, watchedSourceLabel, sessionDuration, formatSessionDuration,
   expectedResolution, customRange, missingNodeText, streamHeat, spectrumColor, audienceBroadcasts, platformKey, platformName, reasonLabel,
-  formatMonthDay, formatClockShort, localHourOffset, endReasonLabel, neighbourLabel,
+  formatMonthDay, formatClockShort, localHourOffset, sessionEnd, neighbourLabel,
   mergeRetention, EVENTS_EMPTY, isolatedPointIndices, cleanNotice,
 } from './analytics-format.js';
 import { createHistoryClient, historyStateNotice, localHistoryScope } from './analytics-history.js';
@@ -833,13 +833,18 @@ async function openDetail(id) {
     const now = Date.now() / 1000;
     $('analytics-detail-title').textContent = s.title || '单场详情';
     const meta = el('dl', 'cluster-node-meta');
-    for (const [label, value] of [
+    const end = sessionEnd(s);
+    for (const [label, value, detail = '', tone = ''] of [
       ['频道', `${s.channel_name || s.channel_id || DASH} · ${platformName(s.platform)}`], ['节点', s.node || DASH],
       ['时间', `${formatAbsolute(s.started_at)} ～ ${s.ended_at ? formatAbsolute(s.ended_at) : '进行中'}`],
-      ['时长', formatSessionDuration(sessionDuration(s, now))], ['重启', orDash(s.restarts)], ['结束原因', endReasonLabel(s.end_reason)],
+      ['时长', formatSessionDuration(sessionDuration(s, now))], ['重启', orDash(s.restarts)],
+      ['结束原因', end.label, end.detail, end.tone],
     ]) {
       const row = el('div', 'cluster-node-meta-row');
-      row.append(el('dt', '', label), el('dd', '', value));
+      const dd = el('dd', 'cluster-node-meta-value', value);
+      if (tone) dd.dataset.tone = tone;
+      if (detail) dd.append(el('small', '', detail));
+      row.append(el('dt', 'cluster-node-meta-label', label), dd);
       meta.append(row);
     }
     const children = [meta, el('h3', 'analytics-caption analytics-section', '观众'), audienceTiles(biliTotals(s.bili))];

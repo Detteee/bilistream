@@ -3200,6 +3200,17 @@ html.light-theme .analytics {
 }
 .analytics .analytics-detail-dialog::backdrop { background: color-mix(in srgb, #000 55%, transparent); }
 .analytics .analytics-detail-dialog > .panel { border: 0; }
+/* 单场详情 结束原因 (R5/warning-stop): the shared label/value classes give the
+   muted, wrapping value column; only the 48px label slot, the tone and the
+   muted reason line are detail-specific. */
+.analytics .analytics-detail-dialog .cluster-node-meta-label { flex: 0 0 48px; }
+.analytics .analytics-detail-dialog .cluster-node-meta-value small {
+  display: block;
+  margin-top: var(--sp-1);
+  color: var(--text-mute);
+}
+.analytics .analytics-detail-dialog .cluster-node-meta-value[data-tone="danger"] { color: var(--danger); }
+.analytics .analytics-detail-dialog .cluster-node-meta-value[data-tone="warn"] { color: var(--warn); }
 .analytics .analytics-detail-dialog .analytics-detail-nav { padding: 0 var(--sp-4) var(--sp-4); }
 .analytics .analytics-detail-open { min-height: 44px; }
 .warning-hold-row .info-row-view {

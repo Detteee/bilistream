@@ -485,6 +485,18 @@ export function endReasonLabel(code) {
   return Object.hasOwn(END_REASON_LABEL, code) ? END_REASON_LABEL[code] : '其他';
 }
 
+// 单场详情 结束原因 (R5/warning-stop): a cut wins, then a warning stop, then
+// the stored code. One pure place decides label, tone and muted reason line,
+// so the panel never re-derives the precedence.
+const CUT_OFF_END_LABEL = 'B站 切断直播';
+const WARNING_STOP_END_LABEL = 'B站 违规警示 · 已自动停播';
+export function sessionEnd(session) {
+  const detail = typeof session?.end_detail === 'string' ? session.end_detail.trim() : '';
+  if (session?.end_cut_off === true) return { label: CUT_OFF_END_LABEL, tone: 'danger', detail };
+  if (session?.end_warning_stop === true) return { label: WARNING_STOP_END_LABEL, tone: 'warn', detail };
+  return { label: endReasonLabel(session?.end_reason), tone: '', detail: '' };
+}
+
 // ◀/▶ accessible name (W10): 「上一场：{标题}」, falling back to the bare word.
 export function neighbourLabel(word, title) {
   return typeof title === 'string' && title.trim() ? `${word}：${title.trim()}` : word;

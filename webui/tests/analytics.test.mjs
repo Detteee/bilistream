@@ -326,7 +326,15 @@ test('B4: 结束原因 maps codes to zh-CN; unknown → 其他, never the raw co
   for (const raw of ['failed', 'weird_code', 'toString', '__proto__', 'SOURCE_ENDED']) assert.equal(endReasonLabel(raw), '其他');
   assert.equal(endReasonLabel(null), DASH, 'still open');
   const view = await readFile(new URL('../src/js/analytics.js', import.meta.url), 'utf8');
-  assert.match(view, /\['结束原因', endReasonLabel\(s\.end_reason\)\]/);
+  assert.match(view, /const end = sessionEnd\(s\);/);
+  assert.match(view, /\['结束原因', end\.label, end\.detail, end\.tone\]/);
+  assert.match(view, /el\('dt', 'cluster-node-meta-label', label\)/);
+  assert.match(view, /el\('dd', 'cluster-node-meta-value', value\)/);
+  const css = await readFile(new URL('../src/styles.css', import.meta.url), 'utf8');
+  assert.match(css, /\.analytics-detail-dialog \.cluster-node-meta-label \{ flex: 0 0 48px; \}/);
+  assert.match(css, /\.analytics-detail-dialog \.cluster-node-meta-value\[data-tone="warn"\] \{ color: var\(--warn\); \}/);
+  assert.match(css, /\.analytics-detail-dialog \.cluster-node-meta-value\[data-tone="danger"\] \{ color: var\(--danger\); \}/);
+  assert.match(css, /\.analytics-detail-dialog \.cluster-node-meta-value small \{[^}]*color: var\(--text-mute\);/);
 });
 
 test('B3: ◀/▶ aria-labels carry the neighbour title', async () => {
