@@ -375,7 +375,15 @@ export function noWriterReason(status) {
 // One parser for every notify refusal: {success:false, message, data:{code,…}}.
 // Returns { kind, owner?, banner: {lead, text, tone}, focus? } or null when the
 // error is not a coded refusal (callers fall back to the message).
-export function notifyRefusal(error, status = null, { route = 'openid' } = {}) {
+// Every refusal carries `outcome`: the server's 'not_sent' passes through
+// exactly; anything else (unknown, missing, junk, no body) is 'unknown'.
+// Forward codes set their own (holder_bad_reply is always unknown).
+export function notifyRefusal(error, status = null, options = {}) {
+  const r = codedRefusal(error, status, options);
+  if (!r || r.outcome) return r;
+  return { ...r, outcome: error?.body?.data?.outcome === 'not_sent' ? 'not_sent' : 'unknown' };
+}
+function codedRefusal(error, status, { route = 'openid', cluster = null, credentialsSent = true } = {}) {
   const data = error?.body?.data;
   const code = data && typeof data === 'object' ? data.code : null;
   const watch = route === 'config' && watchRefusal(error);
@@ -401,8 +409,22 @@ export function notifyRefusal(error, status = null, { route = 'openid' } = {}) {
     case 'watch_conflict':
     case 'base_watch_revision_required':
       return { kind: 'credentials_conflict', banner: { lead: `${CONFLICT_TEXT}。`, text: '', tone: 'warn', action: { label: '刷新', target: 'refresh' } } };
+    // Forward-fix codes (Scout 77fb9aed, copy spec rev 4). Mapped by code
+    // only, never by HTTP status; see forwardRefusal.
     case 'credentials_holder_unreachable':
-      return { kind: 'holder_down', banner: { lead: `${HOLDER_DOWN_TEXT}。`, text: '', tone: 'warn' } };
+    case 'credentials_membership_changing':
+    case 'credentials_holder_refused':
+    case 'credentials_holder_bad_reply':
+    case 'credentials_forward_refused':
+    case 'credentials_store':
+      return forwardRefusal(code, data, cluster);
+    // Rev 6: credentials_invalid also covers the holder's 400 with an unknown
+    // code, so a save that carried no AppID / AppSecret (watch or settings
+    // only) must not point at them. `credentialsSent` comes from the request
+    // body (bodyCarriesCredentials); callers that don't know keep 凭据无效.
+    case 'credentials_invalid':
+      if (credentialsSent === false) return { kind: 'invalid_save', banner: { lead: '保存内容未通过校验，未保存任何更改。', text: '请刷新后重新编辑。', tone: 'danger' } };
+      // falls through
     case 'bad_credentials':
       return { kind: 'bad_credentials', banner: { lead: '凭据无效。', text: '请检查 AppID 和 AppSecret 后重新填写。', tone: 'danger', action: { label: '重新填写', target: 'notify-app-secret' } } };
     default:
@@ -412,6 +434,59 @@ export function notifyRefusal(error, status = null, { route = 'openid' } = {}) {
       return null;
   }
 }
+// `{node}` for the forward-fix banners: the display name the cluster settings
+// list for the node id in `data.node` (local node or a peer). An unknown id,
+// a missing or blank name, or no list at all gives 发送节点. Never the id.
+export const HOLDER_FALLBACK_NAME = '发送节点';
+export function refusalNodeName(data, cluster) {
+  const id = typeof data?.node === 'string' ? data.node.trim() : '';
+  if (!id || !cluster || typeof cluster !== 'object') return '';
+  const entries = [{ node_id: cluster.node_id, name: cluster.node_name }, ...(Array.isArray(cluster.peers) ? cluster.peers : [])];
+  const hit = entries.find(n => typeof n?.node_id === 'string' && n.node_id.trim() === id);
+  return typeof hit?.name === 'string' ? hit.name.trim() : '';
+}
+// Rev 3 spacing: a real name gets a space on each side (none at the start of
+// a sentence); the 发送节点 fallback gets none (「向发送节点转发」).
+export function nodeAtStart(name) { return name ? `${name} ` : HOLDER_FALLBACK_NAME; }
+export function nodeInline(name) { return name ? ` ${name} ` : HOLDER_FALLBACK_NAME; }
+
+// Rev 4–6 (Architect): key off `outcome`, not the code. Only outcome ===
+// 'not_sent' (exactly) may say 未保存任何更改 and get the AppSecret line;
+// 'unknown', a missing field or any other value is 保存结果未知 + 刷新.
+// Rev 5: holder_bad_reply always takes the unknown ending.
+export const OUTCOME_UNKNOWN_TEXT = '请刷新查看当前设置，确认后再决定是否重新保存。';
+function forwardRefusal(code, data, cluster) {
+  const name = refusalNodeName(data, cluster);
+  const start = nodeAtStart(name);
+  const inline = nodeInline(name);
+  const refresh = { label: '刷新', target: 'refresh' };
+  // [kind when not_sent, kind when unknown, tone, first clause, not_sent hint, unknown hint]
+  const [sentKind, unknownKind, tone, clause, sentHint, unknownHint] = {
+    credentials_holder_unreachable: ['holder_down', 'holder_unknown', 'warn', `${start}暂时无法连接`, '请稍后重试。', ''],
+    credentials_membership_changing: ['membership_changing', 'membership_changing', 'warn', '节点列表正在变更', '请稍后刷新后重试。', ''],
+    credentials_holder_refused: ['holder_refused', 'holder_refused', 'danger', `${start}拒绝了这次保存`, refusedHint(data), refusedHint(data)],
+    credentials_holder_bad_reply: ['holder_bad_reply', 'holder_bad_reply', 'warn', `${start}的回复无法识别`, null, ''],
+    credentials_forward_refused: ['forward_refused', 'forward_refused', 'danger', `本节点无法向${inline}转发保存`, `请检查本节点与${inline}的集群配置后重试。`, `请检查本节点与${inline}的集群配置后重试。`],
+    credentials_store: ['holder_store', 'holder_store', 'danger', '发送节点写入失败', '请稍后重试；如持续出现，请查看发送节点日志。', ''],
+  }[code];
+  // sentHint null: this code never has a not-sent ending (bad_reply, rev 5).
+  if (data?.outcome === 'not_sent' && sentHint !== null) {
+    const action = code === 'credentials_membership_changing' ? { action: refresh } : {};
+    return { kind: sentKind, outcome: 'not_sent', banner: { lead: `${clause}，未保存任何更改。`, text: sentHint, tone, ...action } };
+  }
+  return { kind: unknownKind, outcome: 'unknown', banner: { lead: `${clause}，保存结果未知。`, text: `${OUTCOME_UNKNOWN_TEXT}${unknownHint}`, tone, action: refresh } };
+}
+// Rev 6: the version-mismatch hint only for a 4xx holder_status; a 5xx shows
+// 「（状态 N）」 alone; anything else (not an integer 400–599) shows no hint.
+function refusedHint(data) {
+  const v = data?.holder_status;
+  if (!Number.isInteger(v)) return '';
+  if (v >= 400 && v <= 499) return `通常是节点版本不一致，请确认所有节点已更新到同一版本后重试（状态 ${v}）。`;
+  if (v >= 500 && v <= 599) return `（状态 ${v}）`;
+  return '';
+}
+
+
 // N1: one copy of each string (used by notifyRefusal and exported for tests).
 export const CONFLICT_TEXT = '配置已在其他节点更新，请刷新后重试';
 export const HOLDER_DOWN_TEXT = '发送节点暂时无法连接，未保存任何更改，请稍后重试';
@@ -420,10 +495,35 @@ export const HOLDER_DOWN_TEXT = '发送节点暂时无法连接，未保存任�
 // typed AppSecret gets a second banner line in the same tone; the caller moves
 // focus to the AppSecret field. No typed AppSecret: banner unchanged.
 export const SECRET_NOT_SAVED = 'AppSecret 未保存，请重新填写。';
-const SECRET_LOST_KINDS = new Set(['credentials_conflict', 'holder_down']);
+// Only outcome === 'not_sent' may claim the AppSecret was lost, for every kind
+// (Clerk: a conflict or 503 without an outcome may follow a holder commit).
+// holder_unknown stays out (rev 3).
+const SECRET_LOST_KINDS = new Set(['credentials_conflict', 'holder_down', 'membership_changing', 'holder_refused', 'holder_bad_reply', 'forward_refused', 'holder_store']);
 export function secretLostRefusal(refusal, secretTyped) {
-  if (!refusal || !secretTyped || !SECRET_LOST_KINDS.has(refusal.kind)) return refusal;
+  if (!refusal || !secretTyped || !SECRET_LOST_KINDS.has(refusal.kind) || refusal.outcome !== 'not_sent') return refusal;
   return { ...refusal, banner: { ...refusal.banner, note: SECRET_NOT_SAVED }, focus: 'notify-app-secret' };
+}
+
+// Designer B1: a refusal banner must be on screen after the save. It is
+// scrolled to the top of the view; its scroll-margin-top (styles.css) keeps it
+// below the sticky app and tab bars. A refusal that names a recovery target
+// (`focus`: the AppSecret field with the AppSecret line, the first 移除 for
+// watch_too_many) moves focus there without scrolling, so the banner stays
+// visible; otherwise, or when the target is missing or disabled, the banner
+// itself takes focus (tabindex -1). `resolve` maps the target key to an
+// element or null. Instant scroll under prefers-reduced-motion, smooth
+// otherwise (as manage.js scrolls).
+export function revealRefusal(refusal, { banner, resolve = () => null, reducedMotion = false } = {}) {
+  if (!refusal || !banner || banner.hidden) return null;
+  banner.scrollIntoView({ block: 'start', behavior: reducedMotion ? 'auto' : 'smooth' });
+  const target = refusal.focus ? resolve(refusal.focus) : null;
+  if (target && !target.disabled) {
+    target.focus({ preventScroll: true });
+    return target;
+  }
+  if (banner.getAttribute('tabindex') !== '-1') banner.setAttribute('tabindex', '-1');
+  banner.focus({ preventScroll: true });
+  return banner;
 }
 
 // AppSecret flag: `appsecret_set` (always sent; missing means not set).
@@ -481,8 +581,8 @@ export function mergeOpenidFields(settings, data) {
 // R1: `fresh` says whether `status` was fetched after the refusal. A writer
 // refusal is only dropped against fresh status; the status the panel had when
 // the 409 arrived is stale by definition.
-export function liveRefusal(error, route, status, fresh = true) {
-  const r = notifyRefusal(error, status, { route });
+export function liveRefusal(error, route, status, fresh = true, { cluster = null, credentialsSent = true } = {}) {
+  const r = notifyRefusal(error, status, { route, cluster, credentialsSent });
   if (!r) return null;
   if (fresh && (r.kind === 'not_owner' || r.kind === 'no_writer') && status && 'openid_writer' in status && openidGate(status).enabled) return null;
   return r;
@@ -910,6 +1010,16 @@ export async function clearSecretFlow({ setBusy, render, request, onSuccess, onE
   }
   if (ok) secretInput()?.focus();
 }
+// Rev 6 credentials_invalid: did this save carry AppID or AppSecret? A typed
+// AppSecret, an AppID key in the patch (even blank) or 清除 AppSecret count.
+export function bodyCarriesCredentials(body) {
+  if (!body || typeof body !== 'object') return false;
+  if (typeof body.app_secret === 'string' && body.app_secret !== '') return true;
+  if (body.clear_app_secret === true) return true;
+  const qq = body.config?.qq;
+  return Boolean(qq && typeof qq === 'object' && Object.prototype.hasOwnProperty.call(qq, 'app_id'));
+}
+
 export function clearSecretBody(settings) {
   return { clear_app_secret: true, expected_secret_revision: settings.secret_revision, base_generation: baseGeneration(settings) };
 }

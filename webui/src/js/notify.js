@@ -13,8 +13,8 @@ import {
   DEFAULTS, bindView, configToForm, errorCopy,
   appSecretSet, credentialRows, formToPatch, formatDuration, formatUtc8, hasNodeCredentials, isBadCredentials, localOutcome,
   middleTruncate, openidPending, openidView, readinessRow, writerOpenidSet, isSkipped, liveEventsFieldError, liveEventsGate, pickBudget, skippedRow, pendingLiveNote, withLiveEvents, wakeupBudgetView,
-  clearSecretFlow, createSeq, liveRefusal, secretLostRefusal, mergeDraft, refusalSurvivesEdit, unbindFlow, notifyRefusal, openidGate, sameForm, selectState, senderBlockView, senderOutcome, staleLocalFailure, validateForm, nodeSignature, reuseRows,
-  baseGeneration, appIdSet, appIdLine, saveBody, clearSecretBody, clearSecretConfirm, credentialPending, pendingCredentialBadge, rebindHint, appIdEmpty,
+  clearSecretFlow, createSeq, liveRefusal, revealRefusal, secretLostRefusal, mergeDraft, refusalSurvivesEdit, unbindFlow, notifyRefusal, openidGate, sameForm, selectState, senderBlockView, senderOutcome, staleLocalFailure, validateForm, nodeSignature, reuseRows,
+  baseGeneration, appIdSet, appIdLine, saveBody, bodyCarriesCredentials, clearSecretBody, clearSecretConfirm, credentialPending, pendingCredentialBadge, rebindHint, appIdEmpty,
   APPSECRET_HELP_SYNC, APPID_HELP_SYNC, APPID_EMPTY, pendingSettingsForm, LOCAL_SETTINGS_PENDING_TEXT,
 } from './notify-state.js';
 
@@ -632,7 +632,7 @@ function render() {
   }
   if (settings?.local_settings_pending === true) alert = { lead: LOCAL_SETTINGS_PENDING_TEXT, text: '', tone: 'warn' };
   if (refusalSrc) {
-    refusal = secretLostRefusal(liveRefusal(refusalSrc.error, refusalSrc.route, status, statusSeq > refusalSrc.seq), refusalSrc.secretTyped);
+    refusal = secretLostRefusal(liveRefusal(refusalSrc.error, refusalSrc.route, status, statusSeq > refusalSrc.seq, { cluster: clusterNodes(), credentialsSent: refusalSrc.credentialsSent }), refusalSrc.secretTyped);
     if (!refusal) refusalSrc = null;
   }
   if (refusal) alert = refusal.banner;
@@ -770,6 +770,13 @@ function actionTarget(target) {
   return $(target);
 }
 
+// B1 recovery focus after a refusal: no fallback to another control (the
+// banner takes focus instead), unlike actionTarget for the banner buttons.
+function refusalFocusTarget(key) {
+  if (key === 'watch-remove') return $('notify-watch-list')?.querySelector('.notify-watch-remove') || null;
+  return key === 'notify-app-secret' ? $('notify-app-secret') : null;
+}
+
 function setResult(text) {
   const el = $('notify-action-result');
   if (el) el.textContent = text;
@@ -904,7 +911,7 @@ async function save() {
   } catch (error) {
     // This is the settings PUT even when it also carries an openid. Only
     // the dedicated bind route maps an uncoded 503 to 通知服务未启动 (§16.11).
-    handleRefusal(error, 'config');
+    handleRefusal(error, 'config', { credentialsSent: bodyCarriesCredentials(body) });
     liveEventsError = liveEventsFieldError(error);
     if (liveEventsError) $('notify-live-events')?.focus();
     showNotification(`通知设置保存失败: ${refusal ? refusal.banner.lead : error.message}`, 'error');
@@ -941,21 +948,37 @@ async function clearSecret() {
   });
 }
 
+// The panel's cluster node list (系统设置 → 多节点): names for `{node}` in a
+// forwarded-save refusal. Read at render time so a later config load applies.
+function clusterNodes() {
+  return window.configData?.cluster || null;
+}
+
 // Coded refusal → banner, refresh, recovery focus (§16.11). The typed openid
 // is cleared in every case; other dirty fields stay.
 // Recovery buttons move focus only; nothing is unbound or saved by them.
 // loadNotifySettings keeps dirty form edits (force only when clean).
-function handleRefusal(error, route = 'openid') {
+function handleRefusal(error, route = 'openid', { credentialsSent = true } = {}) {
   const secretTyped = Boolean(($('notify-app-secret')?.value || '').trim());
-  refusal = secretLostRefusal(notifyRefusal(error, status, { route }), secretTyped);
+  refusal = secretLostRefusal(notifyRefusal(error, status, { route, cluster: clusterNodes(), credentialsSent }), secretTyped);
   // R1: statuses from requests started up to now are not fresh for this refusal.
   // L3: snapshot the credentials so a credential hint survives unrelated edits.
-  refusalSrc = refusal ? { error, route, seq: statusReq.last, creds: readCreds(), secretTyped } : null;
+  refusalSrc = refusal ? { error, route, seq: statusReq.last, creds: readCreds(), secretTyped, credentialsSent } : null;
   if (!refusal) return;
   $('notify-admin-openid').value = '';
-  // L1: the AppSecret field is cleared either way; focus moves only when one was typed.
+  // L1: the AppSecret field is cleared either way.
   $('notify-app-secret').value = '';
-  if (refusal.focus) queueMicrotask(() => actionTarget(refusal?.focus || '')?.focus());
+  // Designer B1: after the caller's finally render has drawn the banner, bring
+  // it on screen; focus goes to the refusal's recovery target, else the banner.
+  const src = refusalSrc;
+  queueMicrotask(() => {
+    if (refusalSrc !== src || !refusal) return;
+    revealRefusal(refusal, {
+      banner: $('notify-alert'),
+      resolve: refusalFocusTarget,
+      reducedMotion: Boolean(window.matchMedia?.('(prefers-reduced-motion: reduce)').matches),
+    });
+  });
   if (refusal.kind === 'revision' || error?.body?.data?.code === 'watch_unknown_channel') loadNotifySettings();
   else refreshNotifyStatus();
 }

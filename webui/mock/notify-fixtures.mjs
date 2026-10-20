@@ -19,9 +19,30 @@ export const PUSH_MODES = ['push-ok', 'push-no-permission', 'push-rate-limited',
 // pending, not capable), rebind (AppID changed, openid void on every node),
 // offline (ca silent: N3 离线), conflict (PUT → 409 credentials_conflict),
 // basegen (PUT → 400 base_generation_required), holder-down (PUT → 503).
-// F responses carry only *_set flags, credentials_generation and codes, never
-// the AppID, AppSecret or openid value.
-export const CRED_MODES = ['cred-ok', 'cred-appid-pending', 'cred-appsecret-pending', 'cred-joining', 'cred-rebind', 'cred-offline', 'cred-conflict', 'cred-basegen', 'cred-holder-down'];
+// Forward fix (Scout 77fb9aed + 460e59a1 statuses, copy rev 6): holder-down
+// (503, not_sent: never connected), holder-unknown (503, unknown: timeout),
+// holder-refused (409, holder_status 401, not_sent), holder-refused-5xx (409,
+// holder_status 503, unknown), holder-bad-reply (422, unknown),
+// forward-refused (409, not_sent), membership-changing (409, not_sent),
+// holder-store (500, unknown), invalid (400 credentials_invalid, not_sent:
+// the panel picks the banner from whether the save carried AppID/AppSecret).
+// Forwarding errors name the holder by id only, as the server does; that id
+// is not in the mock node list (发送节点 fallback). *-named modes name
+// `local`, which resolves to the mock's own node name (Demo Computer), so the
+// spaced real-name copy can be checked.
+export const CRED_MODES = ['cred-ok', 'cred-appid-pending', 'cred-appsecret-pending', 'cred-joining', 'cred-rebind', 'cred-offline', 'cred-conflict', 'cred-basegen', 'cred-holder-down', 'cred-holder-unknown', 'cred-holder-refused', 'cred-holder-refused-5xx', 'cred-holder-bad-reply', 'cred-forward-refused', 'cred-membership-changing', 'cred-holder-store', 'cred-invalid', 'cred-holder-unknown-named', 'cred-forward-refused-named'];
+const FORWARD_REFUSALS = {
+  'cred-holder-unknown': [503, { success: false, message: 'holder unreachable（节点 node-holder）', data: { code: 'credentials_holder_unreachable', node: 'node-holder', outcome: 'unknown' } }],
+  'cred-holder-refused': [409, { success: false, message: 'holder refused（节点 node-holder）', data: { code: 'credentials_holder_refused', node: 'node-holder', holder_status: 401, outcome: 'not_sent' } }],
+  'cred-holder-refused-5xx': [409, { success: false, message: 'holder refused（节点 node-holder）', data: { code: 'credentials_holder_refused', node: 'node-holder', holder_status: 503, outcome: 'unknown' } }],
+  'cred-holder-bad-reply': [422, { success: false, message: 'bad reply（节点 node-holder）', data: { code: 'credentials_holder_bad_reply', node: 'node-holder', outcome: 'unknown' } }],
+  'cred-forward-refused': [409, { success: false, message: 'forward refused（节点 node-holder）', data: { code: 'credentials_forward_refused', node: 'node-holder', outcome: 'not_sent' } }],
+  'cred-membership-changing': [409, { success: false, message: 'membership changing（节点 node-holder）', data: { code: 'credentials_membership_changing', node: 'node-holder', outcome: 'not_sent' } }],
+  'cred-holder-store': [500, { success: false, message: 'store failed', data: { code: 'credentials_store', outcome: 'unknown' } }],
+  'cred-invalid': [400, { success: false, message: 'invalid', data: { code: 'credentials_invalid', outcome: 'not_sent' } }],
+  'cred-holder-unknown-named': [503, { success: false, message: 'holder unreachable（节点 local）', data: { code: 'credentials_holder_unreachable', node: 'local', outcome: 'unknown' } }],
+  'cred-forward-refused-named': [409, { success: false, message: 'forward refused（节点 local）', data: { code: 'credentials_forward_refused', node: 'local', outcome: 'not_sent' } }],
+};
 export const WATCH_MODES = ['watch', 'watch-empty', 'watch-missing', 'watch-other-node'];
 export const WATCH_CHANNELS = [
   { name: '星海频道', platforms: ['youtube', 'twitch', 'niconico'] },
@@ -165,7 +186,8 @@ export function createNotifyState(now = () => Math.floor(Date.now() / 1000)) {
       if (method === 'PUT' && cred()) {
         lastPut = { keys: Object.keys(body).sort(), base_generation: body.base_generation, has_app_secret: 'app_secret' in body, app_id_in_patch: Boolean(body.config?.qq && 'app_id' in body.config.qq) };
         // F rev 2: all-or-nothing; any refusal applies nothing.
-        if (mode === 'cred-holder-down') return [503, { success: false, message: 'holder unreachable', data: { code: 'credentials_holder_unreachable' } }];
+        if (mode === 'cred-holder-down') return [503, { success: false, message: 'holder unreachable', data: { code: 'credentials_holder_unreachable', outcome: 'not_sent' } }];
+        if (FORWARD_REFUSALS[mode]) return structuredClone(FORWARD_REFUSALS[mode]);
         if (mode === 'cred-basegen' || body.base_generation == null) return [400, { success: false, message: 'base_generation required', data: { code: 'base_generation_required' } }];
         if (mode === 'cred-conflict' || body.base_generation !== generation) return [409, { success: false, message: 'stale', data: { code: 'credentials_conflict', current_generation: generation + 1 } }];
         if (body.config?.qq && 'app_id' in body.config.qq && !String(body.config.qq.app_id).trim()) return [400, { success: false, message: 'AppID 不能为空', data: { code: 'credentials_invalid' } }];

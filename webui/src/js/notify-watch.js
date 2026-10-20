@@ -144,7 +144,9 @@ export function watchRefusal(error) {
     watch_unknown_channel: '频道管理中找不到这个频道，请刷新后重新选择。',
   }[code] || (code === 'invalid_field' && String(field || '').startsWith('watch') ? '关注列表只能选择已配置的频道，旧关注项仅可保留或移除。' : '');
   if (!copy) return null;
-  return { kind: 'watch', focus: code === 'watch_too_many' ? 'watch-remove' : 'notify-watch-picker-toggle', banner: {
+  // Designer B1: only watch_too_many names a recovery target (the first 移除);
+  // the other watch refusals leave focus on the banner.
+  return { kind: 'watch', ...(code === 'watch_too_many' ? { focus: 'watch-remove' } : {}), banner: {
     lead: copy, text: '', tone: 'warn',
     ...(code === 'watch_unknown_channel' ? { action: { label: '刷新', target: 'refresh' } } : {}),
   } };

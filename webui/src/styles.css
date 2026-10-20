@@ -2216,6 +2216,8 @@ html:not(.app-ready) #main-page {
 /* Problem banner: the existing .hint with a semantic left rule. */
 .notify-settings .notify-alert {
   margin-bottom: var(--sp-4);
+  /* Designer B1: revealed below the sticky app and tab bars after a refusal. */
+  scroll-margin-top: calc(var(--appbar-h) + var(--tabbar-h) + var(--sp-4));
 }
 .notify-settings .notify-alert[data-tone="danger"] { border-left-color: var(--danger); }
 .notify-settings .notify-alert[data-tone="warn"] { border-left-color: var(--warn); }
