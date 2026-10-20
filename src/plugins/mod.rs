@@ -16,6 +16,7 @@ pub(crate) mod stream_item;
 pub mod subprocess;
 pub mod twitch;
 pub mod twitch_live;
+pub mod warning_exempt;
 pub mod wbi;
 pub mod youtube;
 pub(crate) mod youtube_channel;
