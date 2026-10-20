@@ -1618,6 +1618,50 @@
           </div>
         </section>
 
+        <section class="panel settings-panel--wide warning-exempt-section" id="warning-exempt-section"
+          aria-labelledby="warning-exempt-title">
+          <div class="panel__head">
+            <h2 class="panel__title" id="warning-exempt-title">
+              <svg aria-hidden="true"><use href="#i-shield" /></svg>
+              违规后可续播频道
+            </h2>
+          </div>
+          <div class="panel__body">
+            <p class="settings-help-text warning-exempt-risk" data-tone="warn">
+              B站 警告/切断后，bilistream 默认暂停转播并等待手动恢复。加入此列表的频道，若原因属于下方勾选的类型，下一次轮询会自动重新开播；其他原因仍然暂停。
+              <strong>反复违规继续开播极易导致直播间被关闭。</strong>
+            </p>
+            <ul class="warning-exempt-list" id="warning-exempt-list" aria-labelledby="warning-exempt-title"></ul>
+            <p class="settings-help-text warning-exempt-empty" id="warning-exempt-empty">还没有可续播的频道。默认情况下所有频道在警告/切断后都会暂停。</p>
+            <details class="warning-exempt-picker" id="warning-exempt-picker">
+              <summary class="btn-secondary" id="warning-exempt-picker-toggle" aria-controls="warning-exempt-picker-content">
+                选择频道
+                <span class="warning-exempt-chevron" aria-hidden="true">⌄</span>
+              </summary>
+              <div class="warning-exempt-picker-content" id="warning-exempt-picker-content">
+                <label for="warning-exempt-search">搜索频道名称</label>
+                <input type="search" id="warning-exempt-search" placeholder="输入名称筛选（可选）" autocomplete="off"
+                  aria-controls="warning-exempt-results" aria-describedby="warning-exempt-results-count">
+                <small class="settings-help-text" id="warning-exempt-results-count" role="status"></small>
+                <ul class="warning-exempt-results" id="warning-exempt-results" role="group" aria-labelledby="warning-exempt-picker-toggle"></ul>
+              </div>
+            </details>
+            <h3 class="warning-exempt-subtitle">可续播的违规类型</h3>
+            <div class="warning-exempt-reasons" id="warning-exempt-reasons"></div>
+            <small class="settings-help-text">未识别的原因、没有原因或遮罩警示一律暂停；直播间锁定等不针对单个频道的限制也不会续播。</small>
+            <details class="warning-exempt-rules">
+              <summary>识别规则</summary>
+              <ul>
+                <li><strong>挂机/录播等消极直播</strong> · 低风险：违规原因同时包含 挂机 或 录播 与 消极直播。</li>
+                <li><strong>未开启该游戏直播模式</strong> · 中风险：违规原因包含「未开启该游戏直播模式」。</li>
+                <li><strong>存在违规信息</strong> · 高风险：违规原因包含「违规信息」。</li>
+                <li><strong>直播内容不适宜</strong> · 高风险：违规原因包含「直播内容不适宜」。</li>
+                <li>一条原因命中多个类型时，只有全部勾选才会续播；未识别的原因不会续播。</li>
+              </ul>
+            </details>
+          </div>
+        </section>
+
         <section class="panel settings-panel--wide">
           <div class="panel__head">
             <h2 class="panel__title">

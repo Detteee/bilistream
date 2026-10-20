@@ -70,6 +70,33 @@ fn resolve_proxy_input(
     Ok(Some(input))
 }
 
+/// The roster summary the exemption picker lists: one row per configured
+/// channel with its platform identities. Unknown/gone identities never appear.
+fn exempt_channel_catalog() -> serde_json::Value {
+    let Ok(roster) = crate::config::load_channels() else {
+        return serde_json::json!([]);
+    };
+    let mut channels = Vec::new();
+    for channel in &roster.channels {
+        let platforms: Vec<_> = crate::plugins::warning_exempt::channel_identities(channel)
+            .into_iter()
+            .map(|entry| {
+                serde_json::json!({
+                    "platform": entry.platform,
+                    "channel_id": entry.channel_id,
+                })
+            })
+            .collect();
+        if !platforms.is_empty() {
+            channels.push(serde_json::json!({
+                "name": channel.name,
+                "platforms": platforms,
+            }));
+        }
+    }
+    serde_json::Value::Array(channels)
+}
+
 fn config_response(cfg: &Config) -> serde_json::Value {
     let (niconico_channel_id, niconico_channel_name) =
         crate::plugins::niconico_channel_identity(&cfg.niconico);
@@ -158,6 +185,9 @@ fn config_response(cfg: &Config) -> serde_json::Value {
             "auto_restart": cfg.priority_channel.auto_restart,
         }
     });
+    response["warning_hold_exempt"] = json!(cfg.warning_hold_exempt);
+    response["warning_hold_exempt_reasons"] = json!(cfg.warning_hold_exempt_reasons);
+    response["warning_hold_exempt_channels"] = exempt_channel_catalog();
     response["riot_api_key_configured"] =
         json!(cfg.riot_api_key.as_ref().is_some_and(|s| !s.is_empty()));
     response["holodex_api_key_configured"] =
@@ -452,23 +482,7 @@ pub(crate) fn validated_exempt_channels(
     entries: Vec<crate::plugins::warning_exempt::ExemptChannel>,
     roster: &crate::config::ChannelsData,
 ) -> Result<Vec<crate::plugins::warning_exempt::ExemptChannel>, String> {
-    let mut known = Vec::new();
-    for channel in &roster.channels {
-        let identities = [
-            ("YT", channel.platforms.youtube.as_deref()),
-            ("TW", channel.platforms.twitch.as_deref()),
-            ("NC", channel.platforms.niconico.as_deref()),
-        ];
-        for (platform, id) in identities {
-            if let Some(id) = id {
-                if let Some(entry) =
-                    crate::plugins::warning_exempt::ExemptChannel::new(platform, id, &channel.name)
-                {
-                    known.push(entry);
-                }
-            }
-        }
-    }
+    let known = crate::plugins::warning_exempt::roster_identities(roster);
     let mut canonical: Vec<crate::plugins::warning_exempt::ExemptChannel> = Vec::new();
     for entry in entries {
         let Some(entry) = crate::plugins::warning_exempt::ExemptChannel::new(
@@ -1345,6 +1359,28 @@ mod tests {
         }];
         let error = validated_exempt_channels(unknown_channel, &roster).unwrap_err();
         assert!(error.contains("不在监控列表"), "{error}");
+    }
+
+    #[test]
+    fn config_response_projects_the_exemption_settings_and_the_picker_roster() {
+        let mut cfg = crate::test_support::config("local", 0);
+        cfg.warning_hold_exempt = vec![crate::plugins::warning_exempt::ExemptChannel {
+            platform: "YT".into(),
+            channel_id: "UC1".into(),
+            name: "星海频道".into(),
+        }];
+        cfg.warning_hold_exempt_reasons = vec!["game_mode_off".into()];
+        let response = config_response(&cfg);
+        assert_eq!(response["warning_hold_exempt"][0]["platform"], "YT");
+        assert_eq!(response["warning_hold_exempt"][0]["channel_id"], "UC1");
+        assert_eq!(
+            response["warning_hold_exempt_reasons"],
+            json!(["game_mode_off"])
+        );
+        assert!(
+            response["warning_hold_exempt_channels"].is_array(),
+            "the picker roster must always be a list"
+        );
     }
 
     #[test]

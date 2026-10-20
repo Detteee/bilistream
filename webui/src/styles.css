@@ -2229,6 +2229,42 @@ html:not(.app-ready) #main-page {
   margin-top: var(--sp-4);
 }
 
+/* 违规后可续播频道 (PRD 10-20-warn-hold-exempt). */
+.warning-exempt-section .warning-exempt-risk { margin-block: var(--sp-2); }
+.warning-exempt-section .warning-exempt-risk[data-tone="warn"] { color: var(--warn); }
+.warning-exempt-list,
+.warning-exempt-results { list-style: none; display: grid; gap: var(--sp-2); padding: 0; }
+.warning-exempt-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+}
+.warning-exempt-name { flex: 1 1 auto; min-width: 0; }
+.warning-exempt-platforms { color: var(--text-mute); }
+.warning-exempt-remove { min-height: 44px; }
+.warning-exempt-picker { margin-top: var(--sp-3); }
+.warning-exempt-picker-content { display: grid; gap: var(--sp-2); margin-top: var(--sp-2); }
+.warning-exempt-result label { display: flex; align-items: center; gap: var(--sp-2); min-height: 44px; }
+.warning-exempt-subtitle { margin-top: var(--sp-4); font-size: var(--fs-sm); color: var(--text-dim); }
+.warning-exempt-reasons { display: grid; gap: var(--sp-2); margin-block: var(--sp-2); }
+.warning-exempt-reason-row { display: grid; gap: 2px; }
+.warning-exempt-reason { display: flex; align-items: center; gap: var(--sp-2); min-height: 44px; }
+.risk-tag {
+  border-radius: var(--r-sm);
+  padding: 0 6px;
+  font-size: var(--fs-xs);
+  border: 1px solid currentColor;
+}
+.risk-tag--low { color: var(--ok); }
+.risk-tag--warn { color: var(--warn); }
+.risk-tag--danger { color: var(--danger); }
+.warning-exempt-danger { color: var(--danger); }
+.warning-exempt-rules { margin-top: var(--sp-2); }
+.warning-exempt-rules ul { margin: var(--sp-2) 0 0 var(--sp-4); }
+
 /* Status rows reuse .cluster-node-meta*; the value keeps one rule: a dot slot
    plus wrapping for long node names and badges (R2). It used to be declared
    twice, which meant reading two places to know the rendered value. */

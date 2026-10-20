@@ -10,6 +10,10 @@ import { refreshMembership } from './cluster-membership.js';
 import { createConfigPatch } from './config-draft.js';
 import { saveBooleanToggle } from './toggle-save.js';
 import { discoveryTiles, formatGoliveSummary, formatKeyPoolSummary, goliveHourRows, keyMeterRows } from './format.js';
+import {
+  EXEMPT_REASON_ROWS, HIGH_RISK_WARNING, groupedEntries, knownEntries, normalizeEntries,
+  normalizeReasons, pickerRows, platformLabel, removeChannel, staleEntries, toggleChannel,
+} from './warning-exempt.js';
 
 let configBaseline = null;
 let keywordsBaseline = null;
@@ -18,6 +22,10 @@ let settingsSaving = false;
 let secretRevision = null;
 let savedSecretConfig = null;
 let nicoSessionChecking = false;
+let exemptCatalog = [];
+let exemptEntries = [];
+let exemptReasons = [];
+let exemptWired = false;
 const secretControls = [
   { field: 'holodex_api_key', input: 'config-holodex-key', button: 'config-clear-holodex-key', label: 'Holodex API Key', configured: c => c.holodex_api_key_configured },
   { field: 'youtube_api_key', input: 'config-youtube-api-key', button: 'config-clear-youtube-key', label: 'YouTube Data API Key', configured: c => c.youtube_api_key_configured },
@@ -161,6 +169,98 @@ function toggleAntiCollisionList() {
   if (!checkbox || !section) return;
   section.classList.toggle('hidden', !checkbox.checked);
 }
+function wireExemptSearch() {
+  if (exemptWired) return;
+  exemptWired = true;
+  document.getElementById('warning-exempt-search')?.addEventListener('input', event => {
+    renderExemptPicker(event.target.value);
+  });
+}
+function renderExemptList() {
+  const list = document.getElementById('warning-exempt-list');
+  const empty = document.getElementById('warning-exempt-empty');
+  if (!list || !empty) return;
+  const rows = groupedEntries(exemptEntries);
+  const stale = new Set(staleEntries(exemptEntries, exemptCatalog).map(entry => entry.name));
+  list.replaceChildren(...rows.map(row => {
+    const item = el('li', 'warning-exempt-row');
+    const name = el('span', 'warning-exempt-name', row.name);
+    const platforms = el('small', 'warning-exempt-platforms', row.entries.map(entry => platformLabel(entry.platform)).join(' · '));
+    const remove = el('button', 'btn-ghost compact-btn warning-exempt-remove', '移除');
+    remove.type = 'button';
+    remove.setAttribute('aria-label', `移除 ${row.name}`);
+    remove.addEventListener('click', () => {
+      exemptEntries = removeChannel(exemptEntries, row.name);
+      renderExemptList();
+      renderExemptPicker();
+      const next = list.querySelector('.warning-exempt-remove');
+      (next || document.getElementById('warning-exempt-picker-toggle'))?.focus();
+    });
+    item.append(name, platforms, remove);
+    if (stale.has(row.name)) item.append(el('small', 'settings-help-text', '（已不在频道管理中，保存后移除）'));
+    return item;
+  }));
+  empty.hidden = rows.length > 0;
+  list.hidden = rows.length === 0;
+}
+function renderExemptReasons() {
+  const box = document.getElementById('warning-exempt-reasons');
+  if (!box) return;
+  box.replaceChildren(...EXEMPT_REASON_ROWS.map(row => {
+    const wrap = el('div', 'warning-exempt-reason-row');
+    const label = el('label', 'warning-exempt-reason');
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    input.value = row.id;
+    input.checked = exemptReasons.includes(row.id);
+    input.addEventListener('change', () => {
+      exemptReasons = input.checked
+        ? normalizeReasons([...exemptReasons, row.id])
+        : exemptReasons.filter(id => id !== row.id);
+    });
+    const tag = el('span', `risk-tag risk-tag--${row.tone || 'low'}`, row.risk);
+    label.append(input, el('span', 'warning-exempt-reason-name', row.name), tag);
+    wrap.append(label);
+    if (row.tone === 'danger') wrap.append(el('small', 'settings-help-text warning-exempt-danger', HIGH_RISK_WARNING));
+    return wrap;
+  }));
+}
+function renderExemptPicker(search = document.getElementById('warning-exempt-search')?.value || '') {
+  const results = document.getElementById('warning-exempt-results');
+  const count = document.getElementById('warning-exempt-results-count');
+  if (!results) return;
+  const rows = pickerRows(exemptCatalog, exemptEntries, search);
+  results.replaceChildren(...rows.map(row => {
+    const item = el('li', 'warning-exempt-result');
+    const label = el('label');
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    input.checked = row.selected;
+    input.dataset.channel = row.name;
+    input.addEventListener('change', () => {
+      const channel = exemptCatalog.find(entry => entry.name === row.name);
+      exemptEntries = toggleChannel(exemptEntries, { name: row.name, platforms: channel?.platforms || [] }, input.checked);
+      renderExemptList();
+      renderExemptPicker(search);
+      const again = [...results.querySelectorAll('input[data-channel]')]
+        .find(candidate => candidate.dataset.channel === row.name);
+      again?.focus();
+    });
+    label.append(input, el('span', 'warning-exempt-name', row.name), el('small', 'warning-exempt-platforms', row.platforms.join(' · ')));
+    item.append(label);
+    return item;
+  }));
+  if (count) count.textContent = rows.length ? `共 ${rows.length} 个频道` : '没有匹配的频道';
+}
+function renderWarningHoldExempt(config) {
+  exemptCatalog = Array.isArray(config?.warning_hold_exempt_channels) ? config.warning_hold_exempt_channels : [];
+  exemptEntries = normalizeEntries(config?.warning_hold_exempt);
+  exemptReasons = normalizeReasons(config?.warning_hold_exempt_reasons);
+  wireExemptSearch();
+  renderExemptList();
+  renderExemptReasons();
+  renderExemptPicker();
+}
 async function loadSystemConfig() {
   void loadManagedStorage();
   if (settingsSaving) return;
@@ -221,6 +321,9 @@ async function loadSystemConfig() {
     // Load anti-collision list
     window.currentAntiCollisionList = config.anti_collision_list || {};
     loadAntiCollisionList(window.currentAntiCollisionList);
+
+    // Load 违规后可续播频道 (resolved identities + reason ids + picker roster).
+    renderWarningHoldExempt(config);
 
     configBaseline = structuredClone(getCurrentConfig());
     loadYoutubeKeyStatus();
@@ -631,6 +734,8 @@ function getCurrentConfig() {
     niconico_user_session: document.getElementById('config-nc-user-session').value.trim(),
     niconico_session_check_enabled: document.getElementById('config-nc-session-check').checked,
     niconico_proxy: document.getElementById('config-nc-proxy').value.trim(),
+    warning_hold_exempt: knownEntries(exemptEntries, exemptCatalog).map(entry => ({ platform: entry.platform, channel_id: entry.channel_id, name: entry.name })),
+    warning_hold_exempt_reasons: [...exemptReasons],
     cluster: getClusterConfigFromForm()
   };
 }
@@ -979,6 +1084,7 @@ export {
   addAntiCollisionEntry,
   removeAntiCollisionEntry,
   getCurrentConfig,
+  renderWarningHoldExempt,
   saveSystemConfig,
   saveBannedKeywords,
   readBannedKeywordLines,

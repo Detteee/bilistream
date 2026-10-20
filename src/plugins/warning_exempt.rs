@@ -138,6 +138,30 @@ pub fn split_reason_ids(ids: impl IntoIterator<Item = String>) -> (Vec<String>, 
     (known, unknown)
 }
 
+/// One roster channel's canonical platform identities (display name included).
+pub fn channel_identities(channel: &crate::config::Channel) -> Vec<ExemptChannel> {
+    let mut out = Vec::new();
+    for (platform, id) in [
+        ("YT", channel.platforms.youtube.as_deref()),
+        ("TW", channel.platforms.twitch.as_deref()),
+        ("NC", channel.platforms.niconico.as_deref()),
+    ] {
+        if let Some(entry) = id.and_then(|id| ExemptChannel::new(platform, id, &channel.name)) {
+            out.push(entry);
+        }
+    }
+    out
+}
+
+/// Every platform identity in a roster document.
+pub fn roster_identities(roster: &crate::config::ChannelsData) -> Vec<ExemptChannel> {
+    roster
+        .channels
+        .iter()
+        .flat_map(channel_identities)
+        .collect()
+}
+
 /// Drop exempt entries whose identity is absent from a pushed channels
 /// document. `None` (a peer that sent no roster) keeps the list untouched.
 pub fn retain_known_channels(
@@ -147,23 +171,16 @@ pub fn retain_known_channels(
     let Some(document) = channels else {
         return;
     };
-    let mut known = BTreeSet::new();
-    if let Some(list) = document.get("channels").and_then(|value| value.as_array()) {
-        for channel in list {
-            let platforms = channel.get("platforms");
-            for (platform, key) in [("YT", "youtube"), ("TW", "twitch"), ("NC", "niconico")] {
-                let Some(id) = platforms
-                    .and_then(|value| value.get(key))
-                    .and_then(|value| value.as_str())
-                else {
-                    continue;
-                };
-                if let Some(entry) = ExemptChannel::new(platform, id, "") {
-                    known.insert((entry.platform, entry.channel_id));
-                }
-            }
-        }
-    }
+    // The pushed document is shape-validated before it is applied; when it
+    // cannot be read as a roster, keep the list (it cannot prove an identity
+    // is gone).
+    let Ok(roster) = serde_json::from_value::<crate::config::ChannelsData>(document.clone()) else {
+        return;
+    };
+    let known: BTreeSet<_> = roster_identities(&roster)
+        .into_iter()
+        .map(|entry| (entry.platform, entry.channel_id))
+        .collect();
     entries.retain(|entry| known.contains(&(entry.platform.clone(), entry.channel_id.clone())));
 }
 
