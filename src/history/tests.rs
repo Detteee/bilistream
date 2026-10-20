@@ -232,7 +232,7 @@ fn bili_live_window_totals_repeat_across_overlapping_queries() {
 // ------------------------------------------------------------- schema
 
 #[test]
-fn new_file_is_incremental_vacuum_v1_and_corrupt_file_is_recreated() {
+fn new_file_is_incremental_vacuum_and_corrupt_file_is_recreated() {
     let dir = tmp("schema");
     let path = dir.join("history.sqlite");
     let conn = schema::open_rw(&path).unwrap();
@@ -278,108 +278,13 @@ fn read_path_indexes_exist_after_migration() {
 }
 
 #[test]
-fn schema_v6_reconciles_the_v5_summary_columns_and_drops_the_dead_table() {
-    let dir = tmp("v6-migration");
-    let path = dir.join("history.sqlite");
-    // Build a v5-shaped database by hand: the migration must handle a file
-    // written by the previous release, not only a fresh replay of V1..V6.
-    {
-        let conn = schema::open_rw(&path).unwrap();
-        conn.execute_batch(
-            "DROP TABLE bili_lives;
-             CREATE TABLE bili_lives (
-               live_key TEXT PRIMARY KEY, node TEXT NOT NULL, room INTEGER NOT NULL,
-               started_at INTEGER NOT NULL, ended_at INTEGER,
-               summary_state TEXT NOT NULL DEFAULT 'pending'
-                 CHECK (summary_state IN ('pending','ok','failed','skipped')),
-               bili_live_time_raw INTEGER, add_fans INTEGER, danmu_num INTEGER,
-               watched_count INTEGER, new_fans_club INTEGER, max_online INTEGER,
-               started_by TEXT NOT NULL DEFAULT '',
-               summary_phase TEXT NOT NULL DEFAULT 'pending',
-               summary_node TEXT, summary_at INTEGER NOT NULL DEFAULT 0,
-               summary_generation INTEGER NOT NULL DEFAULT 0) WITHOUT ROWID;
-             CREATE INDEX bili_lives_end ON bili_lives(ended_at);
-             CREATE TABLE samples_1h (metric INTEGER NOT NULL, node TEXT NOT NULL,
-               bucket INTEGER NOT NULL, session_id INTEGER NOT NULL DEFAULT 0,
-               min REAL NOT NULL, max REAL NOT NULL, sum REAL NOT NULL,
-               count INTEGER NOT NULL, PRIMARY KEY(bucket,metric,node,session_id)) WITHOUT ROWID;
-             INSERT INTO bili_lives(live_key,node,room,started_at,summary_state,summary_phase,bili_live_time_raw) VALUES
-               ('state-failed-phase-claimed','local',1,1,'failed','claimed',20),
-               ('state-ok-phase-pending','local',1,1,'ok','pending',10),
-               ('state-pending-phase-claimed','local',1,1,'pending','claimed',50),
-               ('state-pending-phase-done','local',1,1,'pending','done',30),
-               ('state-skipped-phase-pending','local',1,1,'skipped','pending',40);
-             PRAGMA user_version=5;",
-        )
-        .unwrap();
-    }
-
-    let conn = schema::open_rw(&path).unwrap();
-    let version: i64 = conn
-        .query_row("PRAGMA user_version", [], |r| r.get(0))
-        .unwrap();
-    assert_eq!(version, schema::SCHEMA_VERSION);
-
-    let phases: Vec<(String, String)> = conn
-        .prepare("SELECT live_key,summary_phase FROM bili_lives ORDER BY live_key")
-        .unwrap()
-        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
-        .unwrap()
-        .collect::<rusqlite::Result<_>>()
-        .unwrap();
-    assert_eq!(
-        phases,
-        vec![
-            // An observed failure is not undone by a claim.
-            ("state-failed-phase-claimed".into(), "failed".into()),
-            // `ok` carries no phase, so it upgrades a pending/claimed claim.
-            ("state-ok-phase-pending".into(), "done".into()),
-            ("state-pending-phase-claimed".into(), "claimed".into()),
-            ("state-pending-phase-done".into(), "done".into()),
-            ("state-skipped-phase-pending".into(), "skipped".into()),
-        ]
-    );
-    let rows: i64 = conn
-        .query_row("SELECT count(*) FROM bili_lives", [], |r| r.get(0))
-        .unwrap();
-    assert_eq!(rows, 5, "the rebuild must keep every live window");
-
-    let columns: String = conn
-        .query_row(
-            "SELECT group_concat(name,' ') FROM pragma_table_info('bili_lives')",
-            [],
-            |r| r.get(0),
-        )
-        .unwrap();
-    assert!(!columns.contains("summary_state"), "{columns}");
-    assert!(columns.contains("live_time_secs"), "{columns}");
-    let live_time: i64 = conn
-        .query_row(
-            "SELECT live_time_secs FROM bili_lives WHERE live_key='state-pending-phase-done'",
-            [],
-            |r| r.get(0),
-        )
-        .unwrap();
-    assert_eq!(live_time, 30, "the raw LiveTime value carries over");
-
-    let dead_tables: i64 = conn
-        .query_row(
-            "SELECT count(*) FROM sqlite_master WHERE name='samples_1h'",
-            [],
-            |r| r.get(0),
-        )
-        .unwrap();
-    assert_eq!(dead_tables, 0, "samples_1h was never written; v6 drops it");
-}
-
-#[test]
-fn a_fresh_database_is_already_v6_without_the_dead_rollup_table() {
-    let dir = tmp("fresh-v6");
+fn a_fresh_database_is_v7_without_the_dead_rollup_table() {
+    let dir = tmp("fresh-v7");
     let conn = schema::open_rw(&dir.join("history.sqlite")).unwrap();
     let version: i64 = conn
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(version, schema::SCHEMA_VERSION);
+    assert_eq!(version, 7);
     for table in ["samples_1h", "bili_lives_v6"] {
         let count: i64 = conn
             .query_row(
@@ -388,7 +293,7 @@ fn a_fresh_database_is_already_v6_without_the_dead_rollup_table() {
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(count, 0, "{table} must not survive the replay to v6");
+        assert_eq!(count, 0, "{table} is not part of the baseline");
     }
     let columns: String = conn
         .query_row(
@@ -399,6 +304,414 @@ fn a_fresh_database_is_already_v6_without_the_dead_rollup_table() {
         .unwrap();
     assert!(!columns.contains("summary_state"), "{columns}");
     assert!(columns.contains("live_time_secs"), "{columns}");
+    let meta: Vec<(String, String)> = conn
+        .prepare("SELECT key,value FROM meta ORDER BY key")
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert_eq!(
+        meta,
+        vec![
+            ("legacy_unattributed_before".into(), "0".into()),
+            ("session_id_highwater".into(), "0".into()),
+        ]
+    );
+}
+
+// ------------------------------------------- v7 baseline guard (R7)
+
+/// A v6 database written by 28a20792's own `schema::open_rw` and writer
+/// (see `fixtures/README.md`).
+const V6_FIXTURE: &[u8] = include_bytes!("fixtures/history-v6-28a20792.sqlite");
+
+fn v6_fixture(name: &str) -> std::path::PathBuf {
+    let path = tmp(name).join("history.sqlite");
+    std::fs::write(&path, V6_FIXTURE).unwrap();
+    path
+}
+
+fn rows(conn: &rusqlite::Connection, sql: &str) -> Vec<String> {
+    let mut stmt = conn.prepare(sql).unwrap();
+    let width = stmt.column_count();
+    stmt.query_map([], |r| {
+        (0..width)
+            .map(|i| {
+                r.get::<_, rusqlite::types::Value>(i)
+                    .map(|v| format!("{v:?}"))
+            })
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map(|cells| cells.join("|"))
+    })
+    .unwrap()
+    .collect::<rusqlite::Result<_>>()
+    .unwrap()
+}
+
+/// Everything that defines the schema, in a stable order.
+fn schema_shape(conn: &rusqlite::Connection) -> Vec<String> {
+    let mut shape = vec![
+        format!("auto_vacuum={:?}", rows(conn, "PRAGMA auto_vacuum")),
+        format!("user_version={:?}", rows(conn, "PRAGMA user_version")),
+    ];
+    shape.extend(rows(
+        conn,
+        "SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name",
+    ));
+    let objects = rows(
+        conn,
+        "SELECT name FROM sqlite_master WHERE type IN ('table','view') ORDER BY name",
+    );
+    for object in objects {
+        let name = object.trim_start_matches("Text(\"").trim_end_matches("\")");
+        for (pragma, sql) in [
+            ("table_xinfo", format!("SELECT * FROM pragma_table_xinfo('{name}') ORDER BY cid")),
+            ("index_list", format!("SELECT name,\"unique\",origin,partial FROM pragma_index_list('{name}') ORDER BY name")),
+            ("foreign_key_list", format!("SELECT * FROM pragma_foreign_key_list('{name}') ORDER BY id,seq")),
+        ] {
+            shape.extend(rows(conn, &sql).into_iter().map(|row| format!("{name} {pragma} {row}")));
+        }
+        for index in rows(
+            conn,
+            &format!("SELECT name FROM pragma_index_list('{name}') ORDER BY name"),
+        ) {
+            let index = index.trim_start_matches("Text(\"").trim_end_matches("\")");
+            shape.extend(
+                rows(
+                    conn,
+                    &format!("SELECT * FROM pragma_index_xinfo('{index}') ORDER BY seqno"),
+                )
+                .into_iter()
+                .map(|row| format!("{index} index_xinfo {row}")),
+            );
+        }
+    }
+    shape
+}
+
+/// Every stored row of every table (views excluded), in a stable order.
+fn contents(conn: &rusqlite::Connection) -> Vec<String> {
+    let mut out = Vec::new();
+    for table in rows(
+        conn,
+        "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name",
+    ) {
+        let table = table.trim_start_matches("Text(\"").trim_end_matches("\")");
+        let width: usize = conn
+            .query_row(
+                &format!("SELECT count(*) FROM pragma_table_info('{table}')"),
+                [],
+                |r| r.get::<_, i64>(0),
+            )
+            .unwrap() as usize;
+        let order = (1..=width)
+            .map(|i| i.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        out.extend(
+            rows(conn, &format!("SELECT * FROM \"{table}\" ORDER BY {order}"))
+                .into_iter()
+                .map(|row| format!("{table}: {row}")),
+        );
+    }
+    out
+}
+
+#[test]
+fn the_v6_fixture_is_what_28a20792_wrote() {
+    let path = v6_fixture("fixture-shape");
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    let version: i64 = conn
+        .query_row("PRAGMA user_version", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(version, 6);
+    for table in [
+        "boots",
+        "sessions",
+        "runs",
+        "bili_lives",
+        "sample_frames",
+        "samples_1m",
+        "node_segments",
+        "events",
+        "notify_sends",
+        "meta",
+    ] {
+        let n: i64 = conn
+            .query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0))
+            .unwrap();
+        assert!(n > 0, "the fixture has rows in {table}");
+    }
+}
+
+#[test]
+fn a_fresh_v7_database_has_exactly_the_schema_of_a_bumped_28a20792_v6() {
+    let fresh = schema::open_rw(&tmp("fresh-shape").join("history.sqlite")).unwrap();
+    let bumped = schema::open_rw(&v6_fixture("bumped-shape")).unwrap();
+    let (fresh, bumped) = (schema_shape(&fresh), schema_shape(&bumped));
+    assert!(fresh.iter().any(|row| row.contains("sample_frames")));
+    assert!(fresh.contains(&"user_version=[\"Integer(7)\"]".to_string()));
+    assert!(fresh.contains(&"auto_vacuum=[\"Integer(2)\"]".to_string()));
+    assert_eq!(fresh, bumped);
+}
+
+#[test]
+fn the_v6_to_v7_bump_changes_only_user_version() {
+    let path = v6_fixture("bump-rows");
+    let before = contents(&rusqlite::Connection::open(&path).unwrap());
+    assert!(before.len() > 30, "{} rows", before.len());
+    let conn = schema::open_rw(&path).unwrap();
+    assert_eq!(contents(&conn), before);
+    let version: i64 = conn
+        .query_row("PRAGMA user_version", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(version, 7);
+    drop(conn);
+    // Reopening a v7 file is a no-op too.
+    assert_eq!(contents(&schema::open_rw(&path).unwrap()), before);
+}
+
+#[test]
+fn a_bumped_28a20792_database_is_written_and_read_through_the_normal_apis() {
+    let path = v6_fixture("bumped-use");
+    let conn = schema::open_rw(&path).unwrap();
+    let mut w = Writer::new(conn, "fixture-a", 4);
+    w.apply(&ev(T0 + 900, EventKind::ProcessStarted { version: "test" }))
+        .unwrap();
+    session(&mut w, 1, T0 + 1_000, Some("synthetic-live-key-0002"));
+    w.apply(&ev(
+        T0 + 1_060,
+        EventKind::StatsSample {
+            seq: 1,
+            bitrate_kbps: (4000.0, 4400.0, 4200.0),
+            fps: Some(30.0),
+            speed: Some(1.0),
+        },
+    ))
+    .unwrap();
+    end(&mut w, 1, T0 + 1_100, EndReason::SourceEnded);
+    let page = sessions(&w, T0 + 1_200);
+    let names: Vec<String> = page
+        .items
+        .iter()
+        .map(|item| serde_json::to_value(item).unwrap()["channel_name"].to_string())
+        .collect();
+    assert_eq!(page.items.len(), 3, "{names:?}");
+    for name in ["示例频道", "示例频道二"] {
+        assert!(
+            names.iter().any(|n| n == &format!("\"{name}\"")),
+            "{name} from the fixture in {names:?}"
+        );
+    }
+    let highwater: i64 = w
+        .conn
+        .query_row(
+            "SELECT cast(value AS INTEGER) FROM meta WHERE key='session_id_highwater'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(highwater, 3, "new session ids continue after the fixture's");
+    let stats = query::stats(&w.conn, &q(T0, T0 + 1_200), "raw", None).unwrap();
+    let points = stats.series["bitrate"]
+        .iter()
+        .filter(|c| c.is_some())
+        .count();
+    assert!(points >= 2, "fixture and new samples are both readable");
+}
+
+fn assert_refused(path: &std::path::Path, needle: &str) {
+    let before = std::fs::read(path).unwrap();
+    let error = schema::open_rw(path).unwrap_err();
+    assert!(error.to_string().contains(needle), "{error}");
+    assert!(!matches!(
+        error.sqlite_error_code(),
+        Some(rusqlite::ErrorCode::DatabaseCorrupt | rusqlite::ErrorCode::NotADatabase)
+    ));
+    assert_eq!(
+        std::fs::read(path).unwrap(),
+        before,
+        "the file is untouched"
+    );
+    assert!(!path.with_extension("sqlite.corrupt").exists());
+}
+
+#[test]
+fn versions_one_to_five_are_refused_and_left_untouched() {
+    for version in 1..=5 {
+        let path = v6_fixture(&format!("refuse-v{version}"));
+        {
+            let conn = rusqlite::Connection::open(&path).unwrap();
+            conn.pragma_update(None, "user_version", version).unwrap();
+            conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))
+                .unwrap();
+        }
+        assert_refused(&path, &format!("v{version}"));
+    }
+}
+
+#[test]
+fn version_zero_with_tables_is_refused_and_left_untouched() {
+    let path = tmp("refuse-v0").join("history.sqlite");
+    {
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL) WITHOUT ROWID;
+             INSERT INTO meta VALUES ('synthetic','1');",
+        )
+        .unwrap();
+    }
+    assert_refused(&path, "没有版本号");
+}
+
+#[test]
+fn a_version_newer_than_seven_is_refused_and_left_untouched() {
+    let path = v6_fixture("refuse-v8");
+    {
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.pragma_update(None, "user_version", 8).unwrap();
+        conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))
+            .unwrap();
+    }
+    assert_refused(&path, "较新");
+}
+
+/// A copy of a WAL database taken while its writer is still open, as a
+/// crash would leave it: `setup` is checkpointed into the main file, `tail`
+/// stays as uncheckpointed frames in `-wal`. `-shm` is copied only when
+/// `keep_shm`.
+fn crash_left_wal(
+    name: &str,
+    from_fixture: bool,
+    setup: &str,
+    tail: &str,
+    keep_shm: bool,
+) -> std::path::PathBuf {
+    let staging = if from_fixture {
+        v6_fixture(&format!("{name}-staging"))
+    } else {
+        tmp(&format!("{name}-staging")).join("history.sqlite")
+    };
+    let target = tmp(name).join("history.sqlite");
+    let side = |p: &std::path::Path, ext: &str| p.with_file_name(format!("history.sqlite{ext}"));
+    let conn = rusqlite::Connection::open(&staging).unwrap();
+    conn.pragma_update(None, "journal_mode", "WAL").unwrap();
+    conn.execute_batch(setup).unwrap();
+    conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))
+        .unwrap();
+    conn.pragma_update(None, "wal_autocheckpoint", 0).unwrap();
+    conn.execute_batch(tail).unwrap();
+    std::fs::copy(&staging, &target).unwrap();
+    std::fs::copy(side(&staging, "-wal"), side(&target, "-wal")).unwrap();
+    if keep_shm {
+        std::fs::copy(side(&staging, "-shm"), side(&target, "-shm")).unwrap();
+    }
+    drop(conn);
+    assert!(
+        std::fs::metadata(side(&target, "-wal")).unwrap().len() > 0,
+        "the copy carries uncheckpointed WAL frames"
+    );
+    target
+}
+
+/// Every file in the database's directory with its bytes.
+fn dir_bytes(path: &std::path::Path) -> Vec<(String, Vec<u8>)> {
+    let mut out: Vec<_> = std::fs::read_dir(path.parent().unwrap())
+        .unwrap()
+        .map(|e| {
+            let e = e.unwrap();
+            (
+                e.file_name().to_string_lossy().into_owned(),
+                std::fs::read(e.path()).unwrap(),
+            )
+        })
+        .collect();
+    out.sort();
+    out
+}
+
+fn assert_refused_with_wal(path: &std::path::Path, needle: &str, shm: bool) {
+    let before = dir_bytes(path);
+    let names: Vec<&str> = before.iter().map(|(n, _)| n.as_str()).collect();
+    let mut expected = vec!["history.sqlite", "history.sqlite-wal"];
+    if shm {
+        expected.push("history.sqlite-shm");
+    }
+    expected.sort();
+    assert_eq!(names, expected);
+    let error = schema::open_rw(path).unwrap_err();
+    assert!(error.to_string().contains(needle), "{error}");
+    assert!(!matches!(
+        error.sqlite_error_code(),
+        Some(rusqlite::ErrorCode::DatabaseCorrupt | rusqlite::ErrorCode::NotADatabase)
+    ));
+    // Main file, -wal and -shm (or its absence) are byte-identical, and
+    // nothing (.corrupt, -journal, a new -shm) was created.
+    let after = dir_bytes(path);
+    let changed: Vec<&str> = after
+        .iter()
+        .filter(|file| !before.contains(file))
+        .map(|(name, _)| name.as_str())
+        .chain(
+            before
+                .iter()
+                .filter(|(name, _)| !after.iter().any(|(n, _)| n == name))
+                .map(|(name, _)| name.as_str()),
+        )
+        .collect();
+    assert!(
+        changed.is_empty(),
+        "{needle}: changed, created or removed {changed:?}"
+    );
+}
+
+#[test]
+fn a_refused_file_with_a_crash_left_wal_is_left_byte_identical() {
+    let tail = "INSERT INTO meta(key,value) VALUES ('synthetic_wal_row','1');";
+    for shm in [false, true] {
+        let path = crash_left_wal(
+            &format!("refuse-wal-v5-{shm}"),
+            true,
+            "PRAGMA user_version=5;",
+            tail,
+            shm,
+        );
+        assert_refused_with_wal(&path, "v5", shm);
+    }
+    let path = crash_left_wal(
+        "refuse-wal-v0",
+        false,
+        "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL) WITHOUT ROWID;
+         INSERT INTO meta VALUES ('synthetic','1');",
+        tail,
+        false,
+    );
+    assert_refused_with_wal(&path, "没有版本号", false);
+    let path = crash_left_wal("refuse-wal-v8", true, "PRAGMA user_version=8;", tail, true);
+    assert_refused_with_wal(&path, "较新", true);
+}
+
+#[test]
+fn a_v6_file_with_a_crash_left_wal_upgrades_with_the_wal_applied() {
+    for shm in [false, true] {
+        let tail = "INSERT INTO meta(key,value) VALUES ('synthetic_wal_row','1');";
+        let path = crash_left_wal(&format!("upgrade-wal-{shm}"), true, "", tail, shm);
+        let expected = {
+            let staging = v6_fixture(&format!("upgrade-wal-{shm}-expected"));
+            let conn = rusqlite::Connection::open(&staging).unwrap();
+            conn.execute_batch(tail).unwrap();
+            contents(&conn)
+        };
+        let conn = schema::open_rw(&path).unwrap();
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, 7);
+        let got = contents(&conn);
+        assert!(got.iter().any(|row| row.contains("synthetic_wal_row")));
+        assert_eq!(got, expected);
+    }
 }
 
 #[test]

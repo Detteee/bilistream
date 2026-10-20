@@ -223,63 +223,6 @@ async fn stalled_writer_flush_times_out_without_blocking_the_other_consumer() {
 }
 
 #[test]
-fn v1_migration_preserves_raw_accumulators_and_unknown_legacy_rollups() {
-    let dir = tmp("v1-migration");
-    let path = dir.join("history.sqlite");
-    let old = rusqlite::Connection::open(&path).unwrap();
-    old.execute_batch("PRAGMA auto_vacuum=INCREMENTAL;")
-        .unwrap();
-    old.execute_batch(schema::V1).unwrap();
-    old.execute_batch(
-        "INSERT INTO sessions(id,eid,node,boot_id,seq,platform,channel_id,channel_name,started_at,last_seen_at,ended_at,end_reason)
-         VALUES(1,'old:1:1','local',1,1,'YT','c','name',120,170,170,'source_ended');
-         INSERT INTO samples_raw VALUES(1,'local',130,1,0.25,3.5,3.75,2);
-         INSERT INTO samples_1m VALUES(1,'local',120,1,0.25,3.5,3.75,2);
-         INSERT INTO samples_1m VALUES(1,'local',60,1,1,7,12,3);
-         PRAGMA user_version=1;",
-    ).unwrap();
-    drop(old);
-    let conn = schema::open_rw(&path).unwrap();
-    let raw: (i64, f64, f64, f64, i64) = conn
-        .query_row(
-            "SELECT session_id,min,max,sum,count FROM samples_raw WHERE ts=130",
-            [],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
-        )
-        .unwrap();
-    assert_eq!(raw, (1, 0.25, 3.5, 3.75, 2));
-    let known: i64 = conn
-        .query_row(
-            "SELECT session_id FROM samples_1m WHERE bucket=120",
-            [],
-            |r| r.get(0),
-        )
-        .unwrap();
-    let unknown: (i64, f64, i64) = conn
-        .query_row(
-            "SELECT session_id,sum,count FROM samples_1m WHERE bucket=60",
-            [],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
-        )
-        .unwrap();
-    assert_eq!(known, 1);
-    assert_eq!(unknown, (0, 12.0, 3));
-    assert_eq!(
-        conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
-            .unwrap(),
-        schema::SCHEMA_VERSION
-    );
-    drop(conn);
-    let conn = schema::open_rw(&path).unwrap();
-    assert_eq!(
-        conn.query_row("SELECT sum(count) FROM samples_raw", [], |r| r
-            .get::<_, i64>(0))
-            .unwrap(),
-        2
-    );
-}
-
-#[test]
 fn compact_frames_keep_independent_metrics_and_session_identity() {
     let (w, _) = writer("compact-frame");
     for (metric, sid, min, max, sum, count) in [
@@ -309,43 +252,6 @@ fn compact_frames_keep_independent_metrics_and_session_identity() {
         .unwrap();
     assert_eq!(count(&w, "samples_raw"), 2);
     assert_eq!(count(&w, "sample_frames"), 2);
-}
-
-#[test]
-fn v1_same_second_mixed_session_samples_remain_unattributed() {
-    let dir = tmp("v1-mixed");
-    let path = dir.join("history.sqlite");
-    let old = rusqlite::Connection::open(&path).unwrap();
-    old.execute_batch(schema::V1).unwrap();
-    old.execute_batch(
-        "INSERT INTO sessions(id,eid,node,boot_id,seq,platform,channel_id,channel_name,started_at,last_seen_at,ended_at,end_reason)
-         VALUES(1,'a','local',1,1,'YT','a','a',120,130,130,'source_ended'),
-               (2,'b','local',1,2,'YT','b','b',130,140,140,'source_ended');
-         INSERT INTO samples_raw VALUES(1,'local',130,2,10,20,30,2);
-         INSERT INTO samples_1m VALUES(1,'local',120,2,10,20,30,2);
-         PRAGMA user_version=1;",
-    ).unwrap();
-    drop(old);
-    let conn = schema::open_rw(&path).unwrap();
-    for table in ["samples_raw", "samples_1m"] {
-        let values: (i64, f64, i64) = conn
-            .query_row(
-                &format!("SELECT session_id,sum,count FROM {table}"),
-                [],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
-            )
-            .unwrap();
-        assert_eq!(
-            values,
-            (0, 30.0, 2),
-            "mixed v1 data has no provable session owner"
-        );
-    }
-    let mut req = q(120, 180);
-    req.session = Some("b".into());
-    let filtered = query::stats(&conn, &req, "1m", None).unwrap();
-    assert!(filtered.series["bitrate"].iter().all(Option::is_none));
-    assert_eq!(filtered.partial_before, Some(180));
 }
 
 #[test]
@@ -561,7 +467,7 @@ fn event_book_boot_and_reserved_rollup_retention_is_bounded() {
             )
             .unwrap(),
         0,
-        "the never-written rollup table must be gone (schema v6)"
+        "the never-written rollup table is not in the schema"
     );
     let keys: Vec<String> = w
         .conn

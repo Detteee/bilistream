@@ -62,3 +62,11 @@ youtube_quota.json
 /release/
 /scripts/
 /webui/node_modules/
+
+# history v6 fixture and README (legacy-tail b3)
+!src/history/fixtures/
+!src/history/fixtures/*.sqlite
+!src/history/fixtures/README.md
+
+# history rename-aside of a corrupt database, anywhere in the repo
+*.sqlite.corrupt

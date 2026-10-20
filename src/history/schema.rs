@@ -4,14 +4,30 @@
 use rusqlite::{Connection, OpenFlags};
 use std::path::{Path, PathBuf};
 
-pub(crate) const SCHEMA_VERSION: i64 = 6;
+pub(crate) const SCHEMA_VERSION: i64 = 7;
 
-pub(crate) const V1: &str = r#"
-CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL) WITHOUT ROWID;
-CREATE TABLE IF NOT EXISTS boots (
+/// The only older version this build opens: 28a20792's v6. v7 is the same
+/// schema as v6 (the bump only marks the baseline), so a v6 file is upgraded by
+/// setting `user_version` alone, without rewriting any row.
+const UPGRADABLE_VERSION: i64 = 6;
+
+/// The v7 schema: the `sqlite_master` SQL of a v6 database built by
+/// 28a20792's V1..V6 chain, verbatim and in creation order. Statements
+/// rewritten by `ALTER TABLE` keep the text SQLite stored for them (the added
+/// columns appended in place, the renamed `"bili_lives"` quoted). The guard
+/// test compares a fresh file with `fixtures/history-v6-28a20792.sqlite`.
+///
+/// `samples_raw` is a writable view over `sample_frames`: one frame per
+/// timestamp/session instead of one row per metric. Equal extrema are stored
+/// as NULL and reconstructed exactly from sum/count. Sample `session_id` 0
+/// means unknown, never a real `sessions.id`; `legacy_unattributed_before`
+/// marks where such rows (kept from pre-v2 data) end and is still read.
+const V7_BASELINE: &str = r#"
+CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL) WITHOUT ROWID;
+CREATE TABLE boots (
   boot_id INTEGER PRIMARY KEY, node TEXT NOT NULL, started_at INTEGER NOT NULL,
   last_seen_at INTEGER NOT NULL, version TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS sessions (
+CREATE TABLE sessions (
   id INTEGER PRIMARY KEY, eid TEXT NOT NULL UNIQUE,
   node TEXT NOT NULL, boot_id INTEGER NOT NULL, seq INTEGER NOT NULL,
   platform TEXT NOT NULL CHECK (platform IN ('YT','TW','NC')),
@@ -20,209 +36,137 @@ CREATE TABLE IF NOT EXISTS sessions (
   end_reason TEXT CHECK (end_reason IS NULL OR end_reason IN
     ('source_ended','bili_stopped','user_stop','intentional_restart','cluster_handoff','process_restart','aborted')),
   runs INTEGER NOT NULL DEFAULT 0, failures INTEGER NOT NULL DEFAULT 0, stuck INTEGER NOT NULL DEFAULT 0,
-  live_key TEXT,
+  live_key TEXT, area_v2 INTEGER, room INTEGER, pruned INTEGER NOT NULL DEFAULT 0, watched_count INTEGER, watched_at INTEGER, source_id TEXT,
   UNIQUE (node, boot_id, seq));
-CREATE INDEX IF NOT EXISTS sessions_node_time ON sessions (node, started_at);
-CREATE INDEX IF NOT EXISTS sessions_open ON sessions (node) WHERE ended_at IS NULL;
-CREATE TABLE IF NOT EXISTS runs (
+CREATE INDEX sessions_node_time ON sessions (node, started_at);
+CREATE INDEX sessions_open ON sessions (node) WHERE ended_at IS NULL;
+CREATE TABLE runs (
   id INTEGER PRIMARY KEY, eid TEXT NOT NULL UNIQUE,
   session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
   run INTEGER NOT NULL, started_at INTEGER NOT NULL, last_seen_at INTEGER NOT NULL, ended_at INTEGER,
   exit_code INTEGER, success INTEGER, counted_failure INTEGER, diagnostic TEXT, stuck_reason TEXT);
-CREATE INDEX IF NOT EXISTS runs_session ON runs (session_id, started_at);
--- No revenue column, by user decision. LiveTime is kept raw only.
-CREATE TABLE IF NOT EXISTS bili_lives (
-  live_key TEXT PRIMARY KEY, node TEXT NOT NULL, room INTEGER NOT NULL,
-  started_at INTEGER NOT NULL, ended_at INTEGER,
-  summary_state TEXT NOT NULL DEFAULT 'pending' CHECK (summary_state IN ('pending','ok','failed','skipped')),
-  bili_live_time_raw INTEGER, add_fans INTEGER, danmu_num INTEGER, watched_count INTEGER,
-  new_fans_club INTEGER, max_online INTEGER) WITHOUT ROWID;
-CREATE TABLE IF NOT EXISTS samples_raw (
-  metric INTEGER NOT NULL, node TEXT NOT NULL, ts INTEGER NOT NULL, session_id INTEGER,
-  min REAL NOT NULL, max REAL NOT NULL, sum REAL NOT NULL, count INTEGER NOT NULL,
-  PRIMARY KEY (metric, node, ts)) WITHOUT ROWID;
-CREATE TABLE IF NOT EXISTS samples_1m (
-  metric INTEGER NOT NULL, node TEXT NOT NULL, bucket INTEGER NOT NULL, session_id INTEGER,
-  min REAL NOT NULL, max REAL NOT NULL, sum REAL NOT NULL, count INTEGER NOT NULL,
-  PRIMARY KEY (metric, node, bucket)) WITHOUT ROWID;
-CREATE TABLE IF NOT EXISTS samples_1h (
-  metric INTEGER NOT NULL, node TEXT NOT NULL, bucket INTEGER NOT NULL, session_id INTEGER,
-  min REAL NOT NULL, max REAL NOT NULL, sum REAL NOT NULL, count INTEGER NOT NULL,
-  PRIMARY KEY (metric, node, bucket)) WITHOUT ROWID;
-CREATE TABLE IF NOT EXISTS node_segments (
+CREATE INDEX runs_session ON runs (session_id, started_at);
+CREATE TABLE node_segments (
   id INTEGER PRIMARY KEY, eid TEXT NOT NULL UNIQUE, observer TEXT NOT NULL, subject TEXT NOT NULL,
   state TEXT NOT NULL, reason TEXT NOT NULL, started_at INTEGER NOT NULL,
-  last_seen_at INTEGER NOT NULL, ended_at INTEGER);
-CREATE TABLE IF NOT EXISTS events (
+  last_seen_at INTEGER NOT NULL, ended_at INTEGER, initial INTEGER NOT NULL DEFAULT 0, minority INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE events (
   id INTEGER PRIMARY KEY, eid TEXT NOT NULL UNIQUE, at INTEGER NOT NULL, node TEXT NOT NULL,
   kind TEXT NOT NULL, subject TEXT, severity TEXT NOT NULL CHECK (severity IN ('info','warn','error')),
   title TEXT NOT NULL, detail TEXT NOT NULL, session_id INTEGER);
-CREATE INDEX IF NOT EXISTS events_time ON events (at);
-CREATE TABLE IF NOT EXISTS notify_sends (
+CREATE INDEX events_time ON events (at);
+CREATE TABLE notify_sends (
   id INTEGER PRIMARY KEY, eid TEXT NOT NULL UNIQUE, at INTEGER NOT NULL, node TEXT NOT NULL,
   event_key TEXT NOT NULL, phase TEXT NOT NULL, ok INTEGER NOT NULL, code INTEGER,
-  suppressed INTEGER NOT NULL, undelivered INTEGER NOT NULL);
-CREATE INDEX IF NOT EXISTS notify_sends_time ON notify_sends (at);
-"#;
-
-// Samples are time-first for bounded range maintenance. Session 0 means
-// unknown, never a real sessions.id; it also preserves old mixed aggregates
-// without assigning their values to whichever session happened to be last.
-const V2: &str = r#"
-ALTER TABLE sessions ADD COLUMN area_v2 INTEGER;
-ALTER TABLE sessions ADD COLUMN room INTEGER;
-ALTER TABLE sessions ADD COLUMN pruned INTEGER NOT NULL DEFAULT 0;
-ALTER TABLE node_segments ADD COLUMN initial INTEGER NOT NULL DEFAULT 0;
-ALTER TABLE node_segments ADD COLUMN minority INTEGER NOT NULL DEFAULT 0;
+  suppressed INTEGER NOT NULL, undelivered INTEGER NOT NULL, dedup_key TEXT NOT NULL DEFAULT '', mode TEXT, trace_id TEXT, test INTEGER NOT NULL DEFAULT 0);
+CREATE INDEX notify_sends_time ON notify_sends (at);
 CREATE INDEX node_segments_subject_time ON node_segments(subject,started_at);
 CREATE INDEX node_segments_open ON node_segments(observer,subject) WHERE ended_at IS NULL;
 CREATE INDEX sessions_end ON sessions(ended_at) WHERE ended_at IS NOT NULL;
 CREATE INDEX runs_end ON runs(ended_at) WHERE ended_at IS NOT NULL;
 CREATE INDEX events_session_time ON events(session_id,at);
-ALTER TABLE notify_sends ADD COLUMN dedup_key TEXT NOT NULL DEFAULT '';
-ALTER TABLE notify_sends ADD COLUMN mode TEXT;
-ALTER TABLE notify_sends ADD COLUMN trace_id TEXT;
-ALTER TABLE notify_sends ADD COLUMN test INTEGER NOT NULL DEFAULT 0;
-ALTER TABLE bili_lives ADD COLUMN started_by TEXT NOT NULL DEFAULT '';
-ALTER TABLE bili_lives ADD COLUMN summary_phase TEXT NOT NULL DEFAULT 'pending';
-ALTER TABLE bili_lives ADD COLUMN summary_node TEXT;
-ALTER TABLE bili_lives ADD COLUMN summary_at INTEGER NOT NULL DEFAULT 0;
-ALTER TABLE bili_lives ADD COLUMN summary_generation INTEGER NOT NULL DEFAULT 0;
-UPDATE bili_lives SET started_by=node,
- summary_phase=CASE summary_state WHEN 'ok' THEN 'done' ELSE summary_state END;
-CREATE INDEX bili_lives_end ON bili_lives(ended_at);
-
-ALTER TABLE samples_raw RENAME TO samples_raw_v1;
-ALTER TABLE samples_1m RENAME TO samples_1m_v1;
-ALTER TABLE samples_1h RENAME TO samples_1h_v1;
-CREATE TABLE samples_raw (
-  metric INTEGER NOT NULL, node TEXT NOT NULL, ts INTEGER NOT NULL,
-  session_id INTEGER NOT NULL DEFAULT 0,
-  min REAL NOT NULL, max REAL NOT NULL, sum REAL NOT NULL, count INTEGER NOT NULL,
-  PRIMARY KEY(ts,metric,node,session_id)) WITHOUT ROWID;
 CREATE TABLE samples_1m (
   metric INTEGER NOT NULL, node TEXT NOT NULL, bucket INTEGER NOT NULL,
   session_id INTEGER NOT NULL DEFAULT 0,
   min REAL NOT NULL, max REAL NOT NULL, sum REAL NOT NULL, count INTEGER NOT NULL,
   PRIMARY KEY(bucket,metric,node,session_id)) WITHOUT ROWID;
-CREATE TABLE samples_1h (
-  metric INTEGER NOT NULL, node TEXT NOT NULL, bucket INTEGER NOT NULL,
-  session_id INTEGER NOT NULL DEFAULT 0,
-  min REAL NOT NULL, max REAL NOT NULL, sum REAL NOT NULL, count INTEGER NOT NULL,
-  PRIMARY KEY(bucket,metric,node,session_id)) WITHOUT ROWID;
-INSERT INTO samples_raw
- SELECT metric,node,ts,CASE WHEN count>1 AND EXISTS(
-   SELECT 1 FROM sessions s WHERE s.node=r.node AND s.id<>r.session_id
-    AND s.started_at<=r.ts AND coalesce(s.ended_at,r.ts)>=r.ts
- ) THEN 0 ELSE coalesce(session_id,0) END,min,max,sum,count FROM samples_raw_v1 r;
-INSERT INTO samples_1m SELECT metric,node,bucket,0,min,max,sum,count FROM samples_1m_v1;
-INSERT INTO samples_1h SELECT metric,node,bucket,0,min,max,sum,count FROM samples_1h_v1;
-
--- Rebuild only complete recoverable aggregates. A partially pruned minute
--- or a v1 sum that cannot be reconstructed remains a session-unknown row.
-CREATE TEMP TABLE reconstructable AS
- SELECT r.metric,r.node,r.ts-r.ts%60 AS bucket
- FROM samples_raw r JOIN samples_1m_v1 m
-  ON m.metric=r.metric AND m.node=r.node AND m.bucket=r.ts-r.ts%60
- GROUP BY r.metric,r.node,r.ts-r.ts%60
- HAVING sum(r.count)=m.count
-  AND abs(sum(r.sum)-m.sum)<=0.000001*max(1,abs(m.sum))
-  AND min(r.min)=m.min AND max(r.max)=m.max;
-DELETE FROM samples_1m WHERE (metric,node,bucket) IN (SELECT metric,node,bucket FROM reconstructable);
-INSERT INTO samples_1m
- SELECT r.metric,r.node,r.ts-r.ts%60,r.session_id,min(r.min),max(r.max),sum(r.sum),sum(r.count)
- FROM samples_raw r JOIN reconstructable c
-  ON c.metric=r.metric AND c.node=r.node AND c.bucket=r.ts-r.ts%60
- GROUP BY r.metric,r.node,r.ts-r.ts%60,r.session_id;
-INSERT OR REPLACE INTO meta(key,value)
- SELECT 'legacy_unattributed_before',cast(coalesce(max(bucket)+60,0) AS TEXT)
- FROM samples_1m WHERE session_id=0;
-DROP TABLE reconstructable;
-DROP TABLE samples_raw_v1;
-DROP TABLE samples_1m_v1;
-DROP TABLE samples_1h_v1;
-INSERT OR REPLACE INTO meta(key,value)
- SELECT 'session_id_highwater',cast(coalesce(max(id),0) AS TEXT) FROM sessions;
-"#;
-
-/// Store one timestamp/session frame instead of repeating its identity for
-/// five metrics. Equal extrema are represented by NULL and reconstructed
-/// exactly from sum/count; unusual extrema and fractional values stay intact.
-/// The writable view preserves the existing metric-row query/test contract.
-fn compact_raw(conn: &Connection) -> rusqlite::Result<()> {
-    const METRICS: [(i64, &str); 5] = [(1, "b"), (2, "f"), (3, "s"), (10, "o"), (11, "w")];
-    let columns = METRICS
-        .iter()
-        .map(|(_, p)| format!("{p}_min REAL,{p}_max REAL,{p}_sum REAL,{p}_count INTEGER"))
-        .collect::<Vec<_>>()
-        .join(",");
-    conn.execute_batch(&format!(
-        "ALTER TABLE samples_raw RENAME TO samples_raw_v2;
-         CREATE TABLE sample_frames(ts INTEGER NOT NULL,node TEXT NOT NULL,session_id INTEGER NOT NULL DEFAULT 0,
-         {columns},PRIMARY KEY(ts,node,session_id)) WITHOUT ROWID;"
-    ))?;
-    let projections = METRICS
-        .iter()
-        .map(|(metric, p)| {
-            format!(
-        "SELECT {metric} AS metric,node,ts,session_id,coalesce({p}_min,{p}_sum/{p}_count) AS min,
-         coalesce({p}_max,{p}_sum/{p}_count) AS max,{p}_sum AS sum,{p}_count AS count
-         FROM sample_frames WHERE {p}_count IS NOT NULL"
-    )
-        })
-        .collect::<Vec<_>>()
-        .join(" UNION ALL ");
-    conn.execute_batch(&format!("CREATE VIEW samples_raw AS {projections}"))?;
-    for (metric, p) in METRICS {
-        conn.execute_batch(&format!(
-            "CREATE TRIGGER samples_raw_insert_{p} INSTEAD OF INSERT ON samples_raw WHEN NEW.metric={metric}
+CREATE TABLE sample_frames(ts INTEGER NOT NULL,node TEXT NOT NULL,session_id INTEGER NOT NULL DEFAULT 0,
+         b_min REAL,b_max REAL,b_sum REAL,b_count INTEGER,f_min REAL,f_max REAL,f_sum REAL,f_count INTEGER,s_min REAL,s_max REAL,s_sum REAL,s_count INTEGER,o_min REAL,o_max REAL,o_sum REAL,o_count INTEGER,w_min REAL,w_max REAL,w_sum REAL,w_count INTEGER,PRIMARY KEY(ts,node,session_id)) WITHOUT ROWID;
+CREATE VIEW samples_raw AS SELECT 1 AS metric,node,ts,session_id,coalesce(b_min,b_sum/b_count) AS min,
+         coalesce(b_max,b_sum/b_count) AS max,b_sum AS sum,b_count AS count
+         FROM sample_frames WHERE b_count IS NOT NULL UNION ALL SELECT 2 AS metric,node,ts,session_id,coalesce(f_min,f_sum/f_count) AS min,
+         coalesce(f_max,f_sum/f_count) AS max,f_sum AS sum,f_count AS count
+         FROM sample_frames WHERE f_count IS NOT NULL UNION ALL SELECT 3 AS metric,node,ts,session_id,coalesce(s_min,s_sum/s_count) AS min,
+         coalesce(s_max,s_sum/s_count) AS max,s_sum AS sum,s_count AS count
+         FROM sample_frames WHERE s_count IS NOT NULL UNION ALL SELECT 10 AS metric,node,ts,session_id,coalesce(o_min,o_sum/o_count) AS min,
+         coalesce(o_max,o_sum/o_count) AS max,o_sum AS sum,o_count AS count
+         FROM sample_frames WHERE o_count IS NOT NULL UNION ALL SELECT 11 AS metric,node,ts,session_id,coalesce(w_min,w_sum/w_count) AS min,
+         coalesce(w_max,w_sum/w_count) AS max,w_sum AS sum,w_count AS count
+         FROM sample_frames WHERE w_count IS NOT NULL;
+CREATE TRIGGER samples_raw_insert_b INSTEAD OF INSERT ON samples_raw WHEN NEW.metric=1
              BEGIN
-             INSERT INTO sample_frames(ts,node,session_id,{p}_min,{p}_max,{p}_sum,{p}_count)
+             INSERT INTO sample_frames(ts,node,session_id,b_min,b_max,b_sum,b_count)
              VALUES(NEW.ts,NEW.node,coalesce(NEW.session_id,0),nullif(NEW.min,1.0*NEW.sum/NEW.count),nullif(NEW.max,1.0*NEW.sum/NEW.count),NEW.sum,NEW.count)
              ON CONFLICT(ts,node,session_id) DO UPDATE SET
-             {p}_min=nullif(coalesce(min(coalesce({p}_min,{p}_sum/{p}_count),NEW.min),NEW.min),(coalesce({p}_sum,0)+NEW.sum)/(coalesce({p}_count,0)+NEW.count)),
-             {p}_max=nullif(coalesce(max(coalesce({p}_max,{p}_sum/{p}_count),NEW.max),NEW.max),(coalesce({p}_sum,0)+NEW.sum)/(coalesce({p}_count,0)+NEW.count)),
-             {p}_sum=coalesce({p}_sum,0)+NEW.sum,{p}_count=coalesce({p}_count,0)+NEW.count;
+             b_min=nullif(coalesce(min(coalesce(b_min,b_sum/b_count),NEW.min),NEW.min),(coalesce(b_sum,0)+NEW.sum)/(coalesce(b_count,0)+NEW.count)),
+             b_max=nullif(coalesce(max(coalesce(b_max,b_sum/b_count),NEW.max),NEW.max),(coalesce(b_sum,0)+NEW.sum)/(coalesce(b_count,0)+NEW.count)),
+             b_sum=coalesce(b_sum,0)+NEW.sum,b_count=coalesce(b_count,0)+NEW.count;
              END;
-             CREATE TRIGGER samples_raw_delete_{p} INSTEAD OF DELETE ON samples_raw WHEN OLD.metric={metric}
+CREATE TRIGGER samples_raw_delete_b INSTEAD OF DELETE ON samples_raw WHEN OLD.metric=1
              BEGIN
-             UPDATE sample_frames SET {p}_min=NULL,{p}_max=NULL,{p}_sum=NULL,{p}_count=NULL
+             UPDATE sample_frames SET b_min=NULL,b_max=NULL,b_sum=NULL,b_count=NULL
              WHERE ts=OLD.ts AND node=OLD.node AND session_id=OLD.session_id;
              DELETE FROM sample_frames WHERE ts=OLD.ts AND node=OLD.node AND session_id=OLD.session_id
              AND b_count IS NULL AND f_count IS NULL AND s_count IS NULL AND o_count IS NULL AND w_count IS NULL;
-             END;"
-        ))?;
-    }
-    conn.execute_batch(
-        "INSERT INTO samples_raw SELECT * FROM samples_raw_v2; DROP TABLE samples_raw_v2;
-         ALTER TABLE sessions ADD COLUMN watched_count INTEGER;
-         ALTER TABLE sessions ADD COLUMN watched_at INTEGER;
-         UPDATE sessions SET
-          watched_count=(SELECT cast(max AS INTEGER) FROM samples_raw r WHERE r.session_id=sessions.id AND r.metric=11 AND r.ts>=sessions.started_at AND r.ts<=coalesce(sessions.ended_at,sessions.last_seen_at) ORDER BY ts DESC LIMIT 1),
-          watched_at=(SELECT max(ts) FROM samples_raw r WHERE r.session_id=sessions.id AND r.metric=11 AND r.ts>=sessions.started_at AND r.ts<=coalesce(sessions.ended_at,sessions.last_seen_at));"
-    )
-}
-
-/// v6 removes the three pieces of naming/schema debt that survived the
-/// statistics rewrite:
-///
-/// * `samples_1h` was created by V1, rebuilt by V2, pruned every tick and
-///   listed in `clear()` — but never written. Dropped; V1/V2 are left alone so
-///   a fresh database still replays the historical migration chain.
-/// * `summary_state` (`pending`/`ok`/`failed`/`skipped`) and `summary_phase`
-///   (`pending`/`claimed`/`failed`/`done`/`skipped`) were two spellings of one
-///   lifecycle, written by different paths and able to disagree. The phase is
-///   the only stored authority now; the read-side outcome (`done → ok`,
-///   `claimed → pending`) is derived in `query::live_row`.
-/// * `bili_live_time_raw` did not say what its number means. It is B站's
-///   `LiveTime` in seconds, so the column is `live_time_secs` (the relay
-///   session clock remains the duration authority).
-///
-/// Reconciliation for existing rows is data-preserving and deterministic: an
-/// observed `failed`/`skipped` state wins (a failure is not undone by a claim),
-/// `ok` upgrades a pending/claimed phase to `done`, otherwise the phase wins.
-const V6: &str = r#"
-CREATE TABLE bili_lives_v6 (
+             END;
+CREATE TRIGGER samples_raw_insert_f INSTEAD OF INSERT ON samples_raw WHEN NEW.metric=2
+             BEGIN
+             INSERT INTO sample_frames(ts,node,session_id,f_min,f_max,f_sum,f_count)
+             VALUES(NEW.ts,NEW.node,coalesce(NEW.session_id,0),nullif(NEW.min,1.0*NEW.sum/NEW.count),nullif(NEW.max,1.0*NEW.sum/NEW.count),NEW.sum,NEW.count)
+             ON CONFLICT(ts,node,session_id) DO UPDATE SET
+             f_min=nullif(coalesce(min(coalesce(f_min,f_sum/f_count),NEW.min),NEW.min),(coalesce(f_sum,0)+NEW.sum)/(coalesce(f_count,0)+NEW.count)),
+             f_max=nullif(coalesce(max(coalesce(f_max,f_sum/f_count),NEW.max),NEW.max),(coalesce(f_sum,0)+NEW.sum)/(coalesce(f_count,0)+NEW.count)),
+             f_sum=coalesce(f_sum,0)+NEW.sum,f_count=coalesce(f_count,0)+NEW.count;
+             END;
+CREATE TRIGGER samples_raw_delete_f INSTEAD OF DELETE ON samples_raw WHEN OLD.metric=2
+             BEGIN
+             UPDATE sample_frames SET f_min=NULL,f_max=NULL,f_sum=NULL,f_count=NULL
+             WHERE ts=OLD.ts AND node=OLD.node AND session_id=OLD.session_id;
+             DELETE FROM sample_frames WHERE ts=OLD.ts AND node=OLD.node AND session_id=OLD.session_id
+             AND b_count IS NULL AND f_count IS NULL AND s_count IS NULL AND o_count IS NULL AND w_count IS NULL;
+             END;
+CREATE TRIGGER samples_raw_insert_s INSTEAD OF INSERT ON samples_raw WHEN NEW.metric=3
+             BEGIN
+             INSERT INTO sample_frames(ts,node,session_id,s_min,s_max,s_sum,s_count)
+             VALUES(NEW.ts,NEW.node,coalesce(NEW.session_id,0),nullif(NEW.min,1.0*NEW.sum/NEW.count),nullif(NEW.max,1.0*NEW.sum/NEW.count),NEW.sum,NEW.count)
+             ON CONFLICT(ts,node,session_id) DO UPDATE SET
+             s_min=nullif(coalesce(min(coalesce(s_min,s_sum/s_count),NEW.min),NEW.min),(coalesce(s_sum,0)+NEW.sum)/(coalesce(s_count,0)+NEW.count)),
+             s_max=nullif(coalesce(max(coalesce(s_max,s_sum/s_count),NEW.max),NEW.max),(coalesce(s_sum,0)+NEW.sum)/(coalesce(s_count,0)+NEW.count)),
+             s_sum=coalesce(s_sum,0)+NEW.sum,s_count=coalesce(s_count,0)+NEW.count;
+             END;
+CREATE TRIGGER samples_raw_delete_s INSTEAD OF DELETE ON samples_raw WHEN OLD.metric=3
+             BEGIN
+             UPDATE sample_frames SET s_min=NULL,s_max=NULL,s_sum=NULL,s_count=NULL
+             WHERE ts=OLD.ts AND node=OLD.node AND session_id=OLD.session_id;
+             DELETE FROM sample_frames WHERE ts=OLD.ts AND node=OLD.node AND session_id=OLD.session_id
+             AND b_count IS NULL AND f_count IS NULL AND s_count IS NULL AND o_count IS NULL AND w_count IS NULL;
+             END;
+CREATE TRIGGER samples_raw_insert_o INSTEAD OF INSERT ON samples_raw WHEN NEW.metric=10
+             BEGIN
+             INSERT INTO sample_frames(ts,node,session_id,o_min,o_max,o_sum,o_count)
+             VALUES(NEW.ts,NEW.node,coalesce(NEW.session_id,0),nullif(NEW.min,1.0*NEW.sum/NEW.count),nullif(NEW.max,1.0*NEW.sum/NEW.count),NEW.sum,NEW.count)
+             ON CONFLICT(ts,node,session_id) DO UPDATE SET
+             o_min=nullif(coalesce(min(coalesce(o_min,o_sum/o_count),NEW.min),NEW.min),(coalesce(o_sum,0)+NEW.sum)/(coalesce(o_count,0)+NEW.count)),
+             o_max=nullif(coalesce(max(coalesce(o_max,o_sum/o_count),NEW.max),NEW.max),(coalesce(o_sum,0)+NEW.sum)/(coalesce(o_count,0)+NEW.count)),
+             o_sum=coalesce(o_sum,0)+NEW.sum,o_count=coalesce(o_count,0)+NEW.count;
+             END;
+CREATE TRIGGER samples_raw_delete_o INSTEAD OF DELETE ON samples_raw WHEN OLD.metric=10
+             BEGIN
+             UPDATE sample_frames SET o_min=NULL,o_max=NULL,o_sum=NULL,o_count=NULL
+             WHERE ts=OLD.ts AND node=OLD.node AND session_id=OLD.session_id;
+             DELETE FROM sample_frames WHERE ts=OLD.ts AND node=OLD.node AND session_id=OLD.session_id
+             AND b_count IS NULL AND f_count IS NULL AND s_count IS NULL AND o_count IS NULL AND w_count IS NULL;
+             END;
+CREATE TRIGGER samples_raw_insert_w INSTEAD OF INSERT ON samples_raw WHEN NEW.metric=11
+             BEGIN
+             INSERT INTO sample_frames(ts,node,session_id,w_min,w_max,w_sum,w_count)
+             VALUES(NEW.ts,NEW.node,coalesce(NEW.session_id,0),nullif(NEW.min,1.0*NEW.sum/NEW.count),nullif(NEW.max,1.0*NEW.sum/NEW.count),NEW.sum,NEW.count)
+             ON CONFLICT(ts,node,session_id) DO UPDATE SET
+             w_min=nullif(coalesce(min(coalesce(w_min,w_sum/w_count),NEW.min),NEW.min),(coalesce(w_sum,0)+NEW.sum)/(coalesce(w_count,0)+NEW.count)),
+             w_max=nullif(coalesce(max(coalesce(w_max,w_sum/w_count),NEW.max),NEW.max),(coalesce(w_sum,0)+NEW.sum)/(coalesce(w_count,0)+NEW.count)),
+             w_sum=coalesce(w_sum,0)+NEW.sum,w_count=coalesce(w_count,0)+NEW.count;
+             END;
+CREATE TRIGGER samples_raw_delete_w INSTEAD OF DELETE ON samples_raw WHEN OLD.metric=11
+             BEGIN
+             UPDATE sample_frames SET w_min=NULL,w_max=NULL,w_sum=NULL,w_count=NULL
+             WHERE ts=OLD.ts AND node=OLD.node AND session_id=OLD.session_id;
+             DELETE FROM sample_frames WHERE ts=OLD.ts AND node=OLD.node AND session_id=OLD.session_id
+             AND b_count IS NULL AND f_count IS NULL AND s_count IS NULL AND o_count IS NULL AND w_count IS NULL;
+             END;
+CREATE INDEX sessions_start ON sessions(started_at);
+CREATE INDEX sample_frames_session ON sample_frames(session_id, ts);
+CREATE INDEX node_segments_start ON node_segments(started_at);
+CREATE TABLE "bili_lives" (
   live_key TEXT PRIMARY KEY, node TEXT NOT NULL, room INTEGER NOT NULL,
   started_at INTEGER NOT NULL, ended_at INTEGER,
   started_by TEXT NOT NULL DEFAULT '',
@@ -232,24 +176,8 @@ CREATE TABLE bili_lives_v6 (
   summary_generation INTEGER NOT NULL DEFAULT 0,
   live_time_secs INTEGER, add_fans INTEGER, danmu_num INTEGER,
   watched_count INTEGER, new_fans_club INTEGER, max_online INTEGER) WITHOUT ROWID;
-INSERT INTO bili_lives_v6
-  (live_key,node,room,started_at,ended_at,started_by,summary_phase,summary_node,
-   summary_at,summary_generation,live_time_secs,add_fans,danmu_num,watched_count,
-   new_fans_club,max_online)
-SELECT live_key,node,room,started_at,ended_at,started_by,
-  CASE
-    WHEN summary_state IN ('failed','skipped') THEN summary_state
-    WHEN summary_state = 'ok' AND summary_phase IN ('pending','claimed') THEN 'done'
-    WHEN summary_phase IN ('pending','claimed','failed','done','skipped') THEN summary_phase
-    ELSE 'pending'
-  END,
-  summary_node,summary_at,summary_generation,bili_live_time_raw,add_fans,danmu_num,
-  watched_count,new_fans_club,max_online
-FROM bili_lives;
-DROP TABLE bili_lives;
-ALTER TABLE bili_lives_v6 RENAME TO bili_lives;
 CREATE INDEX bili_lives_end ON bili_lives(ended_at);
-DROP TABLE IF EXISTS samples_1h;
+INSERT INTO meta(key,value) VALUES ('legacy_unattributed_before','0'),('session_id_highwater','0');
 "#;
 
 fn pragmas(conn: &Connection) -> rusqlite::Result<()> {
@@ -297,19 +225,80 @@ fn is_corrupt(error: &rusqlite::Error) -> bool {
     )
 }
 
+/// A file this build will not touch. Not a corruption code, so `open_rw`
+/// never renames it aside.
+fn refuse(message: String) -> rusqlite::Error {
+    rusqlite::Error::SqliteFailure(
+        rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_READONLY),
+        Some(message),
+    )
+}
+
+/// What the checkpointed main file says, read with plain file I/O.
+enum Probe {
+    /// No file, a short file, or not a SQLite header: leave it to the
+    /// normal open (which creates, or renames a corrupt file aside).
+    Open,
+    Refuse(rusqlite::Error),
+}
+
+/// Decides refusals from the main file's 100-byte header and the page-1
+/// `sqlite_master` b-tree header, before SQLite opens anything. Any SQLite
+/// connection, even a read-only one, would read a crash-left `-wal`, may
+/// create or write `-shm`, and on close checkpoints the WAL into the main
+/// file. Reading the bytes directly leaves the main file, `-wal` and `-shm`
+/// exactly as they were. The header can lag frames still in the WAL;
+/// refusing on the checkpointed version is the conservative choice, and
+/// accepted files are re-checked through the WAL by the normal open below.
+fn probe_header(path: &Path) -> Probe {
+    use std::io::Read;
+    let mut header = [0u8; 108];
+    let read = std::fs::File::open(path).and_then(|mut f| f.read_exact(&mut header));
+    if read.is_err() || &header[..16] != b"SQLite format 3\0" {
+        return Probe::Open;
+    }
+    let version = i64::from(u32::from_be_bytes([
+        header[60], header[61], header[62], header[63],
+    ]));
+    // Page 1 holds the root of `sqlite_master`: an empty schema is a leaf
+    // table page (0x0D) with no cells.
+    let has_schema = header[100] != 0x0D || u16::from_be_bytes([header[103], header[104]]) != 0;
+    match refusal(version, has_schema) {
+        Some(error) => Probe::Refuse(error),
+        None => Probe::Open,
+    }
+}
+
+fn refusal(version: i64, has_schema: bool) -> Option<rusqlite::Error> {
+    match version {
+        0 if has_schema => Some(refuse(
+            "统计数据库没有版本号，无法识别；请删除该统计数据库后重新创建".into(),
+        )),
+        0 | UPGRADABLE_VERSION | SCHEMA_VERSION => None,
+        v if v > SCHEMA_VERSION => Some(refuse("统计数据库版本较新".into())),
+        v => Some(refuse(format!(
+            "统计数据库版本过旧 (v{v})，本版本只能升级 v6；请先用上一版本打开一次完成升级，或删除该统计数据库后重新创建"
+        ))),
+    }
+}
+
 fn open_rw_once(path: &Path) -> rusqlite::Result<Connection> {
+    if let Probe::Refuse(error) = probe_header(path) {
+        return Err(error);
+    }
     let conn = Connection::open(path)?;
     let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+    // Same rules again on the WAL-applied view (the header probe only saw
+    // the checkpointed file).
+    let has_schema = version == 0
+        && conn.query_row("SELECT count(*) FROM sqlite_master", [], |r| {
+            r.get::<_, i64>(0)
+        })? > 0;
+    if let Some(error) = refusal(version, has_schema) {
+        return Err(error);
+    }
     if version == 0 {
-        let tables: i64 = conn.query_row("SELECT count(*) FROM sqlite_master", [], |r| r.get(0))?;
-        if tables == 0 {
-            conn.execute_batch("PRAGMA auto_vacuum=INCREMENTAL;")?;
-        }
-    } else if version > SCHEMA_VERSION {
-        return Err(rusqlite::Error::SqliteFailure(
-            rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_READONLY),
-            Some("统计数据库版本较新".into()),
-        ));
+        conn.execute_batch("PRAGMA auto_vacuum=INCREMENTAL;")?;
     }
     pragmas(&conn)?;
     // Reading the header alone misses damaged table/index pages. Run this
@@ -328,31 +317,7 @@ fn open_rw_once(path: &Path) -> rusqlite::Result<Connection> {
     if version < SCHEMA_VERSION {
         let tx = conn.unchecked_transaction()?;
         if version == 0 {
-            tx.execute_batch(V1)?;
-        }
-        if version <= 1 {
-            tx.execute_batch(V2)?;
-        }
-        if version <= 2 {
-            compact_raw(&tx)?;
-        }
-        if version <= 3 {
-            tx.execute_batch("ALTER TABLE sessions ADD COLUMN source_id TEXT;")?;
-        }
-        if version <= 4 {
-            // The read path ranges on `sessions.started_at`, filters rollups by
-            // `sample_frames.session_id` and ranges on
-            // `node_segments.started_at`; without these, every sessions page,
-            // session-filtered sample scan and node timeline is a full scan
-            // plus a temporary sort over a table capped at `event_rows`.
-            tx.execute_batch(
-                "CREATE INDEX IF NOT EXISTS sessions_start ON sessions(started_at);
-                 CREATE INDEX IF NOT EXISTS sample_frames_session ON sample_frames(session_id, ts);
-                 CREATE INDEX IF NOT EXISTS node_segments_start ON node_segments(started_at);",
-            )?;
-        }
-        if version <= 5 {
-            tx.execute_batch(V6)?;
+            tx.execute_batch(V7_BASELINE)?;
         }
         tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         tx.commit()?;
