@@ -3660,6 +3660,11 @@ fn is_multi_channel_stream(title: &str) -> bool {
 /// Check if multiple channel names from channels.json appear in the title
 fn has_multiple_channels_in_title(title: &str) -> Result<bool, Box<dyn std::error::Error>> {
     let channels_json: serde_json::Value = crate::storage::read_document("channels.json")?;
+    if let Err(error) = crate::storage::reject_legacy_channels(&channels_json) {
+        // Fixed text naming the key only; never a channel name.
+        tracing::warn!("多频道标题检测已跳过: {error}");
+        return Err(error.into());
+    }
 
     let mut found_channels = 0;
     let title_lower = title.to_lowercase();
@@ -3695,36 +3700,6 @@ fn has_multiple_channels_in_title(title: &str) -> Result<bool, Box<dyn std::erro
                 // Early return: if we found 2+ channels, it's definitely multi-channel
                 if found_channels >= 2 {
                     return Ok(true);
-                }
-            }
-        }
-    }
-
-    // Legacy support: Check old format YT_channels[].channel_name
-    if let Some(yt_channels) = channels_json.get("YT_channels").and_then(|v| v.as_array()) {
-        for channel in yt_channels {
-            if let Some(name) = channel.get("channel_name").and_then(|v| v.as_str()) {
-                if title_lower.contains(&name.to_lowercase()) {
-                    found_channels += 1;
-                    // Early return for legacy format too
-                    if found_channels >= 2 {
-                        return Ok(true);
-                    }
-                }
-            }
-        }
-    }
-
-    // Legacy support: Check old format TW_channels[].channel_name
-    if let Some(tw_channels) = channels_json.get("TW_channels").and_then(|v| v.as_array()) {
-        for channel in tw_channels {
-            if let Some(name) = channel.get("channel_name").and_then(|v| v.as_str()) {
-                if title_lower.contains(&name.to_lowercase()) {
-                    found_channels += 1;
-                    // Early return for legacy format too
-                    if found_channels >= 2 {
-                        return Ok(true);
-                    }
                 }
             }
         }

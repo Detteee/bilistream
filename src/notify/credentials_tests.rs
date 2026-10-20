@@ -88,7 +88,7 @@ fn save_req(base: Option<u64>, appid: Option<&str>, secret: Option<&str>) -> Cre
 }
 
 #[test]
-fn seeding_records_the_appid_the_openid_was_bound_under() {
+fn seeding_never_adopts_an_appid_less_pre_f_binding() {
     let a = temp();
     assert!(
         !seed_if_needed(&a.1, "a", NOW, false).unwrap(),
@@ -96,11 +96,22 @@ fn seeding_records_the_appid_the_openid_was_bound_under() {
     );
     assert!(export(&a.1).unwrap().is_none(), "never a partial set");
     configure(&a.1, APPID, SECRET);
+    // Pre-F shape: an openid bound with no credential set recording its AppID.
     bind(&a.1, "a");
+    assert!(load_meta(&a.1).unwrap().openid_rebind(true, APPID));
+    assert_eq!(view(&a.1).unwrap()["openid_rebind"], true);
     assert!(seed_if_needed(&a.1, "a", NOW, false).unwrap());
     assert!(!seed_if_needed(&a.1, "a", NOW, false).unwrap(), "once");
     let meta = load_meta(&a.1).unwrap();
     assert_eq!(meta.generation, 1);
+    assert_eq!(meta.openid_appid, "", "the local AppID is never assumed");
+    assert!(meta.openid_rebind(true, APPID));
+    assert_eq!(view(&a.1).unwrap()["openid_rebind"], true);
+    let worker = crate::notify::worker::Worker::new(a.1.clone(), "a".into());
+    assert_eq!(worker.status(NOW, &Default::default())["capable"], false);
+    // An explicit bind under the current AppID makes it current again.
+    bind(&a.1, "a");
+    let meta = load_meta(&a.1).unwrap();
     assert_eq!(meta.openid_appid, APPID);
     assert!(!meta.openid_rebind(true, APPID));
 }
@@ -244,12 +255,16 @@ async fn binding_revision_order_keeps_the_winning_openids_appid_in_both_sync_ord
         for old_binding_first in [false, true] {
             let (a, b) = (temp(), temp());
             configure(&a.1, APPID, SECRET);
-            // Pre-F history: many binds, then seed generation1. Its binding
-            // revision can be higher than a newer credentials generation.
+            // Many binds under generation 1: the binding revision can be
+            // higher than a newer credentials generation elsewhere.
             for _ in 0..6 {
                 bind(&a.1, "a");
             }
-            seed_if_needed(&a.1, "a", NOW, false).unwrap();
+            a.1.write(
+                CREDENTIALS_RECORD,
+                serde_json::json!({"generation": 1, "openid_appid": APPID, "updated_by": "a", "updated_at": NOW}),
+            )
+            .unwrap();
             configure(&b.1, other_appid, SECRET);
             write_openid(
                 &b.1,
@@ -401,11 +416,13 @@ fn a_legacy_pull_gets_the_original_openid_shape_without_synced_credentials() {
     assert_eq!(modern.credentials.as_ref().unwrap().appsecret, SECRET);
 }
 
-fn binding_before_seed() -> TestStore {
+/// A current-shape source: seeded set, then one bind recording its AppID.
+fn bound_source() -> TestStore {
     let source = temp();
     configure(&source.1, APPID, SECRET);
-    bind(&source.1, "jp");
     seed_if_needed(&source.1, "ny", NOW, false).unwrap();
+    bind(&source.1, "jp");
+    assert_eq!(load_meta(&source.1).unwrap().openid_appid, APPID);
     source
 }
 
@@ -425,13 +442,13 @@ fn document_state(store: &Store, name: &str) -> Option<serde_json::Value> {
 }
 
 #[test]
-fn same_binding_full_copy_completes_a_legacy_binding_on_a_blank_receiver() {
-    let source = binding_before_seed();
+fn a_binding_that_arrived_without_its_appid_stays_rebind_after_the_full_copy() {
+    let source = bound_source();
     let receiver = temp();
     let full = export_copy(&source.1).unwrap();
-    let mut legacy = full.clone();
-    legacy.credentials = None;
-    let accepted = crate::notify::store::accept_copy_as(&receiver.1, &legacy, None, NOW).unwrap();
+    let mut bare = full.clone();
+    bare.credentials = None;
+    let accepted = crate::notify::store::accept_copy_as(&receiver.1, &bare, None, NOW).unwrap();
     assert!(accepted.applied);
     let binding = load_openid(&receiver.1).unwrap();
     assert_eq!(binding.revision, 1);
@@ -439,12 +456,13 @@ fn same_binding_full_copy_completes_a_legacy_binding_on_a_blank_receiver() {
     assert_eq!(load_meta(&receiver.1).unwrap().generation, 0);
     assert!(appid(&receiver.1).is_empty());
 
+    // The same binding again, now with the set: the set is adopted, but the
+    // binding's unknown association is never filled in from a peer copy.
     let accepted = crate::notify::store::accept_copy_as(&receiver.1, &full, None, NOW + 1).unwrap();
     assert!(accepted.applied);
-    assert_eq!(
-        load_meta(&receiver.1).unwrap(),
-        load_meta(&source.1).unwrap()
-    );
+    let meta = load_meta(&receiver.1).unwrap();
+    assert_eq!(meta.generation, load_meta(&source.1).unwrap().generation);
+    assert_eq!(meta.openid_appid, "");
     assert_eq!(
         load_openid(&receiver.1).unwrap(),
         binding,
@@ -452,7 +470,7 @@ fn same_binding_full_copy_completes_a_legacy_binding_on_a_blank_receiver() {
     );
     assert_eq!(appid(&receiver.1), APPID);
     assert_eq!(secret(&receiver.1).as_deref(), Some(SECRET));
-    assert_eq!(view(&receiver.1).unwrap()["openid_rebind"], false);
+    assert_eq!(view(&receiver.1).unwrap()["openid_rebind"], true);
     assert!(
         !load_config(&receiver.1).unwrap().0.enabled,
         "ca stays disabled"
@@ -480,13 +498,13 @@ fn same_binding_full_copy_completes_a_legacy_binding_on_a_blank_receiver() {
 }
 
 #[tokio::test]
-async fn same_binding_retry_repairs_only_unknown_metadata_and_reports_a_pull_change() {
-    let source = binding_before_seed();
+async fn a_pull_never_repairs_an_unknown_binding_association() {
+    let source = bound_source();
     let receiver = temp();
     let full = export_copy(&source.1).unwrap();
     crate::notify::store::accept_copy_as(&receiver.1, &full, None, NOW).unwrap();
-    // Persist the exact deployment failure: values and keys are current,
-    // but the earlier legacy copy left the binding's association unknown.
+    assert_eq!(view(&receiver.1).unwrap()["openid_rebind"], false);
+    // Values and keys are current, but the binding's association is unknown.
     set_binding_association(&receiver.1, "");
     let before = load_meta(&receiver.1).unwrap();
     let binding = load_openid(&receiver.1).unwrap();
@@ -500,14 +518,11 @@ async fn same_binding_retry_repairs_only_unknown_metadata_and_reports_a_pull_cha
         .revision;
     assert_eq!(view(&receiver.1).unwrap()["openid_rebind"], true);
     let cluster = MemCluster::new(&[("jp", source.1.clone()), ("ca", receiver.1.clone())]);
-
     assert!(
-        pull_all(&receiver.1, &cluster.link("ca")).await.unwrap(),
-        "metadata-only repair must report applied so the worker reloads"
+        !pull_all(&receiver.1, &cluster.link("ca")).await.unwrap(),
+        "nothing is adopted from the peer"
     );
-    let mut expected = before;
-    expected.openid_appid = APPID.into();
-    assert_eq!(load_meta(&receiver.1).unwrap(), expected);
+    assert_eq!(load_meta(&receiver.1).unwrap(), before);
     assert_eq!(load_openid(&receiver.1).unwrap(), binding);
     assert_eq!(
         document_state(&receiver.1, crate::notify::store::CONFIG_RECORD),
@@ -524,28 +539,15 @@ async fn same_binding_retry_repairs_only_unknown_metadata_and_reports_a_pull_cha
             .unwrap()
             .unwrap()
             .revision,
-        revision + 1
+        revision
     );
-    assert_eq!(view(&receiver.1).unwrap()["openid_rebind"], false);
-    assert!(
-        !pull_all(&receiver.1, &cluster.link("ca")).await.unwrap(),
-        "repair is idempotent"
-    );
-    assert_eq!(
-        receiver
-            .1
-            .read(CREDENTIALS_RECORD)
-            .unwrap()
-            .unwrap()
-            .revision,
-        revision + 1
-    );
+    assert_eq!(view(&receiver.1).unwrap()["openid_rebind"], true);
 }
 
 #[test]
 fn same_binding_repair_never_relabels_other_bindings_or_known_associations() {
     use crate::notify::store::CopyState;
-    let source = binding_before_seed();
+    let source = bound_source();
     let full = export_copy(&source.1).unwrap();
     for case in [
         "different_openid",
@@ -621,8 +623,12 @@ fn an_openid_bound_under_another_appid_is_reported_as_rebind_and_hidden() {
         "retain the cleared binding's cause"
     );
     assert!(
-        !CredentialsMeta::default().openid_rebind(true, APPID2),
-        "legacy data stays valid"
+        CredentialsMeta::default().openid_rebind(true, APPID2),
+        "a binding without a recorded AppID (pre-F) is rebind, never trusted"
+    );
+    assert!(
+        !CredentialsMeta::default().openid_rebind(false, APPID2),
+        "nothing bound, nothing recorded: not rebind"
     );
     // A peer set whose openid_appid differs from the local AppID: write the
     // AppID behind the set's back (an older node's local save).

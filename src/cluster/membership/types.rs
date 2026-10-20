@@ -704,16 +704,17 @@ impl Finish {
             };
         };
         match &self.removal_safety {
-            // Legacy FINISH already binds the irreversible decision. A source
-            // receipt inside that decision is durable stop proof even before
-            // the explicit removal_safety field was introduced.
+            // A target receipt inside the decision with no removal_safety is
+            // the FINISH shape stored before 0dd9ec5 (2026-10-02). `sign`
+            // always records that receipt as Prepared, so no current build
+            // writes it; leftovers are refused by name.
             None if self
                 .decision
                 .prepares
                 .iter()
                 .any(|r| &r.proof.signer == target_member_id) =>
             {
-                Ok(())
+                Err(legacy_remove_finish(&self.decision.intent.operation_id))
             }
             Some(RemovalSafety::Prepared { receipt })
                 if &receipt.proof.signer == target_member_id =>
@@ -767,6 +768,22 @@ impl Finish {
             &self.proof,
         )
     }
+}
+
+/// A Remove FINISH without `removal_safety`: the pre-0dd9ec5 shape. Names the
+/// operation only; never the receipts, member ids or signatures it carries.
+pub(crate) fn legacy_remove_finish(operation_id: &str) -> io::Error {
+    let operation = if validate_operation_id(operation_id).is_ok() {
+        operation_id
+    } else {
+        "（标识无效）"
+    };
+    io::Error::new(
+        io::ErrorKind::InvalidInput,
+        format!(
+            "成员完成记录（操作 {operation}）是 2026-10-02 前的旧格式：移除节点但缺少 removal_safety，本版本不再接受。该记录不能作为离开节点的停机证明；请恢复离开节点的连接后再切换"
+        ),
+    )
 }
 
 fn conflict_source_proof() -> io::Error {

@@ -825,11 +825,29 @@ async fn durable_join_hold_blocks_monitoring_before_the_cluster_enabled_shortcut
     assert!(reason(node.store.clone(), cfg.clone()).await);
     setup(&node, &cookie, false, "hold", 0).await;
     assert!(!reason(node.store.clone(), cfg.clone()).await);
-    // A legacy enabled topology without an identity stays held after startup.
+    // A legacy enabled topology without local state refuses to start, and
+    // the monitoring fence stays closed for it regardless.
     let legacy = Node::new("legacy", Some("pw")).await;
     legacy
         .store
         .write("config.json", json!({"cluster": {"enabled": true}}))
+        .unwrap();
+    let error = legacy.membership().initialize().unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        crate::cluster::membership::LEGACY_TOPOLOGY_ERROR
+    );
+    assert!(legacy.store.read("cluster-local").unwrap().is_none());
+    assert!(!reason(legacy.store.clone(), cfg.clone()).await);
+    // A held lifecycle stored by 28a20792 still loads and still blocks.
+    legacy
+        .store
+        .write(
+            "cluster-local",
+            json!({"version": crate::cluster::membership::PROTOCOL, "lifecycle": "incompatible_held",
+                   "descriptor": null, "hold": "incompatible", "reservation": null, "pairing": null,
+                   "setup_operation": null, "setup_intent": null, "removed_sources": {}}),
+        )
         .unwrap();
     legacy.membership().initialize().unwrap();
     assert_eq!(

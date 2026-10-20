@@ -1223,10 +1223,18 @@ pub async fn stop_local_execution() -> io::Result<()> {
     Ok(())
 }
 
-/// Fails closed: an unreadable Store is treated as held.
+/// Fails closed: an unreadable Store is treated as held. This is the
+/// current writer-free path into `IncompatibleHeld` (the 旧版配置已暂停 badge).
 pub fn current_lifecycle() -> Lifecycle {
     crate::storage::global()
-        .and_then(|store| Membership::new(store).local())
+        .map(|store| lifecycle_or_held(&store))
+        .unwrap_or(Lifecycle::IncompatibleHeld)
+}
+
+/// `current_lifecycle` for one store: unreadable local state is held.
+pub fn lifecycle_or_held(store: &Arc<Store>) -> Lifecycle {
+    Membership::new(Arc::clone(store))
+        .local()
         .map(|local| local.lifecycle)
         .unwrap_or(Lifecycle::IncompatibleHeld)
 }

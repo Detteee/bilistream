@@ -411,3 +411,88 @@ fn a_pull_sends_the_list_when_the_request_advertises_watch_sync() {
     assert!(!pull_sends_watch(false, None));
     assert!(!pull_sends_watch(false, Some("true")));
 }
+
+/// `notify-config.watch` and the `notify-watch` meta exactly as 28a20792's
+/// serializer writes them (its `WatchChannel` is `tag = "kind"`, snake_case,
+/// `WatchPlatforms` skips `None`): two manual entries (the operator's count)
+/// beside a configured one. Names and ids are synthetic.
+const WATCH_28A2: &str = r#"{"enabled":true,"channels":[{"kind":"configured","name":"SyntheticConfigured"},{"kind":"manual","name":"SyntheticManualOne","platforms":{"youtube":"UCsyntheticManualOne000001"}},{"kind":"manual","name":"SyntheticManualTwo","platforms":{"twitch":"synthetic_manual_two","niconico":"user-synthetic-2"}}]}"#;
+const WATCH_META_28A2: &str = r#"{"revision":3,"updated_by":"jp","updated_at":1760000000}"#;
+
+#[test]
+fn a_notify_watch_with_manual_entries_written_by_28a20792_still_loads() {
+    let store = temp();
+    let mut config = serde_json::to_value(crate::notify::NotifyConfig::default()).unwrap();
+    config["watch"] = serde_json::from_str(WATCH_28A2).unwrap();
+    store.1.write(store::CONFIG_RECORD, config).unwrap();
+    store
+        .1
+        .write(WATCH_RECORD, serde_json::from_str(WATCH_META_28A2).unwrap())
+        .unwrap();
+
+    let expected = vec![
+        WatchChannel::Configured {
+            name: "SyntheticConfigured".into(),
+        },
+        WatchChannel::Manual {
+            name: "SyntheticManualOne".into(),
+            platforms: crate::notify::config::WatchPlatforms {
+                youtube: Some("UCsyntheticManualOne000001".into()),
+                ..Default::default()
+            },
+        },
+        WatchChannel::Manual {
+            name: "SyntheticManualTwo".into(),
+            platforms: crate::notify::config::WatchPlatforms {
+                twitch: Some("synthetic_manual_two".into()),
+                niconico: Some("user-synthetic-2".into()),
+                ..Default::default()
+            },
+        },
+    ];
+    let watch = store::load_config(&store.1).unwrap().0.watch;
+    assert!(watch.enabled);
+    assert_eq!(watch.channels, expected);
+    assert_eq!(
+        watch
+            .channels
+            .iter()
+            .filter(|c| matches!(c, WatchChannel::Manual { .. }))
+            .count(),
+        2
+    );
+    // Same bytes back: this build's serializer is the 28a20792 shape.
+    assert_eq!(
+        serde_json::to_string(&watch).unwrap(),
+        WATCH_28A2,
+        "manual entries round-trip unchanged"
+    );
+    let meta = load_meta(&store.1).unwrap();
+    assert_eq!((meta.revision, meta.updated_by.as_str()), (3, "jp"));
+    // Still exported to peers unchanged, at the stored revision.
+    let copy = export_snapshot(&store::settings_records(&store.1).unwrap())
+        .unwrap()
+        .expect("the list is exported");
+    assert_eq!(copy.revision, 3);
+    assert_eq!(copy.channels, expected);
+    // A 28a20792 peer's copy carrying the same manual entries is accepted.
+    let wire = format!(
+        r#"{{"revision":4,"enabled":true,"channels":{},"updated_by":"ny","updated_at":1760000100}}"#,
+        serde_json::to_string(
+            &serde_json::from_str::<serde_json::Value>(WATCH_28A2).unwrap()["channels"]
+        )
+        .unwrap()
+    );
+    let incoming: WatchCopy = serde_json::from_str(&wire).unwrap();
+    assert_eq!(incoming.channels, expected);
+    let outcome = store
+        .1
+        .transaction(move |tx| accept_tx(tx, &incoming, None, 1760000200))
+        .unwrap();
+    assert!(outcome.applied);
+    assert_eq!(load_meta(&store.1).unwrap().revision, 4);
+    assert_eq!(
+        store::load_config(&store.1).unwrap().0.watch.channels,
+        expected
+    );
+}

@@ -452,25 +452,90 @@ async fn every_prepared_member_is_held_so_maintenance_has_no_publisher() {
 }
 
 #[test]
-fn legacy_enabled_configuration_stays_held_and_never_creates_an_identity() {
+fn legacy_enabled_configuration_refuses_to_start_and_writes_nothing() {
+    let dir = std::env::temp_dir().join(format!("bilistream-membership-{}", random_id().unwrap()));
+    let store = Store::open(dir.join("data"), dir.join("key")).unwrap();
+    let peer_secret = "synthetic-legacy-peer-token-5f1e";
+    store
+        .write(
+            "config.json",
+            json!({"cluster":{"enabled":true,"node_id":"synthetic-node-7a2c","peers":[{"node_id":"synthetic-peer-7a2c","api_url":"https://synthetic-peer.invalid","token":peer_secret}]}}),
+        )
+        .unwrap();
+    let engine = Membership::new(store.clone());
+    let error = engine.initialize().unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+    let text = error.to_string();
+    assert_eq!(text, LEGACY_TOPOLOGY_ERROR);
+    assert!(
+        text.contains("cluster.enabled") && text.contains(LOCAL_RECORD),
+        "{text}"
+    );
+    for leaked in [
+        peer_secret,
+        "synthetic-node-7a2c",
+        "synthetic-peer-7a2c",
+        "synthetic-peer.invalid",
+    ] {
+        assert!(!text.contains(leaked), "{text}");
+        assert!(!format!("{error:?}").contains(leaked));
+    }
+    // Nothing is written: no held lifecycle, no identity.
+    assert!(store.read(LOCAL_RECORD).unwrap().is_none());
+    assert!(engine.identity().is_err());
+    // Runtime fences stay closed for the same data if anything reads it.
+    assert!(execution_hold(&store).unwrap().is_some());
+    drop(engine);
+    drop(store);
+    let reopened = Store::open(dir.join("data"), dir.join("key")).unwrap();
+    let again = Membership::new(reopened.clone()).initialize().unwrap_err();
+    assert_eq!(again.to_string(), LEGACY_TOPOLOGY_ERROR);
+    assert!(reopened.read(LOCAL_RECORD).unwrap().is_none());
+    drop(reopened);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn a_stored_incompatible_held_lifecycle_still_loads_and_stays_held() {
     let dir = std::env::temp_dir().join(format!("bilistream-membership-{}", random_id().unwrap()));
     let store = Store::open(dir.join("data"), dir.join("key")).unwrap();
     store
         .write("config.json", json!({"cluster":{"enabled":true}}))
         .unwrap();
+    // Exactly what 28a20792 / fc661258 wrote for a legacy enabled topology.
+    let held = serde_json::to_value(LocalState {
+        lifecycle: Lifecycle::IncompatibleHeld,
+        hold: Some("incompatible".into()),
+        ..LocalState::default()
+    })
+    .unwrap();
+    assert_eq!(held["lifecycle"], "incompatible_held");
+    store.write(LOCAL_RECORD, held.clone()).unwrap();
     let engine = Membership::new(store.clone());
     engine.initialize().unwrap();
     assert_eq!(
         engine.local().unwrap().lifecycle,
         Lifecycle::IncompatibleHeld
     );
-    assert!(engine.identity().is_err());
+    assert_eq!(store.read(LOCAL_RECORD).unwrap().unwrap().value, held);
     assert!(execution_hold(&store).unwrap().is_some());
+    assert_eq!(lifecycle_or_held(&store), Lifecycle::IncompatibleHeld);
     drop(engine);
     drop(store);
-    let reopened = Store::open(dir.join("data"), dir.join("key")).unwrap();
-    assert!(execution_hold(&reopened).unwrap().is_some());
-    drop(reopened);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn an_unreadable_local_state_fails_closed_as_incompatible_held() {
+    let dir = std::env::temp_dir().join(format!("bilistream-membership-{}", random_id().unwrap()));
+    let store = Store::open(dir.join("data"), dir.join("key")).unwrap();
+    assert_eq!(lifecycle_or_held(&store), Lifecycle::Standalone);
+    store
+        .write(LOCAL_RECORD, json!({"lifecycle":"synthetic-unknown-shape"}))
+        .unwrap();
+    assert_eq!(lifecycle_or_held(&store), Lifecycle::IncompatibleHeld);
+    assert!(hold_reason(&store).is_some());
+    drop(store);
     let _ = std::fs::remove_dir_all(dir);
 }
 
@@ -660,4 +725,183 @@ async fn removal_finish_rejects_missing_or_forged_stop_proof_and_survives_later_
     assert!(a.engine.removed_source_stopped("c").unwrap());
     a.engine.initialize().unwrap();
     assert!(a.engine.removed_source_stopped("c").unwrap());
+}
+
+#[derive(Clone, Default)]
+struct Logs(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+impl std::io::Write for Logs {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(buf);
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+fn log_dispatch() -> (tracing::Dispatch, Logs) {
+    let logs = Logs::default();
+    let writer = logs.clone();
+    let subscriber = tracing_subscriber::fmt()
+        .without_time()
+        .with_ansi(false)
+        .with_max_level(tracing::Level::TRACE)
+        .with_writer(move || writer.clone())
+        .finish();
+    (tracing::Dispatch::new(subscriber), logs)
+}
+
+/// A Remove FINISH as stored before 0dd9ec5: correctly signed over the
+/// 2-tuple, the target's prepare receipt inside the decision, and no
+/// `removal_safety`. Returns (legacy, current) for the same decision.
+async fn legacy_remove_finish_fixture(a: &Node, b: &Node, c: &Node) -> (Finish, Finish, Proposal) {
+    let op = begin_change(
+        b,
+        Change::Remove {
+            target_member_id: c.id(),
+            replacement_public_member_id: None,
+        },
+    );
+    let p = b.engine.propose(op.intent.operation_id, None).unwrap();
+    prepare(b, &[a, b, c], &p).await;
+    let decision = commit(b, &[a, b], &p);
+    let current = b
+        .engine
+        .decide_finish(p.intent.operation_id.clone())
+        .unwrap();
+    assert!(matches!(
+        current.removal_safety,
+        Some(RemovalSafety::Prepared { .. })
+    ));
+    let installed = current.installed.clone();
+    let proof = b.engine.identity().unwrap().sign(
+        crate::cluster::peer_auth::Domain::Finish,
+        &encode(&(&decision, &installed)).unwrap(),
+    );
+    let legacy = Finish {
+        decision,
+        installed,
+        removal_safety: None,
+        proof,
+    };
+    (legacy, current, p)
+}
+
+fn assert_names_record_only(text: &str, operation_id: &str, nodes: &[&Node], finish: &Finish) {
+    assert!(text.contains(operation_id), "{text}");
+    assert!(text.contains("removal_safety"), "{text}");
+    assert_no_leak(text, nodes, finish);
+}
+
+/// Member ids (fingerprints) and every signature in the record stay out.
+fn assert_no_leak(text: &str, nodes: &[&Node], finish: &Finish) {
+    let mut leaked: Vec<String> = nodes.iter().map(|n| n.id()).collect();
+    leaked.push(finish.proof.signature.clone());
+    for receipt in finish.decision.prepares.iter().chain(&finish.installed) {
+        leaked.push(receipt.proof.signature.clone());
+    }
+    leaked.push(finish.decision.proof.signature.clone());
+    for value in leaked {
+        assert!(!value.is_empty());
+        assert!(!text.contains(&value), "leaked {value} in {text}");
+    }
+}
+
+#[tokio::test]
+async fn a_legacy_remove_finish_on_the_wire_is_refused_by_name_and_changes_nothing() {
+    let a = Node::new("a", true).await;
+    let b = Node::new("b", false).await;
+    add(&a, &b, &[&a]).await;
+    let c = Node::new("c", false).await;
+    add(&b, &c, &[&a, &b]).await;
+    let (legacy, current, p) = legacy_remove_finish_fixture(&a, &b, &c).await;
+    let id = p.intent.operation_id.clone();
+    // The signature is genuine; only the removed shape is refused.
+    legacy.validate().unwrap();
+    let error = legacy.validate_removal_safety().unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+    assert_eq!(error.to_string(), legacy_remove_finish(&id).to_string());
+    assert_names_record_only(&error.to_string(), &id, &[&a, &b, &c], &legacy);
+    let (dispatch, logs) = log_dispatch();
+    let state = |name: &str| {
+        a.engine
+            .store()
+            .read(name)
+            .unwrap()
+            .map(|d| (d.revision, d.value))
+    };
+    let (before_local, before_ops) = (state(LOCAL_RECORD), state(OPERATIONS_RECORD));
+    let refused = tracing::dispatcher::with_default(&dispatch, || {
+        a.engine.apply_finish(legacy.clone()).unwrap_err()
+    });
+    assert_eq!(refused.to_string(), error.to_string());
+    assert_names_record_only(&format!("{refused:?}"), &id, &[&a, &b, &c], &legacy);
+    let logged = String::from_utf8(logs.0.lock().unwrap().clone()).unwrap();
+    assert_no_leak(&logged, &[&a, &b, &c], &legacy);
+    assert_eq!(state(LOCAL_RECORD), before_local);
+    assert_eq!(state(OPERATIONS_RECORD), before_ops);
+    // Signing never produces the removed shape, and the current one applies.
+    assert!(Finish::sign_with_safety(
+        legacy.decision.clone(),
+        legacy.installed.clone(),
+        None,
+        &b.engine.identity().unwrap()
+    )
+    .is_err());
+    for node in [&a, &b] {
+        node.engine.apply_finish(current.clone()).unwrap();
+    }
+    assert!(a.engine.removed_source_stopped("c").unwrap());
+}
+
+#[tokio::test]
+async fn a_stored_legacy_removed_source_fails_loudly_and_never_counts_as_stop_proof() {
+    let a = Node::new("a", true).await;
+    let b = Node::new("b", false).await;
+    add(&a, &b, &[&a]).await;
+    let c = Node::new("c", false).await;
+    add(&b, &c, &[&a, &b]).await;
+    let (legacy, current, p) = legacy_remove_finish_fixture(&a, &b, &c).await;
+    let id = p.intent.operation_id.clone();
+    for node in [&a, &b] {
+        node.engine.apply_finish(current.clone()).unwrap();
+    }
+    assert!(a.engine.removed_source_stopped("c").unwrap());
+    // Replace the stored evidence with the pre-0dd9ec5 shape, as an old
+    // node's cluster-local would hold it.
+    let mut local = a.engine.store().read(LOCAL_RECORD).unwrap().unwrap().value;
+    local["removed_sources"]["c"] = serde_json::to_value(&legacy).unwrap();
+    assert!(local["removed_sources"]["c"]
+        .get("removal_safety")
+        .is_none());
+    a.engine.store().write(LOCAL_RECORD, local.clone()).unwrap();
+    // Startup still loads it; the record is refused where it is used.
+    a.engine.initialize().unwrap();
+    let (dispatch, logs) = log_dispatch();
+    let error = tracing::dispatcher::with_default(&dispatch, || {
+        a.engine.removed_source_stopped("c").unwrap_err()
+    });
+    assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+    let text = error.to_string();
+    assert_eq!(
+        text,
+        format!(
+            "cluster-local 的 removed_sources 条目 c：{}",
+            legacy_remove_finish(&id)
+        )
+    );
+    assert_names_record_only(&text, &id, &[&a, &b, &c], &legacy);
+    let logged = String::from_utf8(logs.0.lock().unwrap().clone()).unwrap();
+    assert_no_leak(&logged, &[&a, &b, &c], &legacy);
+    // Never silently dropped or rewritten.
+    assert_eq!(
+        a.engine.store().read(LOCAL_RECORD).unwrap().unwrap().value,
+        local
+    );
+}
+
+#[test]
+fn a_legacy_finish_with_an_unvalidated_operation_id_never_echoes_it() {
+    let text = legacy_remove_finish("synthetic-SECRET-not-an-operation-id").to_string();
+    assert!(!text.contains("synthetic-SECRET"), "{text}");
+    assert!(text.contains("（标识无效）"), "{text}");
 }

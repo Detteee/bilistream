@@ -2,6 +2,7 @@
 mod crypto;
 mod documents;
 pub mod paths;
+pub(crate) use documents::reject_legacy_channels;
 pub(crate) use documents::validate as validate_document;
 
 use crypto::Key;

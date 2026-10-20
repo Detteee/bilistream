@@ -39,6 +39,15 @@ fn configure(store: &Store, mock: &MockQq, openid: &str) {
     cfg.qq.keep_online = false;
     store::save_config(store, &cfg, None).unwrap();
     store::save_secret(store, Some("synthetic-secret"), None).unwrap();
+    // The credential set a 28a20792 save writes; a binding then records the
+    // AppID it was made under (no pre-F, AppID-less binding).
+    store
+        .write(
+            crate::notify::credentials::CREDENTIALS_RECORD,
+            json!({"generation": 1, "openid_appid": if openid.is_empty() { "" } else { "1234567890" },
+                   "updated_by": "test", "updated_at": 1}),
+        )
+        .unwrap();
     if !openid.is_empty() {
         set_openid(store, openid);
     }
@@ -92,7 +101,13 @@ fn a_worker_applies_one_credential_snapshot_and_uses_its_new_generation_before_h
     store::save_config(&store, &config, None).unwrap();
     store::save_secret(&store, Some("synthetic-old-secret"), None).unwrap();
     set_openid(&store, OPENID);
-    crate::notify::credentials::seed_if_needed(&store, "b", 100, false).unwrap();
+    // Generation 1 with the binding's AppID recorded (current shape).
+    store
+        .write(
+            crate::notify::credentials::CREDENTIALS_RECORD,
+            json!({"generation": 1, "openid_appid": "1234567890", "updated_by": "b", "updated_at": 100}),
+        )
+        .unwrap();
     let captured = store::load_settings(&store).unwrap();
     let mut update: UpdateNotify = serde_json::from_value(json!({
         "config": {"qq": {"app_id": "9876543210"}},

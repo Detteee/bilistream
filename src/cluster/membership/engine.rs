@@ -14,6 +14,13 @@ use std::{
 };
 
 pub const LOCAL_RECORD: &str = "cluster-local";
+/// Startup refusal for `cluster.enabled` without `cluster-local` (the
+/// pre-membership topology). Names the records only, never config content.
+pub const LEGACY_TOPOLOGY_ERROR: &str = "无法启动：config.json 中 cluster.enabled 为 true，但缺少本地成员状态 cluster-local（旧版集群配置）。本版本不再把这种节点暂停为“旧版配置已暂停”。请先用 fc661258 启动本节点，在集群页面重新创建或加入集群后再升级";
+
+fn legacy_topology() -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, LEGACY_TOPOLOGY_ERROR)
+}
 pub const MANIFEST_RECORD: &str = "cluster-membership";
 pub const OPERATIONS_RECORD: &str = "cluster-operations";
 const MAX_OPERATIONS: usize = 128;
@@ -341,7 +348,12 @@ impl Membership {
             return Ok(false);
         };
         finish.validate()?;
-        finish.validate_removal_safety()?;
+        finish.validate_removal_safety().map_err(|error| {
+            io::Error::new(
+                error.kind(),
+                format!("{LOCAL_RECORD} 的 removed_sources 条目 {node_id}：{error}"),
+            )
+        })?;
         let p = finish.decision.proposal.as_ref().ok_or_else(denied)?;
         Ok(p.desired.cluster_id == current.cluster_id
             && p.desired.revision <= current.revision
@@ -350,7 +362,9 @@ impl Membership {
     }
 
     /// Called before any runtime starts. A legacy enabled topology never becomes
-    /// an implicitly standalone process; missing managed keys are a hard error.
+    /// an implicitly standalone process and is no longer parked in
+    /// `IncompatibleHeld`: it refuses to start. Missing managed keys are a hard
+    /// error. A stored `IncompatibleHeld` (written by 28a20792) still loads.
     pub fn initialize(&self) -> io::Result<()> {
         self.store.transaction(|tx| {
             let local: Option<LocalState> = read_tx(tx, LOCAL_RECORD)?;
@@ -394,15 +408,7 @@ impl Membership {
                 .read("config.json")?
                 .is_some_and(|d| d.value["cluster"]["enabled"] == true)
             {
-                write_tx(
-                    tx,
-                    LOCAL_RECORD,
-                    &LocalState {
-                        lifecycle: Lifecycle::IncompatibleHeld,
-                        hold: Some("incompatible".into()),
-                        ..LocalState::default()
-                    },
-                )?;
+                return Err(legacy_topology());
             }
             Ok(())
         })

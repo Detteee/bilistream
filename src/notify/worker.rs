@@ -664,6 +664,12 @@ impl Worker {
             openid.via = None;
         }
         if rebind != self.openid_rebind {
+            if rebind {
+                // Fixed text: names the records, never the openid or AppID.
+                tracing::warn!(
+                    "notify-openid 的绑定未关联当前 AppID（notify-credentials 无匹配的 openid_appid），开播通知暂停，请重新绑定"
+                );
+            }
             self.openid.record_revision = None;
             self.openid_rebind = rebind;
         }

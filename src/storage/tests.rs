@@ -501,3 +501,46 @@ fn a_28a20792_backup_with_a_niconico_cookie_document_restores_without_it() {
     assert!(store.read("config.json").unwrap().is_some());
     assert!(store.read("niconico_cookies.txt").unwrap().is_none());
 }
+
+#[test]
+fn old_format_channel_keys_are_refused_by_name_without_their_content() {
+    use super::documents::{reject_legacy_channels, validate, LEGACY_CHANNEL_KEYS};
+    let current = json!({"channels":[{"name":"SyntheticCurrent","platforms":{"youtube":"UCsyntheticCurrent0001"},"aliases":[]}]});
+    validate("channels.json", &current).unwrap();
+    reject_legacy_channels(&current).unwrap();
+    for key in LEGACY_CHANNEL_KEYS {
+        for doc in [
+            // Old format only, and old keys left beside the current list.
+            {
+                let mut old = json!({});
+                old[key] = json!([{"channel_name":"SyntheticLegacyName","channel_id":"UCsyntheticLegacyId0001"}]);
+                old
+            },
+            {
+                let mut mixed = current.clone();
+                mixed[key] = json!([{"channel_name":"SyntheticLegacyName","channel_id":"UCsyntheticLegacyId0001"}]);
+                mixed
+            },
+        ] {
+            for error in [
+                validate("channels.json", &doc).unwrap_err(),
+                reject_legacy_channels(&doc).unwrap_err(),
+            ] {
+                assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+                let text = error.to_string();
+                assert!(
+                    text.contains("channels.json") && text.contains(key),
+                    "{text}"
+                );
+                for leaked in [
+                    "SyntheticLegacyName",
+                    "UCsyntheticLegacyId0001",
+                    "SyntheticCurrent",
+                ] {
+                    assert!(!text.contains(leaked), "{text}");
+                    assert!(!format!("{error:?}").contains(leaked));
+                }
+            }
+        }
+    }
+}

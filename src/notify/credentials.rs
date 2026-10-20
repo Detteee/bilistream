@@ -29,9 +29,11 @@ use zeroize::Zeroizing;
 
 pub const CREDENTIALS_RECORD: &str = "notify-credentials";
 
-/// The set metadata on this node. `generation == 0`: never seeded (an
-/// older build's data); the openid then counts as valid. `Debug` is manual:
-/// the AppID is write-only, so only whether `openid_appid` is set.
+/// The set metadata on this node. `generation == 0`: no credentials saved
+/// yet. An openid is valid only under the AppID recorded in `openid_appid`;
+/// a binding without one (pre-F data) is `openid_rebind`, never trusted.
+/// `Debug` is manual: the AppID is write-only, so only whether
+/// `openid_appid` is set.
 #[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CredentialsMeta {
     #[serde(default)]
@@ -88,11 +90,10 @@ impl CredentialsMeta {
         )
     }
 
-    /// Rule 3: an openid bound under another AppID is invalid.
+    /// Rule 3: an openid bound under another AppID is invalid. So is one
+    /// with no recorded AppID at all (a pre-F binding), at any generation.
     pub fn openid_rebind(&self, openid_set: bool, appid: &str) -> bool {
-        self.generation > 0
-            && self.openid_appid != appid.trim()
-            && (openid_set || !self.openid_appid.is_empty())
+        self.openid_appid != appid.trim() && (openid_set || !self.openid_appid.is_empty())
     }
 }
 
@@ -427,12 +428,13 @@ pub fn seed_if_needed(store: &Store, node: &str, now: u64, holder: bool) -> io::
         if appid.is_empty() || secret_tx(tx)?.is_empty() {
             return Ok(false);
         }
-        let openid_set = openid_set_tx(tx)?;
+        // An openid already bound here has no recorded AppID (pre-F): it
+        // is not adopted as this AppID's binding and reports rebind.
         write_meta_tx(
             tx,
             &CredentialsMeta {
                 generation: 1,
-                openid_appid: if openid_set { appid } else { String::new() },
+                openid_appid: String::new(),
                 updated_by: node,
                 updated_at: now,
                 holder_seed: holder,
@@ -465,13 +467,9 @@ pub(crate) fn note_bind_tx(tx: &mut Transaction<'_>, writer: &str, now: u64) -> 
 }
 
 /// The AppID belonging to the currently selected openid, before another
-/// credential generation is applied. Legacy bindings used the local AppID.
-pub(crate) fn binding_appid_tx(tx: &mut Transaction<'_>, openid_set: bool) -> io::Result<String> {
-    let meta = load_meta_tx(tx)?;
-    if meta.generation == 0 && openid_set {
-        return Ok(appid_of(&config_value_tx(tx)?));
-    }
-    Ok(meta.openid_appid)
+/// credential generation is applied. "" = none recorded (rebind).
+pub(crate) fn binding_appid_tx(tx: &mut Transaction<'_>) -> io::Result<String> {
+    Ok(load_meta_tx(tx)?.openid_appid)
 }
 
 /// Binding revision ordering is independent of credential ordering (F13).
@@ -738,8 +736,6 @@ pub(crate) fn apply_save_tx_with_binding(
     }
     let openid_appid = if binding {
         next_appid
-    } else if openid_set && meta.generation == 0 && meta.openid_appid.is_empty() {
-        current_appid
     } else {
         meta.openid_appid.clone()
     };

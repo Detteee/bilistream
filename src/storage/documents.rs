@@ -8,6 +8,24 @@ use super::{invalid, NAMES};
 use serde_json::Value;
 use std::io;
 
+/// `YT_channels[]` / `TW_channels[]`: the channel format before `channels[]`.
+/// No current build writes it and nothing reads it any more.
+pub(crate) const LEGACY_CHANNEL_KEYS: [&str; 2] = ["YT_channels", "TW_channels"];
+
+/// A `channels.json` still carrying an old-format key is refused by name.
+/// The error names the key only, never a channel name or id inside it.
+pub(crate) fn reject_legacy_channels(value: &Value) -> io::Result<()> {
+    match LEGACY_CHANNEL_KEYS
+        .iter()
+        .find(|key| value.get(**key).is_some())
+    {
+        Some(key) => Err(invalid(&format!(
+            "channels.json 含旧格式字段 {key}，本版本不再读取其中的频道；请在频道管理中重新添加这些频道"
+        ))),
+        None => Ok(()),
+    }
+}
+
 pub(crate) fn validate(name: &str, value: &Value) -> io::Result<()> {
     if !NAMES.contains(&name) {
         return Err(invalid("备份包含未知数据类型"));
@@ -18,6 +36,7 @@ pub(crate) fn validate(name: &str, value: &Value) -> io::Result<()> {
             serde_json::from_value::<crate::config::Config>(value.clone()).map_err(|_| bad())?;
         }
         "channels.json" => {
+            reject_legacy_channels(value)?;
             let channels = value
                 .get("channels")
                 .and_then(Value::as_array)

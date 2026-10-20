@@ -497,7 +497,7 @@ where
     let holder = holder.map(str::to_string);
     store.transaction(move |tx| {
         let current = parse_openid(tx.read(OPENID_RECORD)?)?;
-        let current_appid = super::credentials::binding_appid_tx(tx, current.is_set())?;
+        let current_appid = super::credentials::binding_appid_tx(tx)?;
         // Addendum F: the set rides in the same transaction, so the openid
         // and the AppID it belongs to never land apart.
         let set = match copy.credentials.as_ref() {
@@ -520,31 +520,12 @@ where
         let outcome =
             if copy.revision == 0 || copy.key() <= (current.revision, current.writer.as_str()) {
                 // New credentials cannot relabel a retained, higher-revision
-                // openid as belonging to their AppID. A mismatch is rebind.
-                // A legacy copy may have delivered this exact binding before
-                // credentials arrived. Its unknown association can be filled
-                // by explicit proof for the same bound recipient, even when
-                // the credentials generation itself was already imported.
-                let same_binding = copy.revision > 0
-                    && copy.key() == (current.revision, current.writer.as_str())
-                    && copy.state == CopyState::Bound
-                    && current
-                        .openid
-                        .as_ref()
-                        .is_some_and(|openid| openid.expose() == copy.openid);
-                let proof = copy
-                    .credentials
-                    .as_ref()
-                    .filter(|set| {
-                        current_appid.is_empty()
-                            && same_binding
-                            && set.usable()
-                            && !set.openid_appid.is_empty()
-                    })
-                    .map(|set| set.openid_appid.as_str());
-                super::credentials::associate_binding_tx(tx, proof.unwrap_or(&current_appid))?;
+                // openid as belonging to their AppID. A mismatch, or a
+                // binding with no recorded AppID, is rebind until an
+                // explicit bind; a peer copy never fills it in.
+                super::credentials::associate_binding_tx(tx, &current_appid)?;
                 CopyOutcome {
-                    applied: credentials || proof.is_some() || watch.applied,
+                    applied: credentials || watch.applied,
                     revision: current.revision,
                     restamped,
                 }
@@ -572,8 +553,8 @@ where
                     .unwrap_or_default();
                 // Even an older credential generation can carry the winning
                 // binding revision. Keep that binding's actual association.
-                // A legacy bound copy has no association proof: on F data it
-                // stays unready until an explicit bind confirms the AppID.
+                // A bound copy without a usable set has no association: it
+                // stays rebind until an explicit bind confirms the AppID.
                 super::credentials::associate_binding_tx(tx, appid)?;
                 CopyOutcome {
                     applied: true,

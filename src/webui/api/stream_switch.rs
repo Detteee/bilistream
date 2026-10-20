@@ -146,11 +146,17 @@ pub async fn switch_stream(
 
     let channels_json: serde_json::Value = crate::storage::read_document("channels.json")
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if let Err(error) = crate::storage::reject_legacy_channels(&channels_json) {
+        tracing::error!("频道切换被拒绝: {error}");
+        return Ok(ApiResponse {
+            success: false,
+            data: None,
+            message: Some(error.to_string()),
+        });
+    }
 
-    // Find channel name - try both new and old formats
+    // Find channel name: channels[].platforms.youtube
     let mut channel_name = None;
-
-    // Try new format: channels[].platforms.youtube
     if let Some(channels) = channels_json.get("channels").and_then(|v| v.as_array()) {
         for channel in channels {
             if let Some(platforms) = channel.get("platforms") {
@@ -158,23 +164,6 @@ pub async fn switch_stream(
                     if yt_id == payload.channel_id {
                         channel_name = channel
                             .get("name")
-                            .and_then(|v| v.as_str())
-                            .map(|s| s.to_string());
-                        break;
-                    }
-                }
-            }
-        }
-    }
-
-    // Try old format if not found: YT_channels[].channel_id
-    if channel_name.is_none() {
-        if let Some(yt_channels) = channels_json.get("YT_channels").and_then(|v| v.as_array()) {
-            for channel in yt_channels {
-                if let Some(id) = channel.get("channel_id").and_then(|v| v.as_str()) {
-                    if id == payload.channel_id {
-                        channel_name = channel
-                            .get("channel_name")
                             .and_then(|v| v.as_str())
                             .map(|s| s.to_string());
                         break;
