@@ -1379,8 +1379,9 @@ pub(crate) fn exempt_hold_release(
     warning: &warning::WarningSnapshot,
     source: &BroadcastSource,
 ) -> Option<crate::plugins::warning_exempt::ReasonId> {
+    use crate::plugins::warning_exempt::ReasonId;
     let reason_ids = warning.hold_reasons();
-    if reason_ids.is_empty() || !warning.holds(source) {
+    if !warning.holds(source) {
         return None;
     }
     let decision = crate::plugins::warning_exempt::HoldDecision {
@@ -1389,6 +1390,7 @@ pub(crate) fn exempt_hold_release(
         all_low_risk: cfg.warning_hold_exempt_all_low_risk,
         platform: &source.platform,
         channel_id: &source.channel_id,
+        // Empty classify is the high-risk `unrecognized` settings class.
         reason_ids: &reason_ids,
         // The rail costs a document read plus a peer scan; ask only after the
         // cheap configuration conditions pass.
@@ -1406,7 +1408,13 @@ pub(crate) fn exempt_hold_release(
     ) {
         return None;
     }
-    Some(*reason_ids.iter().next().expect("checked non-empty"))
+    Some(
+        reason_ids
+            .iter()
+            .next()
+            .copied()
+            .unwrap_or(ReasonId::Unrecognized),
+    )
 }
 
 /// Release an exempt hold at the moment the runtime would skip the source:
@@ -1634,14 +1642,22 @@ mod tests {
         cfg.warning_hold_exempt.clear();
         assert_eq!(exempt_hold_release(&cfg, &warning, &source), None);
 
-        // A hold captured without a classified reason (mask / no reason) never
-        // releases, even when the channel and classes are configured.
+        // A hold without a classified reason (mask / no reason / unknown text)
+        // releases only when `unrecognized` is ticked for a listed channel.
         let tracker = Arc::new(WarningTracker::default());
         let _owner = tracker.own_source(8, source.clone());
         let mut event = tracker.capture_event();
         tracker.mark_event(&mut event, None).unwrap();
         let unknown = tracker.snapshot();
         cfg.warning_hold_exempt = vec![ExemptChannel::new("YT", "UC1", "星海频道").unwrap()];
+        cfg.warning_hold_exempt_reasons = vec!["idle_recording".into()];
+        assert_eq!(exempt_hold_release(&cfg, &unknown, &source), None);
+        cfg.warning_hold_exempt_reasons = vec!["unrecognized".into()];
+        assert_eq!(
+            exempt_hold_release(&cfg, &unknown, &source),
+            Some(ReasonId::Unrecognized)
+        );
+        cfg.warning_hold_exempt.clear();
         assert_eq!(exempt_hold_release(&cfg, &unknown, &source), None);
     }
 

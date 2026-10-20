@@ -6,8 +6,9 @@
 //! whitespace normalised), never the 处罚结果. Matching is plain substring
 //! fragments, because Bilibili varies the sentence around them. A reason that
 //! matches several classes releases only when every matched class is ticked,
-//! so [`classify`] returns the whole set; no match means unknown, which can
-//! never release a hold.
+//! so [`classify`] returns the whole set; no match means unknown, which
+//! releases only when the high-risk `unrecognized` class is ticked for a
+//! listed channel.
 
 use std::collections::BTreeSet;
 
@@ -25,14 +26,17 @@ pub enum ReasonId {
     GameInfoViolation,
     /// 直播内容不适宜.
     ContentUnsuitable,
+    /// 未识别的原因（classify 空集：未知文案 / 无原因 / 遮罩警示）.
+    Unrecognized,
 }
 
 impl ReasonId {
-    pub const ALL: [ReasonId; 4] = [
+    pub const ALL: [ReasonId; 5] = [
         Self::IdleRecording,
         Self::GameModeOff,
         Self::GameInfoViolation,
         Self::ContentUnsuitable,
+        Self::Unrecognized,
     ];
 
     /// Stable setting id; stored in config, never the phrase text.
@@ -42,6 +46,7 @@ impl ReasonId {
             Self::GameModeOff => "game_mode_off",
             Self::GameInfoViolation => "game_info_violation",
             Self::ContentUnsuitable => "content_unsuitable",
+            Self::Unrecognized => "unrecognized",
         }
     }
 
@@ -55,7 +60,9 @@ impl ReasonId {
         match self {
             Self::IdleRecording => RiskTier::Low,
             Self::GameModeOff => RiskTier::Medium,
-            Self::GameInfoViolation | Self::ContentUnsuitable => RiskTier::High,
+            Self::GameInfoViolation | Self::ContentUnsuitable | Self::Unrecognized => {
+                RiskTier::High
+            }
         }
     }
 }
@@ -331,22 +338,32 @@ pub struct HoldDecision<'a> {
 }
 
 impl HoldDecision<'_> {
-    /// Cheap conditions that need no I/O: not a lock, a known reason, every
-    /// matched class ticked, and either the held identity is on the exempt
-    /// list or every matched class is low risk under the global switch.
+    /// Cheap conditions that need no I/O: not a lock, every matched class
+    /// ticked (or `unrecognized` when classify was empty), and either the
+    /// held identity is on the exempt list or every matched class is low
+    /// risk under the global switch.
     pub fn configured_release(&self) -> bool {
-        let allowed = !self.reason_ids.is_empty()
-            && self.reason_ids.iter().all(|id| {
+        let allowed = if self.reason_ids.is_empty() {
+            self.allowed_reasons
+                .iter()
+                .any(|allowed| allowed == ReasonId::Unrecognized.as_str())
+        } else {
+            self.reason_ids.iter().all(|id| {
                 self.allowed_reasons
                     .iter()
                     .any(|allowed| allowed == id.as_str())
-            });
+            })
+        };
         let listed = self
             .exempt
             .iter()
             .any(|entry| entry.matches(self.platform, self.channel_id));
-        let low_risk_everywhere =
-            self.all_low_risk && self.reason_ids.iter().all(|id| id.risk() == RiskTier::Low);
+        let low_risk_everywhere = self.all_low_risk
+            && !self.reason_ids.is_empty()
+            && self
+                .reason_ids
+                .iter()
+                .all(|id| id.risk() == RiskTier::Low);
         !self.room_lock && allowed && (listed || low_risk_everywhere)
     }
 
@@ -357,8 +374,11 @@ impl HoldDecision<'_> {
 }
 
 /// Every built-in class the cleaned 违规原因 matches, in one pass. Empty means
-/// unknown (or a missing reason / the mask), which never releases a hold.
+/// unknown (or a missing reason / the mask); that releases only when the
+/// `unrecognized` class is ticked for a listed channel.
 pub fn classify(reason: &str) -> BTreeSet<ReasonId> {
+    // `Unrecognized` is never returned here: it is a settings class for the
+    // empty set, not a phrase match.
     let mut ids = BTreeSet::new();
     // High-tag rules first in the PRD table; the set keeps every match so a
     // reason touching two classes needs both ticked.
@@ -377,8 +397,7 @@ pub fn classify(reason: &str) -> BTreeSet<ReasonId> {
     ids
 }
 
-/// The highest risk tag of a classification; unknown (empty) reads as high and
-/// therefore never releases.
+/// The highest risk tag of a classification; unknown (empty) reads as high.
 pub fn highest_risk(ids: &BTreeSet<ReasonId>) -> RiskTier {
     ids.iter()
         .map(|id| id.risk())
@@ -591,7 +610,19 @@ mod tests {
         assert!(decision(&exempt, &allowed, &idle, false, false, "UC1").releases());
         assert!(
             !decision(&exempt, &allowed, &unknown, false, false, "UC1").releases(),
-            "unknown never releases"
+            "unknown needs the unrecognized class"
+        );
+        let with_unknown = vec![
+            "idle_recording".to_string(),
+            "unrecognized".to_string(),
+        ];
+        assert!(
+            decision(&exempt, &with_unknown, &unknown, false, false, "UC1").releases(),
+            "listed channel + unrecognized releases an empty classify"
+        );
+        assert!(
+            !decision(&exempt, &with_unknown, &unknown, false, false, "UC2").releases(),
+            "unrecognized still needs the channel list"
         );
         assert!(
             !decision(&exempt, &allowed, &both, false, false, "UC1").releases(),
@@ -639,7 +670,12 @@ mod tests {
         );
         assert!(
             !global(&exempt, &allowed, "UC2", &BTreeSet::new()).releases(),
-            "unknown never releases"
+            "unknown is high-risk and never covered by the low-risk switch"
+        );
+        let unknown_allowed = vec!["unrecognized".to_string()];
+        assert!(
+            !global(&exempt, &unknown_allowed, "UC2", &BTreeSet::new()).releases(),
+            "unrecognized on an unlisted channel stays held"
         );
         let mid: BTreeSet<ReasonId> = [ReasonId::GameModeOff].into_iter().collect();
         assert!(

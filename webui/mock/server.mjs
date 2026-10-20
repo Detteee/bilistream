@@ -64,6 +64,14 @@ export function createMockServer() {
     twitch: { enable_monitor: true, channel_name: '示例频道 002', channel_id: 'demo_games', area_v2: 235, quality: 'best', proxy_region: 'asl', proxy: '', ffmpeg_cache: { enabled: false, latency_secs: 8 } },
     niconico: { user_session_configured: false, session_check_enabled: true, enable_monitor: false, channel_name: '', channel_id: '', cookies_file: '', proxy: '' },
     priority_channel: { enabled: true, auto_restart: true, channel_name: '示例频道 003', default_area: 235 },
+    warning_hold_exempt: [],
+    warning_hold_exempt_reasons: ['idle_recording'],
+    warning_hold_exempt_all_low_risk: false,
+    warning_hold_exempt_channels: [
+      { name: '示例频道 001', platforms: [{ platform: 'YT', channel_id: 'UC1111111111111111111111' }] },
+      { name: '示例频道 002', platforms: [{ platform: 'TW', channel_id: 'demo_games' }, { platform: 'YT', channel_id: 'UC2222222222222222222222' }] },
+      { name: '示例频道 003', platforms: [{ platform: 'YT', channel_id: 'UC3333333333333333333333' }] },
+    ],
     cluster: { enabled: false, node_id: 'local', node_name: 'Demo Computer', public_api_url: '', peers: [], priority: 0, heartbeat_interval_secs: 5, failover_timeout_secs: 20, lease_ttl_secs: 30, auto_failover: true, sync_monitored_channels: true, thresholds: { max_failed_restarts: 3, max_external_api_failures: 3, window_secs: 300 }, public_status: { node_id: '', base_url: '', bind: '127.0.0.1', port: 23234, holodex_refresh_secs: 60 } },
   };
   const network = { ffmpeg_running: true, stream_speed: 1, stream_cache_speed: 1.04, stream_bitrate_kbps: 6040, stream_cache_bitrate_kbps: 6230, stream_fps: 60, stream_frame: 148200, stream_time_secs: 2470, stream_cache_time_secs: 2478, hls_cache_active: true, stream_bitrate_history: [5900,6050,6000,6250,6100,6080,6040], stream_cache_bitrate_history: [6100,6240,6300,6150,6400,6230,6230] };

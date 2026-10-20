@@ -8,6 +8,7 @@ export const EXEMPT_REASON_ROWS = Object.freeze([
   { id: 'game_mode_off', name: '未开启该游戏直播模式', risk: '中风险', tone: 'warn' },
   { id: 'game_info_violation', name: '存在违规信息', risk: '高风险', tone: 'danger' },
   { id: 'content_unsuitable', name: '直播内容不适宜', risk: '高风险', tone: 'danger' },
+  { id: 'unrecognized', name: '未识别的原因', risk: '高风险', tone: 'danger' },
 ]);
 export const DEFAULT_EXEMPT_REASONS = Object.freeze(['idle_recording']);
 /** The low-risk class can apply to every channel; the rest need channel filters. */

@@ -14,13 +14,15 @@ const catalog = [
 
 test('the built-in reason rows mirror the PRD table and default to low risk', () => {
   assert.deepEqual(EXEMPT_REASON_ROWS.map(row => row.id), [
-    'idle_recording', 'game_mode_off', 'game_info_violation', 'content_unsuitable',
+    'idle_recording', 'game_mode_off', 'game_info_violation', 'content_unsuitable', 'unrecognized',
   ]);
   assert.deepEqual([...DEFAULT_EXEMPT_REASONS], ['idle_recording']);
   assert.equal(EXEMPT_REASON_ROWS[0].tone, '');
   assert.equal(EXEMPT_REASON_ROWS[1].tone, 'warn');
   assert.equal(EXEMPT_REASON_ROWS[2].tone, 'danger');
   assert.equal(EXEMPT_REASON_ROWS[3].tone, 'danger');
+  assert.equal(EXEMPT_REASON_ROWS[4].tone, 'danger');
+  assert.equal(EXEMPT_REASON_ROWS[4].name, '未识别的原因');
   assert.equal(HIGH_RISK_WARNING, '此类违规继续开播极易导致直播间被关闭。');
 });
 
@@ -86,7 +88,7 @@ test('low risk is global while only mid/high reasons use channel filters', () =>
   assert.equal(isLowRiskReason('game_mode_off'), false);
   assert.deepEqual(
     channelReasonRows().map(row => row.id),
-    ['game_mode_off', 'game_info_violation', 'content_unsuitable'],
+    ['game_mode_off', 'game_info_violation', 'content_unsuitable', 'unrecognized'],
   );
 });
 
@@ -103,7 +105,9 @@ test('the settings page wires the card and sends the fields', async () => {
   assert.match(html, /应用到全部频道/);
   assert.match(html, /中高风险 · 指定频道/);
   assert.match(html, /反复违规继续开播极易导致直播间被关闭。/);
+  assert.match(html, /未勾选「未识别的原因」时/);
   assert.match(html, /直播间锁定等不针对单个频道的限制也不会续播。/);
+  assert.doesNotMatch(html, /识别规则/);
   const js = await readFile(new URL('../src/js/settings.js', import.meta.url), 'utf8');
   assert.match(js, /renderWarningHoldExempt\(config\)/);
   assert.match(js, /warning_hold_exempt: knownEntries\(exemptEntries, exemptCatalog\)\.map/);
@@ -115,4 +119,33 @@ test('the settings page wires the card and sends the fields', async () => {
   const css = await readFile(new URL('../src/styles.css', import.meta.url), 'utf8');
   assert.match(css, /\.warning-exempt-row \{/);
   assert.match(css, /\.risk-tag--danger \{ color: var\(--danger\); \}/);
+});
+
+test('channel folds use the public-fold chevron and hide the native marker', async () => {
+  const html = await readFile(new URL('../src/index.html', import.meta.url), 'utf8');
+  const css = await readFile(new URL('../src/styles.css', import.meta.url), 'utf8');
+  assert.match(html, /class="channel-picker warning-exempt-picker"/);
+  assert.match(html, /class="channel-picker notify-watch-picker"/);
+  assert.match(html, /id="warning-exempt-picker-toggle"[\s\S]*?polyline points="6 9 12 15 18 9"/);
+  assert.match(html, /id="notify-watch-picker-toggle"[\s\S]*?polyline points="6 9 12 15 18 9"/);
+  assert.equal([...html.matchAll(/class="channel-picker__chevron"/g)].length, 2);
+  assert.equal([...html.matchAll(/class="channel-picker__ripples"/g)].length, 2);
+  assert.doesNotMatch(html, /warning-exempt-chevron|notify-watch-chevron|⌄|warning-exempt-rules/);
+  assert.doesNotMatch(
+    html.slice(html.indexOf('warning-exempt-picker'), html.indexOf('warning-exempt-picker-content') + 40),
+    /href="#i-chevron"/,
+  );
+  assert.match(css, /\.channel-picker > summary::-webkit-details-marker/);
+  assert.match(css, /\.channel-picker > summary::marker/);
+  assert.match(css, /\.channel-picker__chevron-icon/);
+  assert.match(css, /\.channel-picker__ripples/);
+  assert.match(css, /\.channel-picker\[open\] > summary \.channel-picker__chevron/);
+});
+
+test('违规后可续播频道 sits below 禁用关键词', async () => {
+  const html = await readFile(new URL('../src/index.html', import.meta.url), 'utf8');
+  const keywords = html.indexOf('禁用关键词');
+  const exempt = html.indexOf('id="warning-exempt-section"');
+  const actions = html.indexOf('id="save-system-config-btn"');
+  assert.ok(keywords > 0 && exempt > keywords && actions > exempt);
 });

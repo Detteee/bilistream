@@ -2269,9 +2269,109 @@ html:not(.app-ready) #main-page {
 .warning-exempt-platforms { color: var(--text-mute); white-space: nowrap; }
 .warning-exempt-remove { margin-left: auto; min-height: 44px; }
 .warning-exempt-empty { margin-block: var(--sp-2); }
-.warning-exempt-picker { margin-top: var(--sp-2); }
-.warning-exempt-picker-content { display: grid; gap: var(--sp-2); margin-top: var(--sp-2); }
-.warning-exempt-result label { display: flex; align-items: center; gap: var(--sp-2); min-height: 44px; }
+
+/* Shared 选择频道 fold: 违规后可续播 and 开播通知. Chevron
+   geometry and motion match the public status fold. */
+.channel-picker { margin-top: var(--sp-3); min-width: 0; }
+.channel-picker > summary {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  width: 100%;
+  min-height: 44px;
+  padding: var(--sp-2) var(--sp-4);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  font-size: var(--fs-base);
+  font-weight: 600;
+  line-height: 1.2;
+  cursor: pointer;
+  list-style: none;
+}
+.channel-picker > summary::-webkit-details-marker { display: none; }
+.channel-picker > summary::marker { content: none; }
+.channel-picker > summary[aria-disabled="true"] { opacity: 0.65; cursor: default; }
+.channel-picker__chevron {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  color: var(--text-dim);
+  pointer-events: none;
+  transition: transform 0.45s cubic-bezier(0.175, 0.885, 0.32, 1.275), color 0.3s var(--ease);
+}
+.channel-picker__chevron-icon {
+  width: 16px;
+  height: 16px;
+  display: block;
+  fill: none;
+  stroke: currentColor;
+}
+.channel-picker__ripples {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  overflow: hidden;
+  border-radius: inherit;
+  pointer-events: none;
+}
+@media (hover: hover) and (pointer: fine) {
+  .channel-picker > summary:hover .channel-picker__chevron { color: var(--brand-hi); }
+}
+.channel-picker[open] > summary .channel-picker__chevron {
+  transform: rotate(180deg);
+  color: var(--brand-hi);
+}
+.channel-picker__content {
+  display: grid;
+  gap: var(--sp-2);
+  margin-top: var(--sp-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  padding: var(--sp-3);
+  background: var(--surface-1);
+  min-width: 0;
+}
+.channel-picker input[type="search"] { min-height: 44px; }
+.warning-exempt-results {
+  max-height: 20rem;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  padding: var(--sp-1);
+  scrollbar-gutter: stable;
+  margin-top: 0;
+}
+.warning-exempt-result label {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  width: 100%;
+  min-height: 56px;
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  background: transparent;
+}
+.warning-exempt-result label:hover {
+  border-color: var(--brand);
+  background: var(--surface-2);
+}
+.warning-exempt-result:has(input:checked) label {
+  background: color-mix(in srgb, var(--brand) 8%, var(--surface-1));
+  border-color: color-mix(in srgb, var(--brand) 50%, var(--line));
+}
+.warning-exempt-result input {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  min-height: 0;
+  margin: 0;
+}
 .warning-exempt-reasons { display: grid; gap: var(--sp-1); margin-block: var(--sp-2); }
 .warning-exempt-reason {
   display: flex;
@@ -2292,9 +2392,6 @@ html:not(.app-ready) #main-page {
 .risk-tag--low { color: var(--ok); }
 .risk-tag--warn { color: var(--warn); }
 .risk-tag--danger { color: var(--danger); }
-.warning-exempt-rules { margin-top: var(--sp-3); }
-.warning-exempt-rules ul { margin: var(--sp-2) 0 0 var(--sp-4); }
-
 /* Status rows reuse .cluster-node-meta*; the value keeps one rule: a dot slot
    plus wrapping for long node names and badges (R2). It used to be declared
    twice, which meant reading two places to know the rendered value. */
@@ -2667,39 +2764,6 @@ html:not(.app-ready) #main-page {
 .notify-settings .notify-watch-empty {
   margin: var(--sp-3) 0 0;
 }
-.notify-settings .notify-watch-picker {
-  margin-top: var(--sp-3);
-  min-width: 0;
-}
-.notify-settings .notify-watch-picker > summary {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  width: 100%;
-  min-height: 44px;
-  padding: var(--sp-2) var(--sp-4);
-  border: 1px solid var(--line);
-  border-radius: var(--r-sm);
-  font-size: var(--fs-base);
-  font-weight: 600;
-  line-height: 1.2;
-  cursor: pointer;
-  list-style: none;
-}
-.notify-settings .notify-watch-picker > summary::-webkit-details-marker { display: none; }
-.notify-settings .notify-watch-picker > summary[aria-disabled="true"] { opacity: 0.65; cursor: default; }
-.notify-settings .notify-watch-chevron {
-  line-height: 1;
-  font-size: var(--fs-lg);
-}
-.notify-settings .notify-watch-picker[open] .notify-watch-chevron { transform: rotate(180deg); }
-.notify-settings .notify-watch-picker-content {
-  margin-top: var(--sp-2);
-  border: 1px solid var(--line);
-  border-radius: var(--r-sm);
-  padding: var(--sp-3);
-  background: var(--surface-1);
-}
 .notify-settings .notify-watch-search-row {
   display: flex;
   gap: var(--sp-2);
@@ -2730,7 +2794,8 @@ html:not(.app-ready) #main-page {
   }
 }
 @media (max-width: 560px) {
-  .notify-settings .notify-watch-picker-content { padding: var(--sp-2); }
+  .channel-picker__content { padding: var(--sp-2); }
+  .warning-exempt-result label,
   .notify-settings .notify-watch-item,
   .notify-settings .notify-watch-option { padding: var(--sp-2); }
 }
