@@ -166,6 +166,16 @@ impl WarningEvent {
     pub fn set_reason_ids(&mut self, reason_ids: BTreeSet<ReasonId>) {
         self.reason_ids = reason_ids;
     }
+
+    /// The captured relayed source (name + identity) this frame arrived on.
+    pub fn source(&self) -> Option<&BroadcastSource> {
+        self.source.as_ref().map(|owned| &owned.source)
+    }
+
+    /// The classes classified from this frame's 违规原因.
+    pub fn reason_ids(&self) -> &BTreeSet<ReasonId> {
+        &self.reason_ids
+    }
 }
 
 pub(crate) struct SourceOwner {

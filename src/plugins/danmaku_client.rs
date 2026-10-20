@@ -81,6 +81,53 @@ fn violation_log_line(message: &DanmakuMessage) -> Option<String> {
 
 /// Complete title-only fallback while retaining the source captured at receipt.
 /// No delayed response may attach itself to a replacement ffmpeg session.
+/// The one danmaku line for this event. A released hold (the exemption lets
+/// the source restart) takes the continues copy; otherwise the held copy.
+fn violation_notice_for(cfg: &Config, warnings: &WarningTracker, warning: &WarningEvent) -> String {
+    let snapshot = warnings.snapshot();
+    let source = warning.source();
+    let released = source.is_some_and(|source| {
+        crate::plugins::danmaku::exempt_hold_release(cfg, &snapshot, source).is_some()
+    });
+    let channel_name = source
+        .map(|source| source.channel_name.as_str())
+        .unwrap_or_default();
+    crate::plugins::violation_notice::text(warning.reason_ids(), released, channel_name)
+}
+
+/// A `msg/send` reply is accepted only with an empty `message`: Bilibili
+/// answers `code 0` with a non-empty message for a filtered/repeat danmaku.
+fn danmaku_reply_accepted(reply: &Value) -> bool {
+    reply["message"]
+        .as_str()
+        .is_none_or(|message| message.trim().is_empty())
+}
+
+/// Send the chosen owner line. On a rejection (non-zero code, `code 0` with a
+/// non-empty message such as a filtered repeat, or a transport error) send
+/// today's generic text once as the last attempt; two sends max, one second
+/// apart, and both failures return the last diagnostic.
+async fn send_violation_notice(cfg: &Config, text: &str) -> Result<(), String> {
+    let mut attempts: Vec<&str> = vec![text];
+    if text != crate::plugins::violation_notice::GENERIC_SHORT {
+        attempts.push(crate::plugins::violation_notice::GENERIC_SHORT);
+    }
+    let mut last = String::new();
+    for (attempt, text) in attempts.into_iter().enumerate() {
+        if attempt > 0 {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+        match send_danmaku(cfg, text).await {
+            Ok(reply) if danmaku_reply_accepted(&reply) => return Ok(()),
+            Ok(reply) => {
+                last = format!("code 0 but message={:?}", reply["message"]);
+            }
+            Err(error) => last = error.to_string(),
+        }
+    }
+    Err(last)
+}
+
 async fn complete_warning_event(
     mut event: WarningEvent,
     room: i32,
@@ -1246,11 +1293,11 @@ impl BilibiliDanmakuClient {
                         if !warning_tracker().event_is_current(&warning) {
                             return;
                         }
-                        if let Err(error) = send_danmaku(&cfg, "警告/切断状态，请换台").await
-                        {
+                        let notice = violation_notice_for(&cfg, &warning_tracker(), &warning);
+                        if let Err(error) = send_violation_notice(&cfg, &notice).await {
                             error!(
                                 "Failed to send warning danmaku: {}",
-                                safe_diagnostic(&error.to_string())
+                                safe_diagnostic(&error)
                             );
                         }
                         warning_tracker().finish_unmarked_event(&warning);
@@ -1267,11 +1314,11 @@ impl BilibiliDanmakuClient {
                         if !warning_tracker().event_is_current(&warning) {
                             return;
                         }
-                        if let Err(error) = send_danmaku(&cfg, "警告/切断状态，请换台").await
-                        {
+                        let notice = violation_notice_for(&cfg, &warning_tracker(), &warning);
+                        if let Err(error) = send_violation_notice(&cfg, &notice).await {
                             error!(
                                 "Failed to send warning danmaku: {}",
-                                safe_diagnostic(&error.to_string())
+                                safe_diagnostic(&error)
                             );
                         }
                         if !warning_tracker().event_is_current(&warning) {
@@ -2627,5 +2674,47 @@ mod tests {
             "版本 1.5/2 与 v2.0 和 a.b"
         );
         assert_eq!(stripped("端口 8080 与 2024.11"), "端口 8080 与 2024.11");
+    }
+
+    #[test]
+    fn the_notice_copy_is_reason_aware_and_exemption_aware() {
+        use crate::plugins::danmaku::warning::BroadcastSource;
+        use crate::plugins::warning_exempt::{ExemptChannel, ReasonId};
+
+        let tracker = std::sync::Arc::new(WarningTracker::default());
+        let source = BroadcastSource::new("YT", "星海频道", "UCnotice-fixture", Some("ep-1"));
+        let _owner = tracker.own_source(1, source.clone());
+        let mut event = tracker.capture_event();
+        event.set_reason_ids([ReasonId::IdleRecording].into_iter().collect());
+        tracker.mark_event(&mut event, None).unwrap();
+
+        let mut cfg = crate::test_support::config("local", 0);
+        assert_eq!(
+            violation_notice_for(&cfg, &tracker, &event),
+            "🚫挂机判定，暂停转播 星海频道，请换台。"
+        );
+
+        // The exemption lets the source restart, so the continues copy goes.
+        cfg.warning_hold_exempt =
+            vec![ExemptChannel::new("YT", "UCnotice-fixture", "星海频道").unwrap()];
+        cfg.warning_hold_exempt_reasons = vec!["idle_recording".into()];
+        assert_eq!(
+            violation_notice_for(&cfg, &tracker, &event),
+            "🚫挂机判定，稍后自动恢复。"
+        );
+    }
+
+    #[test]
+    fn a_code_zero_reply_with_a_message_counts_as_rejected() {
+        assert!(danmaku_reply_accepted(&serde_json::json!({"code": 0})));
+        assert!(danmaku_reply_accepted(
+            &serde_json::json!({"code": 0, "message": ""})
+        ));
+        assert!(!danmaku_reply_accepted(
+            &serde_json::json!({"code": 0, "message": "msg repeat"})
+        ));
+        assert!(!danmaku_reply_accepted(
+            &serde_json::json!({"code": 0, "message": " 过滤 "})
+        ));
     }
 }
