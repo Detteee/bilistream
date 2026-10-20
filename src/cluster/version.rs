@@ -27,6 +27,7 @@ pub fn monitored_config_from_config(cfg: &Config) -> MonitoredConfig {
         areas_json: read_json_file("areas.json"),
         warning_hold_exempt: cfg.warning_hold_exempt.clone(),
         warning_hold_exempt_reasons: cfg.warning_hold_exempt_reasons.clone(),
+        warning_hold_exempt_all_low_risk: cfg.warning_hold_exempt_all_low_risk,
     };
     sanitize_local_source_settings(&mut payload);
     payload

@@ -310,6 +310,9 @@ pub struct MonitoredConfig {
     pub warning_hold_exempt: Vec<crate::plugins::warning_exempt::ExemptChannel>,
     #[serde(default)]
     pub warning_hold_exempt_reasons: Vec<String>,
+    /// Low-risk reasons apply to every channel (mid/high still need the list).
+    #[serde(default)]
+    pub warning_hold_exempt_all_low_risk: bool,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq, Hash)]

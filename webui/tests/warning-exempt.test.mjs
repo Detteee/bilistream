@@ -2,9 +2,9 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { test } from 'node:test';
 import {
-  DEFAULT_EXEMPT_REASONS, EXEMPT_REASON_ROWS, HIGH_RISK_WARNING, channelSelected, groupedEntries,
-  knownEntries, normalizeEntries, normalizeReasons, pickerRows, platformLabel, removeChannel,
-  staleEntries, toggleChannel,
+  DEFAULT_EXEMPT_REASONS, EXEMPT_REASON_ROWS, HIGH_RISK_WARNING, LOW_RISK_REASON_IDS, channelReasonRows,
+  channelSelected, groupedEntries, isLowRiskReason, knownEntries, normalizeEntries, normalizeReasons,
+  pickerRows, platformLabel, removeChannel, staleEntries, toggleChannel,
 } from '../src/js/warning-exempt.js';
 
 const catalog = [
@@ -80,15 +80,28 @@ test('gone roster identities are shown removable but never saved again', () => {
   assert.deepEqual(staleEntries(entries, catalog).map(entry => entry.name), ['已移除频道']);
 });
 
+test('low risk is global while only mid/high reasons use channel filters', () => {
+  assert.deepEqual([...LOW_RISK_REASON_IDS], ['idle_recording']);
+  assert.equal(isLowRiskReason('idle_recording'), true);
+  assert.equal(isLowRiskReason('game_mode_off'), false);
+  assert.deepEqual(
+    channelReasonRows().map(row => row.id),
+    ['game_mode_off', 'game_info_violation', 'content_unsuitable'],
+  );
+});
+
 test('the settings page wires the card and sends the fields', async () => {
   const html = await readFile(new URL('../src/index.html', import.meta.url), 'utf8');
   for (const id of [
     'warning-exempt-section', 'warning-exempt-list', 'warning-exempt-picker-toggle',
-    'warning-exempt-search', 'warning-exempt-results', 'warning-exempt-reasons', 'warning-exempt-empty',
+    'warning-exempt-search', 'warning-exempt-results', 'warning-exempt-reasons',
+    'warning-exempt-empty', 'warning-exempt-all-low-risk',
   ]) {
     assert.match(html, new RegExp(`id="${id}"`), id);
   }
-  assert.match(html, /违规后可续播频道/);
+  assert.match(html, /违规后可续播/);
+  assert.match(html, /应用到全部频道/);
+  assert.match(html, /中高风险 · 指定频道/);
   assert.match(html, /反复违规继续开播极易导致直播间被关闭。/);
   assert.match(html, /直播间锁定等不针对单个频道的限制也不会续播。/);
   const js = await readFile(new URL('../src/js/settings.js', import.meta.url), 'utf8');
@@ -96,7 +109,9 @@ test('the settings page wires the card and sends the fields', async () => {
   assert.match(js, /warning_hold_exempt: knownEntries\(exemptEntries, exemptCatalog\)\.map/);
   assert.match(js, /已不在频道管理中/);
   assert.match(js, /input\.dataset\.channel = row\.name/);
-  assert.match(js, /warning_hold_exempt_reasons: \[\.\.\.exemptReasons\]/);
+  assert.match(js, /warning_hold_exempt_all_low_risk: exemptAllLowRisk/);
+  assert.match(js, /channelReasonRows\(\)\.map/);
+  assert.match(js, /warning_hold_exempt_reasons: normalizeReasons\(\[/);
   const css = await readFile(new URL('../src/styles.css', import.meta.url), 'utf8');
   assert.match(css, /\.warning-exempt-row \{/);
   assert.match(css, /\.risk-tag--danger \{ color: var\(--danger\); \}/);

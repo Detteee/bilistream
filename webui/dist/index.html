@@ -1628,26 +1628,51 @@
           </div>
           <div class="panel__body">
             <p class="settings-help-text warning-exempt-risk" data-tone="warn">
-              B站 警告/切断后，bilistream 默认暂停转播并等待手动恢复。加入此列表的频道，若原因属于下方勾选的类型，下一次轮询会自动重新开播；其他原因仍然暂停。
+              B站 警告/切断后默认暂停转播并等待手动恢复。低风险可以应用到全部频道，中高风险只需为指定频道开启；其他情况仍然暂停。
               <strong>反复违规继续开播极易导致直播间被关闭。</strong>
             </p>
-            <ul class="warning-exempt-list" id="warning-exempt-list" aria-labelledby="warning-exempt-title"></ul>
-            <p class="settings-help-text warning-exempt-empty" id="warning-exempt-empty">还没有可续播的频道。默认情况下所有频道在警告/切断后都会暂停。</p>
-            <details class="warning-exempt-picker" id="warning-exempt-picker">
-              <summary class="btn-secondary" id="warning-exempt-picker-toggle" aria-controls="warning-exempt-picker-content">
-                选择频道
-                <span class="warning-exempt-chevron" aria-hidden="true">⌄</span>
-              </summary>
-              <div class="warning-exempt-picker-content" id="warning-exempt-picker-content">
-                <label for="warning-exempt-search">搜索频道名称</label>
-                <input type="search" id="warning-exempt-search" placeholder="输入名称筛选（可选）" autocomplete="off"
-                  aria-controls="warning-exempt-results" aria-describedby="warning-exempt-results-count">
-                <small class="settings-help-text" id="warning-exempt-results-count" role="status"></small>
-                <ul class="warning-exempt-results" id="warning-exempt-results" role="group" aria-labelledby="warning-exempt-picker-toggle"></ul>
+
+            <div class="warning-exempt-group">
+              <div class="warning-exempt-group-head">
+                <h3 class="warning-exempt-subtitle">低风险 · 挂机/录播等消极直播</h3>
+                <span class="risk-tag risk-tag--low">低风险</span>
               </div>
-            </details>
-            <h3 class="warning-exempt-subtitle">可续播的违规类型</h3>
-            <div class="warning-exempt-reasons" id="warning-exempt-reasons"></div>
+              <label class="toggle-label warning-exempt-switch" for="warning-exempt-all-low-risk">
+                <span class="toggle-switch">
+                  <input type="checkbox" id="warning-exempt-all-low-risk">
+                  <span class="toggle-slider"></span>
+                </span>
+                <span>应用到全部频道</span>
+              </label>
+              <small class="settings-help-text">开启后，所有频道遇到挂机/录播判定都会在下一轮监控自动恢复，不需要逐个添加频道。</small>
+            </div>
+
+            <div class="warning-exempt-group">
+              <div class="warning-exempt-group-head">
+                <h3 class="warning-exempt-subtitle">中高风险 · 指定频道</h3>
+                <span class="risk-tag risk-tag--warn">中风险</span>
+                <span class="risk-tag risk-tag--danger">高风险</span>
+              </div>
+              <small class="settings-help-text">只有下面列出的频道会在勾选的中高风险原因下自动恢复；未列出的频道继续暂停。</small>
+              <div class="warning-exempt-reasons" id="warning-exempt-reasons"></div>
+              <small class="settings-help-text warning-exempt-danger">此类违规继续开播极易导致直播间被关闭。</small>
+              <ul class="warning-exempt-list" id="warning-exempt-list" aria-label="中高风险指定频道"></ul>
+              <p class="settings-help-text warning-exempt-empty" id="warning-exempt-empty">还没有指定频道。</p>
+              <details class="warning-exempt-picker" id="warning-exempt-picker">
+                <summary class="btn-secondary" id="warning-exempt-picker-toggle" aria-controls="warning-exempt-picker-content">
+                  选择频道
+                  <span class="warning-exempt-chevron" aria-hidden="true">⌄</span>
+                </summary>
+                <div class="warning-exempt-picker-content" id="warning-exempt-picker-content">
+                  <label for="warning-exempt-search">搜索频道名称</label>
+                  <input type="search" id="warning-exempt-search" placeholder="输入名称筛选（可选）" autocomplete="off"
+                    aria-controls="warning-exempt-results" aria-describedby="warning-exempt-results-count">
+                  <small class="settings-help-text" id="warning-exempt-results-count" role="status"></small>
+                  <ul class="warning-exempt-results" id="warning-exempt-results" role="group" aria-labelledby="warning-exempt-picker-toggle"></ul>
+                </div>
+              </details>
+            </div>
+
             <small class="settings-help-text">未识别的原因、没有原因或遮罩警示一律暂停；直播间锁定等不针对单个频道的限制也不会续播。</small>
             <details class="warning-exempt-rules">
               <summary>识别规则</summary>

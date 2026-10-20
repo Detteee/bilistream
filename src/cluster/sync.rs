@@ -294,6 +294,7 @@ pub(crate) fn apply_monitored_config_to_config(cfg: &mut Config, payload: Monito
     );
     cfg.warning_hold_exempt_reasons =
         crate::plugins::warning_exempt::split_reason_ids(payload.warning_hold_exempt_reasons).0;
+    cfg.warning_hold_exempt_all_low_risk = payload.warning_hold_exempt_all_low_risk;
 
     cfg.bililive.enable_danmaku_command = local_enable_danmaku_command;
     cfg.enable_youtube_monitor = local_enable_youtube_monitor;

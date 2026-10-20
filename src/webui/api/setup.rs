@@ -389,6 +389,7 @@ pub(crate) async fn save_setup_config(
             enable_twitch_monitor: false,
             warning_hold_exempt: Vec::new(),
             warning_hold_exempt_reasons: crate::config::default_warning_hold_exempt_reasons(),
+            warning_hold_exempt_all_low_risk: false,
             niconico: crate::config::Niconico::default(),
             cluster: crate::config::ClusterConfig::default(),
             history: Default::default(),

@@ -187,6 +187,7 @@ fn config_response(cfg: &Config) -> serde_json::Value {
     });
     response["warning_hold_exempt"] = json!(cfg.warning_hold_exempt);
     response["warning_hold_exempt_reasons"] = json!(cfg.warning_hold_exempt_reasons);
+    response["warning_hold_exempt_all_low_risk"] = json!(cfg.warning_hold_exempt_all_low_risk);
     response["warning_hold_exempt_channels"] = exempt_channel_catalog();
     response["riot_api_key_configured"] =
         json!(cfg.riot_api_key.as_ref().is_some_and(|s| !s.is_empty()));
@@ -246,6 +247,7 @@ pub struct UpdateConfigRequest {
     twitch_enable_monitor: Option<bool>,
     warning_hold_exempt: Option<Vec<crate::plugins::warning_exempt::ExemptChannel>>,
     warning_hold_exempt_reasons: Option<Vec<String>>,
+    warning_hold_exempt_all_low_risk: Option<bool>,
     youtube_cookies_from_browser: Option<String>,
     youtube_cookies_file: Option<String>,
     niconico_user_session: Option<String>,
@@ -404,6 +406,7 @@ fn config_form_values(cfg: &Config) -> serde_json::Value {
         "history": cfg.history,
         "warning_hold_exempt": cfg.warning_hold_exempt,
         "warning_hold_exempt_reasons": cfg.warning_hold_exempt_reasons,
+        "warning_hold_exempt_all_low_risk": cfg.warning_hold_exempt_all_low_risk,
     })
 }
 
@@ -472,6 +475,22 @@ pub(crate) fn validated_exempt_reasons(reasons: Vec<String>) -> Result<Vec<Strin
         Some(reason) => Err(format!("违规类型无效：{reason}")),
         None => Ok(known),
     }
+}
+
+/// The global low-risk switch only means something when the low-risk class is
+/// ticked; refuse a combination that would silently do nothing.
+pub(crate) fn validated_exempt_all_low_risk(
+    reasons: &[String],
+    all_low_risk: bool,
+) -> Result<(), String> {
+    if all_low_risk
+        && !reasons.iter().any(|reason| {
+            reason == crate::plugins::warning_exempt::ReasonId::IdleRecording.as_str()
+        })
+    {
+        return Err("「应用到全部频道」需要先勾选低风险类型（挂机/录播）".into());
+    }
+    Ok(())
 }
 
 /// Validate and canonicalize the exemption channel identities a save carries:
@@ -893,7 +912,10 @@ pub async fn update_config(
         cfg.twitch.enable_monitor = twitch_enable_monitor;
         cfg.enable_twitch_monitor = twitch_enable_monitor;
     }
-    if payload.warning_hold_exempt.is_some() || payload.warning_hold_exempt_reasons.is_some() {
+    if payload.warning_hold_exempt.is_some()
+        || payload.warning_hold_exempt_reasons.is_some()
+        || payload.warning_hold_exempt_all_low_risk.is_some()
+    {
         if let Some(entries) = payload.warning_hold_exempt.take() {
             let roster =
                 crate::config::load_channels().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -906,6 +928,20 @@ pub async fn update_config(
             match validated_exempt_reasons(reasons) {
                 Ok(reasons) => cfg.warning_hold_exempt_reasons = reasons,
                 Err(message) => return Ok(edit_refusal(message)),
+            }
+        }
+        if let Some(all_low_risk) = payload.warning_hold_exempt_all_low_risk {
+            match validated_exempt_all_low_risk(&cfg.warning_hold_exempt_reasons, all_low_risk) {
+                Ok(()) => cfg.warning_hold_exempt_all_low_risk = all_low_risk,
+                Err(message) => return Ok(edit_refusal(message)),
+            }
+        } else if cfg.warning_hold_exempt_all_low_risk {
+            // Changing the reason list can remove the low-risk tick the global
+            // switch depends on.
+            if let Err(message) =
+                validated_exempt_all_low_risk(&cfg.warning_hold_exempt_reasons, true)
+            {
+                return Ok(edit_refusal(message));
             }
         }
     }
@@ -1377,6 +1413,7 @@ mod tests {
             response["warning_hold_exempt_reasons"],
             json!(["game_mode_off"])
         );
+        assert_eq!(response["warning_hold_exempt_all_low_risk"], json!(false));
         assert!(
             response["warning_hold_exempt_channels"].is_array(),
             "the picker roster must always be a list"
@@ -1399,6 +1436,21 @@ mod tests {
         assert_eq!(
             values["warning_hold_exempt_reasons"],
             json!(["game_mode_off"])
+        );
+        assert_eq!(values["warning_hold_exempt_all_low_risk"], json!(false));
+    }
+
+    #[test]
+    fn the_global_low_risk_switch_requires_the_low_risk_tick() {
+        assert!(validated_exempt_all_low_risk(&[], false).is_ok());
+        assert!(
+            validated_exempt_all_low_risk(&[], true).is_err(),
+            "the switch without the idle tick would silently do nothing"
+        );
+        assert!(validated_exempt_all_low_risk(&["idle_recording".into()], true).is_ok());
+        assert!(
+            validated_exempt_all_low_risk(&["game_mode_off".into()], true).is_err(),
+            "a mid/high-only list cannot back the low-risk switch"
         );
     }
 }

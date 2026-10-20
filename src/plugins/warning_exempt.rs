@@ -318,6 +318,8 @@ pub struct HoldDecision<'a> {
     pub exempt: &'a [ExemptChannel],
     /// Ticked built-in reason ids.
     pub allowed_reasons: &'a [String],
+    /// Low-risk reasons apply to every monitored channel.
+    pub all_low_risk: bool,
     pub platform: &'a str,
     pub channel_id: &'a str,
     /// Every class the held reason matched; empty means unknown.
@@ -330,19 +332,22 @@ pub struct HoldDecision<'a> {
 
 impl HoldDecision<'_> {
     /// Cheap conditions that need no I/O: not a lock, a known reason, every
-    /// matched class ticked and the held identity on the exempt list.
+    /// matched class ticked, and either the held identity is on the exempt
+    /// list or every matched class is low risk under the global switch.
     pub fn configured_release(&self) -> bool {
-        !self.room_lock
-            && !self.reason_ids.is_empty()
+        let allowed = !self.reason_ids.is_empty()
             && self.reason_ids.iter().all(|id| {
                 self.allowed_reasons
                     .iter()
                     .any(|allowed| allowed == id.as_str())
-            })
-            && self
-                .exempt
-                .iter()
-                .any(|entry| entry.matches(self.platform, self.channel_id))
+            });
+        let listed = self
+            .exempt
+            .iter()
+            .any(|entry| entry.matches(self.platform, self.channel_id));
+        let low_risk_everywhere =
+            self.all_low_risk && self.reason_ids.iter().all(|id| id.risk() == RiskTier::Low);
+        !self.room_lock && allowed && (listed || low_risk_everywhere)
     }
 
     /// Release only when the cheap conditions pass and the R4 rail has room.
@@ -575,6 +580,7 @@ mod tests {
             HoldDecision {
                 exempt,
                 allowed_reasons: allowed,
+                all_low_risk: false,
                 platform: "YT",
                 channel_id,
                 reason_ids: ids,
@@ -603,6 +609,58 @@ mod tests {
             !decision(&exempt, &allowed, &idle, false, false, "UC2").releases(),
             "not exempt"
         );
+
+        // The global low-risk switch releases an unlisted channel when every
+        // matched class is low risk; a mid/high class still needs the list.
+        fn global<'a>(
+            exempt: &'a [ExemptChannel],
+            allowed: &'a [String],
+            channel_id: &'a str,
+            ids: &'a BTreeSet<ReasonId>,
+        ) -> HoldDecision<'a> {
+            HoldDecision {
+                exempt,
+                allowed_reasons: allowed,
+                all_low_risk: true,
+                platform: "YT",
+                channel_id,
+                reason_ids: ids,
+                rail_hit: false,
+                room_lock: false,
+            }
+        }
+        assert!(
+            global(&exempt, &allowed, "UC2", &idle).releases(),
+            "global low-risk idle"
+        );
+        assert!(
+            !global(&exempt, &allowed, "UC2", &both).releases(),
+            "a high-tag class still needs the channel list"
+        );
+        assert!(
+            !global(&exempt, &allowed, "UC2", &BTreeSet::new()).releases(),
+            "unknown never releases"
+        );
+        let mid: BTreeSet<ReasonId> = [ReasonId::GameModeOff].into_iter().collect();
+        assert!(
+            !global(&exempt, &allowed, "UC2", &mid).releases(),
+            "the mid-risk class is not covered by the low-risk switch"
+        );
+        let high_ticked = vec![
+            "idle_recording".to_string(),
+            "game_info_violation".to_string(),
+        ];
+        let listed_high = HoldDecision {
+            exempt: &exempt,
+            allowed_reasons: &high_ticked,
+            all_low_risk: true,
+            platform: "YT",
+            channel_id: "UC1",
+            reason_ids: &both,
+            rail_hit: false,
+            room_lock: false,
+        };
+        assert!(listed_high.releases(), "a listed channel covers mid/high");
     }
 
     #[test]

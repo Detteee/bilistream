@@ -77,6 +77,7 @@ pub(crate) fn config(node_id: &str, priority: i32) -> Config {
         enable_twitch_monitor: true,
         warning_hold_exempt: Vec::new(),
         warning_hold_exempt_reasons: crate::config::default_warning_hold_exempt_reasons(),
+        warning_hold_exempt_all_low_risk: false,
         niconico: crate::config::Niconico::default(),
         cluster: ClusterConfig {
             enabled: true,

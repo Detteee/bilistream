@@ -202,6 +202,10 @@ pub struct Config {
     /// peer push.
     #[serde(default = "default_warning_hold_exempt_reasons")]
     pub warning_hold_exempt_reasons: Vec<String>,
+    /// Apply the low-risk (挂机/录播) class to every monitored channel; the
+    /// mid/high classes still need an explicit exempt-channel entry.
+    #[serde(default)]
+    pub warning_hold_exempt_all_low_risk: bool,
     #[serde(default)]
     pub niconico: Niconico,
     #[serde(default)]

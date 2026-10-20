@@ -10,6 +10,17 @@ export const EXEMPT_REASON_ROWS = Object.freeze([
   { id: 'content_unsuitable', name: '直播内容不适宜', risk: '高风险', tone: 'danger' },
 ]);
 export const DEFAULT_EXEMPT_REASONS = Object.freeze(['idle_recording']);
+/** The low-risk class can apply to every channel; the rest need channel filters. */
+export const LOW_RISK_REASON_IDS = Object.freeze(['idle_recording']);
+
+export function isLowRiskReason(id) {
+  return LOW_RISK_REASON_IDS.includes(id);
+}
+
+/** Reason rows that still use the per-channel filter. */
+export function channelReasonRows() {
+  return EXEMPT_REASON_ROWS.filter(row => !isLowRiskReason(row.id));
+}
 export const HIGH_RISK_WARNING = '此类违规继续开播极易导致直播间被关闭。';
 const REASON_IDS = new Set(EXEMPT_REASON_ROWS.map(row => row.id));
 const PLATFORM_LABELS = Object.freeze({ YT: 'YouTube', TW: 'Twitch', NC: 'Niconico' });

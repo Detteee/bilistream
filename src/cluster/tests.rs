@@ -687,6 +687,7 @@ fn push_applies_the_warning_hold_exemption_and_drops_gone_identities() {
         "not_a_reason".to_string(),
         "idle_recording".to_string(),
     ];
+    payload.warning_hold_exempt_all_low_risk = true;
     let mut local = config("local", 0);
     apply_monitored_config_to_config(&mut local, payload);
     assert_eq!(local.warning_hold_exempt.len(), 1);
@@ -696,6 +697,7 @@ fn push_applies_the_warning_hold_exemption_and_drops_gone_identities() {
         local.warning_hold_exempt_reasons,
         vec!["idle_recording".to_string()]
     );
+    assert!(local.warning_hold_exempt_all_low_risk);
 
     // The integrity hash covers the new fields, so an older peer rejects a
     // push that carries them instead of silently dropping the list.
@@ -705,6 +707,12 @@ fn push_applies_the_warning_hold_exemption_and_drops_gone_identities() {
     assert_ne!(
         monitored_config_integrity_version_from_payload(&base),
         monitored_config_integrity_version_from_payload(&changed)
+    );
+    let mut changed_all_low_risk = base.clone();
+    changed_all_low_risk.warning_hold_exempt_all_low_risk = true;
+    assert_ne!(
+        monitored_config_integrity_version_from_payload(&base),
+        monitored_config_integrity_version_from_payload(&changed_all_low_risk)
     );
     let mut changed_reasons = base.clone();
     changed_reasons.warning_hold_exempt_reasons = vec!["game_mode_off".into()];

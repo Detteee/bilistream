@@ -1386,6 +1386,7 @@ pub(crate) fn exempt_hold_release(
     let decision = crate::plugins::warning_exempt::HoldDecision {
         exempt: &cfg.warning_hold_exempt,
         allowed_reasons: &cfg.warning_hold_exempt_reasons,
+        all_low_risk: cfg.warning_hold_exempt_all_low_risk,
         platform: &source.platform,
         channel_id: &source.channel_id,
         reason_ids: &reason_ids,

@@ -11,8 +11,8 @@ import { createConfigPatch } from './config-draft.js';
 import { saveBooleanToggle } from './toggle-save.js';
 import { discoveryTiles, formatGoliveSummary, formatKeyPoolSummary, goliveHourRows, keyMeterRows } from './format.js';
 import {
-  EXEMPT_REASON_ROWS, HIGH_RISK_WARNING, groupedEntries, knownEntries, normalizeEntries,
-  normalizeReasons, pickerRows, platformLabel, removeChannel, staleEntries, toggleChannel,
+  channelReasonRows, groupedEntries, knownEntries, normalizeEntries, normalizeReasons,
+  pickerRows, platformLabel, removeChannel, staleEntries, toggleChannel,
 } from './warning-exempt.js';
 
 let configBaseline = null;
@@ -25,6 +25,7 @@ let nicoSessionChecking = false;
 let exemptCatalog = [];
 let exemptEntries = [];
 let exemptReasons = [];
+let exemptAllLowRisk = false;
 let exemptWired = false;
 const secretControls = [
   { field: 'holodex_api_key', input: 'config-holodex-key', button: 'config-clear-holodex-key', label: 'Holodex API Key', configured: c => c.holodex_api_key_configured },
@@ -206,8 +207,7 @@ function renderExemptList() {
 function renderExemptReasons() {
   const box = document.getElementById('warning-exempt-reasons');
   if (!box) return;
-  box.replaceChildren(...EXEMPT_REASON_ROWS.map(row => {
-    const wrap = el('div', 'warning-exempt-reason-row');
+  box.replaceChildren(...channelReasonRows().map(row => {
     const label = el('label', 'warning-exempt-reason');
     const input = document.createElement('input');
     input.type = 'checkbox';
@@ -220,10 +220,19 @@ function renderExemptReasons() {
     });
     const tag = el('span', `risk-tag risk-tag--${row.tone || 'low'}`, row.risk);
     label.append(input, el('span', 'warning-exempt-reason-name', row.name), tag);
-    wrap.append(label);
-    if (row.tone === 'danger') wrap.append(el('small', 'settings-help-text warning-exempt-danger', HIGH_RISK_WARNING));
-    return wrap;
+    return label;
   }));
+}
+function wireExemptLowRisk() {
+  const input = document.getElementById('warning-exempt-all-low-risk');
+  if (!input) return;
+  input.checked = exemptAllLowRisk;
+  input.onchange = () => {
+    exemptAllLowRisk = input.checked;
+    exemptReasons = exemptAllLowRisk
+      ? normalizeReasons([...exemptReasons, 'idle_recording'])
+      : exemptReasons.filter(id => id !== 'idle_recording');
+  };
 }
 function renderExemptPicker(search = document.getElementById('warning-exempt-search')?.value || '') {
   const results = document.getElementById('warning-exempt-results');
@@ -256,7 +265,9 @@ function renderWarningHoldExempt(config) {
   exemptCatalog = Array.isArray(config?.warning_hold_exempt_channels) ? config.warning_hold_exempt_channels : [];
   exemptEntries = normalizeEntries(config?.warning_hold_exempt);
   exemptReasons = normalizeReasons(config?.warning_hold_exempt_reasons);
+  exemptAllLowRisk = config?.warning_hold_exempt_all_low_risk === true;
   wireExemptSearch();
+  wireExemptLowRisk();
   renderExemptList();
   renderExemptReasons();
   renderExemptPicker();
@@ -735,7 +746,11 @@ function getCurrentConfig() {
     niconico_session_check_enabled: document.getElementById('config-nc-session-check').checked,
     niconico_proxy: document.getElementById('config-nc-proxy').value.trim(),
     warning_hold_exempt: knownEntries(exemptEntries, exemptCatalog).map(entry => ({ platform: entry.platform, channel_id: entry.channel_id, name: entry.name })),
-    warning_hold_exempt_reasons: [...exemptReasons],
+    warning_hold_exempt_reasons: normalizeReasons([
+      ...(exemptAllLowRisk ? ['idle_recording'] : []),
+      ...exemptReasons.filter(id => id !== 'idle_recording'),
+    ]),
+    warning_hold_exempt_all_low_risk: exemptAllLowRisk,
     cluster: getClusterConfigFromForm()
   };
 }
