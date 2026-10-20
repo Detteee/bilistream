@@ -115,7 +115,8 @@ test('the settings page wires the card and sends the fields', async () => {
   assert.match(js, /input\.dataset\.channel = row\.name/);
   assert.match(js, /warning_hold_exempt_all_low_risk: exemptAllLowRisk/);
   assert.match(js, /channelReasonRows\(\)\.map/);
-  assert.match(js, /warning_hold_exempt_reasons: normalizeReasons\(\[/);
+  assert.match(js, /warning_hold_exempt_reasons: normalizeReasons\(exemptReasons\)/);
+  assert.match(js, /patch\.expected\.warning_hold_exempt = structuredClone\(exemptServerEntries\)/);
   const css = await readFile(new URL('../src/styles.css', import.meta.url), 'utf8');
   assert.match(css, /\.warning-exempt-row \{/);
   assert.match(css, /\.risk-tag--danger \{ color: var\(--danger\); \}/);

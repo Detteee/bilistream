@@ -24,6 +24,9 @@ let savedSecretConfig = null;
 let nicoSessionChecking = false;
 let exemptCatalog = [];
 let exemptEntries = [];
+// Raw server list, including stale identities the form filters out; used as the
+// precondition value so a channel edit does not look like a concurrent change.
+let exemptServerEntries = [];
 let exemptReasons = [];
 let exemptAllLowRisk = false;
 let exemptWired = false;
@@ -264,6 +267,7 @@ function renderExemptPicker(search = document.getElementById('warning-exempt-sea
 function renderWarningHoldExempt(config) {
   exemptCatalog = Array.isArray(config?.warning_hold_exempt_channels) ? config.warning_hold_exempt_channels : [];
   exemptEntries = normalizeEntries(config?.warning_hold_exempt);
+  exemptServerEntries = normalizeEntries(config?.warning_hold_exempt);
   exemptReasons = normalizeReasons(config?.warning_hold_exempt_reasons);
   exemptAllLowRisk = config?.warning_hold_exempt_all_low_risk === true;
   wireExemptSearch();
@@ -746,10 +750,9 @@ function getCurrentConfig() {
     niconico_session_check_enabled: document.getElementById('config-nc-session-check').checked,
     niconico_proxy: document.getElementById('config-nc-proxy').value.trim(),
     warning_hold_exempt: knownEntries(exemptEntries, exemptCatalog).map(entry => ({ platform: entry.platform, channel_id: entry.channel_id, name: entry.name })),
-    warning_hold_exempt_reasons: normalizeReasons([
-      ...(exemptAllLowRisk ? ['idle_recording'] : []),
-      ...exemptReasons.filter(id => id !== 'idle_recording'),
-    ]),
+    // Keep the server's list as-is; filtering here made the client baseline
+    // disagree with the backend and every card edit became a false 409.
+    warning_hold_exempt_reasons: normalizeReasons(exemptReasons),
     warning_hold_exempt_all_low_risk: exemptAllLowRisk,
     cluster: getClusterConfigFromForm()
   };
@@ -769,6 +772,11 @@ async function saveSystemConfig() {
     configBaseline.cluster = rebaseClusterDraft(configBaseline.cluster);
     const patch = createConfigPatch(config, configBaseline);
     if (patch) {
+      // The form drops identities whose channel is gone; the precondition must
+      // still name what the server actually holds.
+      if ('warning_hold_exempt' in patch) {
+        patch.expected.warning_hold_exempt = structuredClone(exemptServerEntries);
+      }
       if (secretRevision === null && secretControls.some(control => control.field in patch)) throw new Error('请重新加载凭据状态后再保存');
       // Proxy addresses are visible; an unchanged masked password is retained
       // explicitly rather than submitted as a credential.
@@ -791,6 +799,7 @@ async function saveSystemConfig() {
       if (patch.cluster) acceptClusterConfigBaseline(config.cluster);
       // Preserve edits made during the save: advance only to what was sent.
       configBaseline = structuredClone(config);
+      exemptServerEntries = normalizeEntries(config.warning_hold_exempt);
       for (const control of secretControls) {
         const input = document.getElementById(control.input);
         if (!control.field.endsWith('_proxy') && control.field in patch && input.value.trim() === config[control.field]) {
