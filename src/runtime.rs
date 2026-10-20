@@ -4275,7 +4275,7 @@ mod tests {
                 let warnings = std::sync::Arc::new(WarningTracker::default());
                 let old_source = BroadcastSource::new("YT", &cfg.youtube.channel_name, &cfg.youtube.channel_id, Some("yt-episode-1"));
                 let old_owner = warnings.own_source(100, old_source.clone());
-                capture_warning_message(&warnings, &DanmakuMessage {
+                capture_warning_message(7_005, &warnings, &DanmakuMessage {
                     cmd: "CUT_OFF".into(), info: None,
                     data: Some(serde_json::json!({"msg": "Stream cut off"})), msg: None,
                 }).unwrap();
@@ -4386,6 +4386,7 @@ mod tests {
             );
             let _owner = warnings.own_source(1, held.clone());
             capture_warning_message(
+                7_006,
                 &warnings,
                 &DanmakuMessage {
                     cmd: "CUT_OFF".into(),

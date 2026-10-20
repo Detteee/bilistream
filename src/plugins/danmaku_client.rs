@@ -21,6 +21,7 @@ use crate::plugins::danmaku::warning::{
 use crate::plugins::{bili_stop_live, send_danmaku};
 
 pub(crate) fn capture_warning_message(
+    room: u64,
     warnings: &WarningTracker,
     message: &DanmakuMessage,
 ) -> Option<WarningEvent> {
@@ -58,7 +59,44 @@ pub(crate) fn capture_warning_message(
             .map(|reason| crate::plugins::warning_exempt::classify(&reason.reason))
             .unwrap_or_default(),
     );
-    if cmd != "ROOM_LOCK" {
+    // Mask/dialog pairing: one frame owns the stop and notice, the other only
+    // refines the hold's reason classes.
+    let pair = match message.cmd.as_str() {
+        "FULL_SCREEN_MASK_OPEN" => {
+            let role = crate::plugins::mask_pairing::note_mask(
+                room,
+                std::time::Instant::now(),
+                mask_overlay(message),
+            );
+            if let crate::plugins::mask_pairing::PairRole::MaskFollower { reason_ids, .. } = &role {
+                event.set_reason_ids(reason_ids.clone());
+            }
+            Some(role)
+        }
+        "ANCHOR_ECOLOGY_LIVING_DIALOG" => Some(crate::plugins::mask_pairing::note_dialog(
+            room,
+            std::time::Instant::now(),
+            event.reason_ids().clone(),
+        )),
+        _ => None,
+    };
+    event.set_pair(pair);
+    let role = event.pair().cloned();
+    let mask_follower = matches!(
+        role,
+        Some(crate::plugins::mask_pairing::PairRole::MaskFollower { .. })
+    );
+    // A paired dialog only refines the existing hold (it must work even after
+    // the relay owner was released); the mask earlier marked it.
+    let refine_hold = matches!(
+        role,
+        Some(crate::plugins::mask_pairing::PairRole::DialogFollower)
+            | Some(crate::plugins::mask_pairing::PairRole::HoldRefinement)
+    );
+    if refine_hold {
+        warnings.refine_hold_reasons(event.reason_ids().clone());
+    }
+    if cmd != "ROOM_LOCK" && !mask_follower && !refine_hold {
         if let Some(name) = warnings.mark_event(&mut event, None) {
             log_warning_mark(&name);
         }
@@ -103,7 +141,15 @@ fn violation_notice_for(cfg: &Config, warnings: &WarningTracker, warning: &Warni
     let channel_name = source
         .map(|source| source.channel_name.as_str())
         .unwrap_or_default();
-    crate::plugins::violation_notice::text(warning.reason_ids(), released, channel_name)
+    // A paired dialog refines the hold after the mask frame was captured, so
+    // the current hold's classes win over the frame's own (empty for a mask).
+    let held = snapshot.hold_reasons();
+    let reason_ids = if held.is_empty() {
+        warning.reason_ids()
+    } else {
+        &held
+    };
+    crate::plugins::violation_notice::text(reason_ids, released, channel_name)
 }
 
 /// A `msg/send` reply is accepted only with an empty `message`: Bilibili
@@ -137,6 +183,22 @@ async fn send_violation_notice(cfg: &Config, text: &str) -> Result<(), String> {
         }
     }
     Err(last)
+}
+
+/// Stop the relayed room for a warning/cut and record the session end cause.
+async fn stop_room_for_warning(cfg: &Config, room: u64) {
+    match bili_stop_live(cfg).await {
+        Ok(()) => crate::notify::live_ended_with(
+            crate::events::BroadcastEndCause::WarningCut,
+            recent_violation(room, Instant::now()),
+        ),
+        Err(error) => {
+            error!(
+                "Failed to stop live on warning: {}",
+                safe_diagnostic(&error.to_string())
+            );
+        }
+    }
 }
 
 async fn complete_warning_event(
@@ -616,6 +678,18 @@ fn labelled_row(rows: Option<&Value>, label: &str) -> Option<String> {
 
 /// `FULL_SCREEN_MASK_OPEN`'s `data.title`, cleaned (R3b); nothing else of
 /// the frame is read.
+/// The mask's own overlay window (`overlay_second`, default 60 s, capped at
+/// ten minutes so a hostile frame cannot pin pairing state for long).
+fn mask_overlay(message: &DanmakuMessage) -> Duration {
+    let seconds = message
+        .data
+        .as_ref()
+        .and_then(|data| data.get("overlay_second"))
+        .and_then(Value::as_u64)
+        .unwrap_or(crate::plugins::mask_pairing::DEFAULT_OVERLAY.as_secs());
+    Duration::from_secs(seconds.min(600))
+}
+
 fn mask_title(message: &DanmakuMessage) -> Option<String> {
     cleaned(message.data.as_ref().and_then(|data| data.get("title")))
 }
@@ -1153,7 +1227,7 @@ impl BilibiliDanmakuClient {
         let warnings = warning_tracker();
         let warning_events: Vec<_> = messages
             .iter()
-            .map(|message| capture_warning_message(&warnings, message))
+            .map(|message| capture_warning_message(self.room_id, &warnings, message))
             .collect();
         for (message, warning) in messages.into_iter().zip(warning_events) {
             self.process_captured_danmaku_command(&message, warning)
@@ -1199,7 +1273,7 @@ impl BilibiliDanmakuClient {
     async fn process_danmaku_command(&self, message: &DanmakuMessage) {
         self.process_captured_danmaku_command(
             message,
-            capture_warning_message(&warning_tracker(), message),
+            capture_warning_message(self.room_id, &warning_tracker(), message),
         )
         .await;
     }
@@ -1319,7 +1393,50 @@ impl BilibiliDanmakuClient {
                 let cfg = self.app_config.clone();
                 let room = self.room_id;
                 if let Some(warning) = warning {
+                    let pair = warning.pair().cloned();
+                    // The paired partner already owns the stop and the notice;
+                    // these frames were not marked (see capture).
+                    if pair.as_ref().is_some_and(|role| role.is_follower()) {
+                        warning_tracker().finish_unmarked_event(&warning);
+                        return;
+                    }
+                    let leader = matches!(
+                        pair,
+                        Some(crate::plugins::mask_pairing::PairRole::MaskLeader(_))
+                    );
+                    let notify = match pair {
+                        Some(crate::plugins::mask_pairing::PairRole::MaskLeader(notify)) => {
+                            Some(notify)
+                        }
+                        _ => None,
+                    };
                     tokio::spawn(async move {
+                        if leader {
+                            // Stop first, then wait up to the pairing window for
+                            // the companion dialog so the notice names the real
+                            // reason. Do not re-mark the event: a paired dialog
+                            // may already have refined the hold.
+                            stop_room_for_warning(&cfg, room).await;
+                            if let Some(notify) = notify {
+                                let _ = timeout(
+                                    Duration::from_secs(
+                                        crate::plugins::mask_pairing::PAIR_WINDOW.as_secs(),
+                                    ),
+                                    notify.notified(),
+                                )
+                                .await;
+                            }
+                            crate::plugins::mask_pairing::finish_mask(room);
+                            let notice = violation_notice_for(&cfg, &warning_tracker(), &warning);
+                            if let Err(error) = send_violation_notice(&cfg, &notice).await {
+                                error!(
+                                    "Failed to send warning danmaku: {}",
+                                    safe_diagnostic(&error)
+                                );
+                            }
+                            warning_tracker().finish_unmarked_event(&warning);
+                            return;
+                        }
                         let warning =
                             complete_warning_event(warning, cfg.bililive.room, false).await;
                         if !warning_tracker().event_is_current(&warning) {
@@ -1335,18 +1452,7 @@ impl BilibiliDanmakuClient {
                         if !warning_tracker().event_is_current(&warning) {
                             return;
                         }
-                        match bili_stop_live(&cfg).await {
-                            Ok(()) => crate::notify::live_ended_with(
-                                crate::events::BroadcastEndCause::WarningCut,
-                                recent_violation(room, Instant::now()),
-                            ),
-                            Err(error) => {
-                                error!(
-                                    "Failed to stop live on warning: {}",
-                                    safe_diagnostic(&error.to_string())
-                                );
-                            }
-                        }
+                        stop_room_for_warning(&cfg, room).await;
                         warning_tracker().finish_unmarked_event(&warning);
                     });
                 }
@@ -1872,7 +1978,7 @@ mod tests {
         let messages = decode_danmaku_messages(&frame).unwrap();
         let captured: Vec<_> = messages
             .iter()
-            .map(|message| capture_warning_message(&warnings, message).unwrap())
+            .map(|message| capture_warning_message(7_001, &warnings, message).unwrap())
             .collect();
         assert!(warnings.snapshot().holds(&source));
         assert!(
@@ -1899,7 +2005,7 @@ mod tests {
             data: None,
             msg: None,
         };
-        let mut captured = capture_warning_message(&warnings, &packet).unwrap();
+        let mut captured = capture_warning_message(7_002, &warnings, &packet).unwrap();
         assert!(!captured.has_source());
         assert!(warnings
             .mark_event(&mut captured, Some("a room title without relay identity"))
@@ -2301,7 +2407,7 @@ mod tests {
         let (dispatch, logs) = crate::logging::test_capture::subscriber(tracing::Level::DEBUG);
         for json in [FIX_CUT_OFF_V2, FIX_DIALOG] {
             let message = parse(json);
-            async { capture_warning_message(&warning_tracker(), &message) }
+            async { capture_warning_message(7_003, &warning_tracker(), &message) }
                 .with_subscriber(dispatch.clone())
                 .await;
         }
@@ -2510,7 +2616,7 @@ mod tests {
         }
         let warnings = Arc::new(WarningTracker::default());
         assert!(
-            capture_warning_message(&warnings, &parse(FIX_MASK)).is_some(),
+            capture_warning_message(7_004, &warnings, &parse(FIX_MASK)).is_some(),
             "a mask yields the warning event the stop task runs on"
         );
     }
@@ -2727,5 +2833,99 @@ mod tests {
         assert!(!danmaku_reply_accepted(
             &serde_json::json!({"code": 0, "message": " 过滤 "})
         ));
+    }
+
+    #[test]
+    fn a_mask_leader_and_its_dialog_follower_refine_the_hold() {
+        use crate::plugins::danmaku::warning::BroadcastSource;
+        use crate::plugins::mask_pairing::PairRole;
+        use crate::plugins::warning_exempt::ReasonId;
+
+        let tracker = std::sync::Arc::new(WarningTracker::default());
+        let source = BroadcastSource::new("YT", "配对频道", "UCpair-mask-first", Some("ep-1"));
+        let _owner = tracker.own_source(1, source);
+
+        let mask = capture_warning_message(8_101, &tracker, &parse(FIX_MASK)).unwrap();
+        assert!(
+            matches!(mask.pair(), Some(PairRole::MaskLeader(_))),
+            "the first mask owns the stop/notice: {:?}",
+            mask.pair()
+        );
+        assert!(mask.reason_ids().is_empty());
+
+        let dialog = capture_warning_message(8_101, &tracker, &parse(FIX_DIALOG)).unwrap();
+        assert!(matches!(dialog.pair(), Some(PairRole::DialogFollower)));
+        assert!(dialog.reason_ids().contains(&ReasonId::IdleRecording));
+        // The dialog's classes are what the exemption decision reads.
+        assert!(tracker
+            .snapshot()
+            .hold_reasons()
+            .contains(&ReasonId::IdleRecording));
+    }
+
+    #[test]
+    fn a_dialog_before_the_mask_acts_alone_and_the_mask_adopts_its_classes() {
+        use crate::plugins::danmaku::warning::BroadcastSource;
+        use crate::plugins::mask_pairing::PairRole;
+        use crate::plugins::warning_exempt::ReasonId;
+
+        let tracker = std::sync::Arc::new(WarningTracker::default());
+        let source = BroadcastSource::new("YT", "配对频道", "UCpair-dialog-first", Some("ep-2"));
+        let _owner = tracker.own_source(1, source);
+
+        let dialog = capture_warning_message(8_102, &tracker, &parse(FIX_DIALOG)).unwrap();
+        assert!(matches!(dialog.pair(), Some(PairRole::DialogLeader)));
+
+        let mask = capture_warning_message(8_102, &tracker, &parse(FIX_MASK)).unwrap();
+        // The follower must not bump the generation, or the dialog leader's
+        // queued stop/notice would be discarded as stale.
+        assert!(
+            tracker.event_is_current(&dialog),
+            "a paired mask follower must not invalidate the dialog leader"
+        );
+        match mask.pair() {
+            Some(PairRole::MaskFollower { reason_ids }) => {
+                assert!(reason_ids.contains(&ReasonId::IdleRecording));
+            }
+            other => panic!("expected a mask follower, got {other:?}"),
+        }
+        // The mask frame carries the dialog's classes so the hold is refined
+        // even when the mask is captured last.
+        assert!(mask.reason_ids().contains(&ReasonId::IdleRecording));
+        assert!(tracker
+            .snapshot()
+            .hold_reasons()
+            .contains(&ReasonId::IdleRecording));
+    }
+
+    #[test]
+    fn a_paired_dialog_refines_the_hold_after_the_owner_was_released() {
+        use crate::plugins::danmaku::warning::BroadcastSource;
+        use crate::plugins::mask_pairing::PairRole;
+        use crate::plugins::warning_exempt::ReasonId;
+
+        let tracker = std::sync::Arc::new(WarningTracker::default());
+        let source = BroadcastSource::new("YT", "配对频道", "UCpair-released", Some("ep-3"));
+        let owner = tracker.own_source(1, source);
+
+        let mask = capture_warning_message(8_103, &tracker, &parse(FIX_MASK)).unwrap();
+        assert!(mask.reason_ids().is_empty());
+        // The mask leader stopped the relay, so the source owner is gone before
+        // the dialog arrives (well inside overlay_second).
+        drop(owner);
+
+        let dialog = capture_warning_message(8_103, &tracker, &parse(FIX_DIALOG)).unwrap();
+        assert!(matches!(dialog.pair(), Some(PairRole::DialogFollower)));
+        assert!(
+            tracker
+                .snapshot()
+                .hold_reasons()
+                .contains(&ReasonId::IdleRecording),
+            "the dialog must refine the hold even without an active source"
+        );
+        assert!(
+            tracker.event_is_current(&mask),
+            "a refinement must not invalidate the mask leader's queued event"
+        );
     }
 }

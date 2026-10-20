@@ -5,6 +5,7 @@ use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 use crate::logging::safe_text;
+use crate::plugins::mask_pairing::PairRole;
 use crate::plugins::warning_exempt::ReasonId;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -154,6 +155,8 @@ pub(crate) struct WarningEvent {
     /// Matched reason classes, set at packet capture before the frame can
     /// change the running source.
     reason_ids: BTreeSet<ReasonId>,
+    /// Mask/dialog pairing role, set at packet capture (None elsewhere).
+    pair: Option<PairRole>,
 }
 
 impl WarningEvent {
@@ -175,6 +178,15 @@ impl WarningEvent {
     /// The classes classified from this frame's 违规原因.
     pub fn reason_ids(&self) -> &BTreeSet<ReasonId> {
         &self.reason_ids
+    }
+
+    /// The mask/dialog pairing role captured for this frame.
+    pub fn pair(&self) -> Option<&PairRole> {
+        self.pair.as_ref()
+    }
+
+    pub fn set_pair(&mut self, pair: Option<PairRole>) {
+        self.pair = pair;
     }
 }
 
@@ -288,6 +300,21 @@ impl WarningTracker {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
+    /// Refine the classes of the current hold without needing an active
+    /// source: a paired dialog can arrive after the relay owner was released.
+    /// Never bumps the event generation, so queued frames stay current.
+    pub fn refine_hold_reasons(&self, reason_ids: BTreeSet<ReasonId>) -> bool {
+        let mut state = self.lock();
+        let Some(hold) = state.hold.as_mut() else {
+            return false;
+        };
+        if hold.reason_ids == reason_ids {
+            return false;
+        }
+        hold.reason_ids = reason_ids;
+        true
+    }
+
     pub fn snapshot(&self) -> WarningSnapshot {
         let state = self.lock();
         WarningSnapshot {
@@ -331,6 +358,7 @@ impl WarningTracker {
             source: state.active.clone(),
             marked: false,
             reason_ids: BTreeSet::new(),
+            pair: None,
         }
     }
 
@@ -345,6 +373,7 @@ impl WarningTracker {
             source: state.active.clone(),
             marked: false,
             reason_ids: BTreeSet::new(),
+            pair: None,
         }
     }
 

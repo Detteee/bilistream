@@ -6,6 +6,7 @@ pub mod ffmpeg;
 pub mod holodex;
 pub(crate) mod holodex_account;
 pub mod http;
+pub(crate) mod mask_pairing;
 pub mod niconico;
 pub mod niconico_live;
 pub(crate) mod niconico_session;
