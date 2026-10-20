@@ -1217,6 +1217,8 @@ fn rtmp_key_never_reaches_db_bytes_or_api_bodies() {
             seq: Some(1),
             room: 1,
             msg: "警告 SYNTHKEY-0123456789".into(),
+            rank: 4,
+            merge: true,
         },
     ))
     .unwrap();
@@ -1633,6 +1635,8 @@ async fn cluster_scope_merges_peers_and_reports_missing_nodes() {
             source_id: None,
             broadcast_id: String::new(),
             bili: None,
+            end_cut_off: false,
+            end_detail: None,
         }],
         ..Default::default()
     };
@@ -3197,4 +3201,636 @@ fn live_totals_from_a_28a20792_peer_merge_by_their_stated_source() {
     let live = &merged.kpis.lives["live:synthetic"];
     assert_eq!(live.watched, Some(650), "the newer sample wins");
     assert_eq!(live.watched_source.as_deref(), Some("sample"));
+}
+
+// ------------------------------------------- cutoff-reason (PRD R2/R5)
+
+const V2_TEXT: &str =
+    "您本场直播存在挂机、录播等消极直播行为，因此直播被切断，请您及时整改（切断本场直播）";
+const PLAIN_TEXT: &str = "违反直播言论规范，请立即调整";
+
+fn cut(w: &mut Writer, at: i64, seq: Option<u64>, msg: &str, rank: u8) {
+    w.apply(&ev(
+        at,
+        EventKind::BiliCutOff {
+            seq,
+            room: 1,
+            msg: msg.into(),
+            rank,
+            merge: true,
+        },
+    ))
+    .unwrap();
+}
+
+fn warning(w: &mut Writer, at: i64, msg: &str, rank: u8) {
+    w.apply(&ev(
+        at,
+        EventKind::BiliWarning {
+            seq: Some(1),
+            room: 1,
+            msg: msg.into(),
+            rank,
+            merge: true,
+        },
+    ))
+    .unwrap();
+}
+
+/// A warning frame outside the merge window (dialog, mask).
+fn warning_own_row(w: &mut Writer, at: i64, msg: &str, rank: u8) {
+    w.apply(&ev(
+        at,
+        EventKind::BiliWarning {
+            seq: Some(1),
+            room: 1,
+            msg: msg.into(),
+            rank,
+            merge: false,
+        },
+    ))
+    .unwrap();
+}
+
+fn violation_rows(w: &Writer, kind: &str) -> Vec<String> {
+    let mut stmt = w
+        .conn
+        .prepare("SELECT detail FROM events WHERE kind=?1 ORDER BY id")
+        .unwrap();
+    stmt.query_map([kind], |r| r.get(0))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap()
+}
+
+#[test]
+fn cut_off_then_v2_is_one_row_upgraded_to_the_labelled_reason() {
+    let (mut w, _) = writer("cut-then-v2");
+    session(&mut w, 1, T0, None);
+    cut(&mut w, T0 + 100, Some(1), PLAIN_TEXT, 4);
+    cut(&mut w, T0 + 101, Some(1), V2_TEXT, 7);
+    assert_eq!(
+        violation_rows(&w, "bili.cut_off"),
+        vec![V2_TEXT.to_string()]
+    );
+}
+
+#[test]
+fn v2_then_cut_off_keeps_the_labelled_reason_and_one_row() {
+    let (mut w, _) = writer("v2-then-cut");
+    session(&mut w, 1, T0, None);
+    cut(&mut w, T0 + 100, Some(1), V2_TEXT, 7);
+    cut(&mut w, T0 + 100, Some(1), PLAIN_TEXT, 4);
+    // A frame with no reason at all never adds or overwrites either.
+    cut(&mut w, T0 + 102, Some(1), "直播间切断", 0);
+    assert_eq!(
+        violation_rows(&w, "bili.cut_off"),
+        vec![V2_TEXT.to_string()]
+    );
+}
+
+#[test]
+fn v2_alone_is_one_row_and_a_later_cut_is_a_new_row() {
+    let (mut w, _) = writer("v2-alone");
+    session(&mut w, 1, T0, None);
+    cut(&mut w, T0 + 100, Some(1), V2_TEXT, 7);
+    assert_eq!(
+        violation_rows(&w, "bili.cut_off"),
+        vec![V2_TEXT.to_string()]
+    );
+    // Outside the window it is a different cut, even with the same text.
+    cut(
+        &mut w,
+        T0 + 101 + super::VIOLATION_WINDOW_SECS,
+        Some(1),
+        V2_TEXT,
+        7,
+    );
+    assert_eq!(violation_rows(&w, "bili.cut_off").len(), 2);
+}
+
+#[test]
+fn repeated_warning_is_one_row_but_a_different_warning_is_kept() {
+    let (mut w, _) = writer("warn-repeat");
+    session(&mut w, 1, T0, None);
+    warning(&mut w, T0 + 10, "图片内容不适宜，请立即调整", 4);
+    warning(&mut w, T0 + 20, "图片内容不适宜，请立即调整", 4);
+    assert_eq!(violation_rows(&w, "bili.warning").len(), 1);
+    // L4: a different warning, even one without text, keeps its own row.
+    warning(&mut w, T0 + 21, "直播间警告", 0);
+    warning(&mut w, T0 + 30, "禁止直播违禁游戏，请立即更换", 4);
+    assert_eq!(
+        violation_rows(&w, "bili.warning"),
+        vec![
+            "图片内容不适宜，请立即调整".to_string(),
+            "直播间警告".to_string(),
+            "禁止直播违禁游戏，请立即更换".to_string()
+        ]
+    );
+    // A warning never merges into or with a cut.
+    assert!(violation_rows(&w, "bili.cut_off").is_empty());
+}
+
+#[test]
+fn a_rolled_back_batch_forgets_its_violation_row() {
+    let (mut w, _) = writer("cut-rollback");
+    session(&mut w, 1, T0, None);
+    let bad = ev(
+        T0 + 101,
+        EventKind::SessionStarted {
+            area_v2: None,
+            room: 1,
+            seq: 1,
+            platform: "YT",
+            channel_id: "UC1".into(),
+            channel_name: "dup".into(),
+            title: None,
+            live_key: None,
+            source_id: None,
+        },
+    );
+    let first = ev(
+        T0 + 100,
+        EventKind::BiliCutOff {
+            seq: Some(1),
+            room: 1,
+            msg: PLAIN_TEXT.into(),
+            rank: 4,
+            merge: true,
+        },
+    );
+    assert!(
+        w.commit(&[first, bad]).is_err(),
+        "duplicate seq fails the batch"
+    );
+    cut(&mut w, T0 + 102, Some(1), V2_TEXT, 7);
+    let rows = violation_rows(&w, "bili.cut_off");
+    assert_eq!(rows.last().map(String::as_str), Some(V2_TEXT), "{rows:?}");
+    assert!(rows.len() <= 1, "{rows:?}");
+}
+
+fn only_session(w: &Writer, now: i64) -> Value {
+    let page = sessions(w, now);
+    assert_eq!(page.items.len(), 1);
+    serde_json::to_value(&page.items[0]).unwrap()
+}
+
+#[test]
+fn cut_off_session_with_v2_reason_has_exact_json_fields() {
+    let (mut w, _) = writer("r5-v2");
+    session(&mut w, 1, T0, None);
+    cut(&mut w, T0 + 100, Some(1), V2_TEXT, 7);
+    end(&mut w, 1, T0 + 105, EndReason::BiliStopped);
+    let item = only_session(&w, T0 + 200);
+    assert_eq!(item["end_reason"], json!("bili_stopped"));
+    assert_eq!(item["end_cut_off"], json!(true));
+    assert_eq!(item["end_detail"], json!(V2_TEXT));
+    assert!(item["end_cut_off"].is_boolean() && item["end_detail"].is_string());
+}
+
+#[test]
+fn cut_off_session_with_plain_msg_only() {
+    let (mut w, _) = writer("r5-plain");
+    session(&mut w, 1, T0, None);
+    cut(&mut w, T0 + 100, Some(1), PLAIN_TEXT, 4);
+    end(&mut w, 1, T0 + 105, EndReason::BiliStopped);
+    let item = only_session(&w, T0 + 200);
+    assert_eq!(item["end_cut_off"], json!(true));
+    assert_eq!(item["end_detail"], json!(PLAIN_TEXT));
+}
+
+#[test]
+fn cut_off_session_with_only_fallback_has_flag_but_no_detail() {
+    let (mut w, _) = writer("r5-fallback");
+    session(&mut w, 1, T0, None);
+    cut(&mut w, T0 + 100, Some(1), "直播间切断", 0);
+    end(&mut w, 1, T0 + 105, EndReason::BiliStopped);
+    let item = only_session(&w, T0 + 200);
+    assert_eq!(item["end_cut_off"], json!(true));
+    assert!(item.get("end_detail").is_none(), "{item}");
+}
+
+#[test]
+fn cut_off_session_v2_then_plain_msg_shows_v2() {
+    let (mut w, _) = writer("r5-v2-plain");
+    session(&mut w, 1, T0, None);
+    cut(&mut w, T0 + 100, Some(1), V2_TEXT, 7);
+    cut(&mut w, T0 + 101, Some(1), PLAIN_TEXT, 4);
+    end(&mut w, 1, T0 + 105, EndReason::BiliStopped);
+    let item = only_session(&w, T0 + 200);
+    assert_eq!(item["end_detail"], json!(V2_TEXT));
+}
+
+#[test]
+fn warning_only_or_non_bili_stopped_sessions_have_no_cut_fields() {
+    let (mut w, _) = writer("r5-warning");
+    session(&mut w, 1, T0, None);
+    warning(&mut w, T0 + 100, "图片内容不适宜，请立即调整", 4);
+    end(&mut w, 1, T0 + 105, EndReason::BiliStopped);
+    let item = only_session(&w, T0 + 200);
+    assert!(item.get("end_cut_off").is_none(), "{item}");
+    assert!(item.get("end_detail").is_none(), "{item}");
+
+    let (mut w, _) = writer("r5-other-end");
+    session(&mut w, 1, T0, None);
+    cut(&mut w, T0 + 100, Some(1), V2_TEXT, 7);
+    end(&mut w, 1, T0 + 105, EndReason::UserStop);
+    let item = only_session(&w, T0 + 200);
+    assert!(item.get("end_cut_off").is_none(), "{item}");
+    // An open session has no end, so no end fields either.
+    let (mut w, _) = writer("r5-open");
+    session(&mut w, 1, T0, None);
+    cut(&mut w, T0 + 100, Some(1), V2_TEXT, 7);
+    let item = only_session(&w, T0 + 200);
+    assert!(item.get("end_cut_off").is_none(), "{item}");
+}
+
+#[test]
+fn multiple_cut_offs_show_the_latest_non_fallback_detail() {
+    let (mut w, _) = writer("r5-multi");
+    session(&mut w, 1, T0, None);
+    cut(&mut w, T0 + 100, Some(1), PLAIN_TEXT, 4);
+    cut(&mut w, T0 + 300, Some(1), V2_TEXT, 7);
+    cut(&mut w, T0 + 500, Some(1), "直播间切断", 0);
+    end(&mut w, 1, T0 + 505, EndReason::BiliStopped);
+    let item = only_session(&w, T0 + 600);
+    assert_eq!(violation_rows(&w, "bili.cut_off").len(), 3);
+    assert_eq!(item["end_cut_off"], json!(true));
+    assert_eq!(item["end_detail"], json!(V2_TEXT));
+}
+
+#[test]
+fn a_cut_recorded_after_the_session_ended_is_not_its_end() {
+    // PRD R5 window is [started_at, ended_at]: the danmaku client records the
+    // cut on receipt, before it stops the room, so a later row is not this
+    // session's end.
+    let (mut w, _) = writer("r5-late");
+    session(&mut w, 1, T0, None);
+    end(&mut w, 1, T0 + 100, EndReason::BiliStopped);
+    cut(&mut w, T0 + 103, Some(1), V2_TEXT, 7);
+    let item = only_session(&w, T0 + 200);
+    assert!(item.get("end_cut_off").is_none(), "{item}");
+}
+
+#[test]
+fn the_ended_event_of_a_cut_off_session_uses_the_cut_off_label() {
+    let (mut w, _) = writer("r5-label");
+    session(&mut w, 1, T0, None);
+    cut(&mut w, T0 + 100, Some(1), V2_TEXT, 7);
+    end(&mut w, 1, T0 + 105, EndReason::BiliStopped);
+    session(&mut w, 2, T0 + 1000, None);
+    end(&mut w, 2, T0 + 1100, EndReason::BiliStopped);
+    let page = query::events(&w.conn, &q(T0 - 10, T0 + 2000)).unwrap();
+    let ended: Vec<&str> = page
+        .items
+        .iter()
+        .filter(|e| e.kind == "stream.ended")
+        .map(|e| e.detail.as_str())
+        .collect();
+    assert_eq!(ended.len(), 2, "{ended:?}");
+    assert!(
+        ended.iter().any(|d| d.ends_with("· B站 切断直播")),
+        "{ended:?}"
+    );
+    assert!(
+        ended
+            .iter()
+            .any(|d| d.ends_with("· 正常结束（B站 已下播）")),
+        "{ended:?}"
+    );
+    assert_eq!(
+        query::end_reason_label("bili_stopped"),
+        "正常结束（B站 已下播）"
+    );
+}
+
+#[tokio::test]
+async fn cluster_merge_keeps_cut_fields_and_accepts_an_older_peer_without_them() {
+    let (mut w, path) = writer("r5-cluster");
+    session(&mut w, 1, T0, None);
+    cut(&mut w, T0 + 100, Some(1), V2_TEXT, 7);
+    end(&mut w, 1, T0 + 105, EndReason::BiliStopped);
+    let now = T0 + 1000;
+    // tokyo-1 is an older build: its session JSON has no end_* fields.
+    let old_peer = json!({
+        "items": [{
+            "id": "tokyo-1:1:1", "eid": "tokyo-1:1:1", "node": "tokyo-1",
+            "platform": "TW", "channel_id": "c", "channel_name": "n", "title": null,
+            "started_at": T0 + 700, "ended_at": T0 + 800, "duration_secs": 100,
+            "end_reason": "bili_stopped", "runs": 1, "restarts": 0, "failures": 0,
+            "stuck": 0, "gaps": [], "median_bitrate_kbps": null, "bili": null
+        }],
+        "prev_id": null, "next_id": null, "next_cursor": null, "missing_nodes": []
+    });
+    // sg-3 is a new build that cut off with a reason.
+    let new_peer = json!({
+        "items": [{
+            "id": "sg-3:1:1", "eid": "sg-3:1:1", "node": "sg-3",
+            "platform": "TW", "channel_id": "c", "channel_name": "n", "title": null,
+            "started_at": T0 + 500, "ended_at": T0 + 600, "duration_secs": 100,
+            "end_reason": "bili_stopped", "runs": 1, "restarts": 0, "failures": 0,
+            "stuck": 0, "gaps": [], "median_bitrate_kbps": null, "bili": null,
+            "end_cut_off": true, "end_detail": PLAIN_TEXT
+        }],
+        "prev_id": null, "next_id": null, "next_cursor": null, "missing_nodes": []
+    });
+    let peers = MockPeers(HashMap::from([
+        ("tokyo-1".to_string(), Ok(old_peer)),
+        ("sg-3".to_string(), Ok(new_peer)),
+    ]));
+    let local = LocalConn(std::sync::Mutex::new(schema::open_ro(&path).unwrap()), now);
+    drop(w);
+    let cfg = cluster_cfg();
+    let window = params(&[("from", &(T0 - 10).to_string()), ("to", &now.to_string())]);
+    let data = api::answer(&cfg, "sessions", &window, &peers, &local, now)
+        .await
+        .unwrap();
+    let items = data["items"].as_array().unwrap();
+    assert_eq!(items.len(), 3, "{data}");
+    let by_node = |node: &str| items.iter().find(|i| i["node"] == node).unwrap();
+    let old = by_node("tokyo-1");
+    assert!(old.get("end_cut_off").is_none() && old.get("end_detail").is_none());
+    assert_eq!(old["end_reason"], json!("bili_stopped"));
+    assert_eq!(by_node("sg-3")["end_cut_off"], json!(true));
+    assert_eq!(by_node("sg-3")["end_detail"], json!(PLAIN_TEXT));
+    assert_eq!(by_node("local")["end_cut_off"], json!(true));
+    assert_eq!(by_node("local")["end_detail"], json!(V2_TEXT));
+}
+
+#[test]
+fn session_item_serializes_end_fields_as_a_bare_bool_and_string() {
+    let mut item: query::SessionItem = serde_json::from_value(json!({
+        "id": "n:1:1", "eid": "n:1:1", "node": "n", "platform": "YT",
+        "channel_id": "c", "channel_name": "n", "title": null,
+        "started_at": 1, "ended_at": 2, "duration_secs": 1, "end_reason": "bili_stopped",
+        "runs": 1, "restarts": 0, "failures": 0, "stuck": 0, "gaps": [],
+        "median_bitrate_kbps": null, "bili": null
+    }))
+    .unwrap();
+    assert!(!item.end_cut_off && item.end_detail.is_none());
+    let plain = serde_json::to_value(&item).unwrap();
+    assert!(plain.get("end_cut_off").is_none() && plain.get("end_detail").is_none());
+    item.end_cut_off = true;
+    item.end_detail = Some(PLAIN_TEXT.into());
+    let out = serde_json::to_value(&item).unwrap();
+    assert_eq!(out["end_cut_off"], Value::Bool(true));
+    assert_eq!(out["end_detail"], Value::String(PLAIN_TEXT.into()));
+    let back: query::SessionItem = serde_json::from_value(out).unwrap();
+    assert_eq!(back, item);
+}
+
+// ------------------------------------------- PRD ruling 4 (kinds)
+
+#[test]
+fn ruling4_a_warning_dialog_never_sets_the_cut_off_fields() {
+    let (mut w, _) = writer("r4-dialog");
+    session(&mut w, 1, T0, None);
+    // The 2024-11-13 dialog as the danmaku client now records it.
+    warning_own_row(
+        &mut w,
+        T0 + 100,
+        "您本场直播存在挂机、录播等消极直播行为，请及时整改（警告）",
+        7,
+    );
+    end(&mut w, 1, T0 + 105, EndReason::BiliStopped);
+    assert_eq!(violation_rows(&w, "bili.warning").len(), 1);
+    assert!(violation_rows(&w, "bili.cut_off").is_empty());
+    let item = only_session(&w, T0 + 200);
+    assert!(item.get("end_cut_off").is_none(), "{item}");
+    assert!(item.get("end_detail").is_none(), "{item}");
+    let page = query::events(&w.conn, &q(T0 - 10, T0 + 300)).unwrap();
+    let ended = page
+        .items
+        .iter()
+        .find(|e| e.kind == "stream.ended")
+        .unwrap();
+    assert!(
+        ended.detail.ends_with("· 正常结束（B站 已下播）"),
+        "{}",
+        ended.detail
+    );
+}
+
+#[test]
+fn l4_a_dialog_or_mask_right_after_a_warning_keeps_its_own_row() {
+    let (mut w, _) = writer("l4-own-rows");
+    session(&mut w, 1, T0, None);
+    warning(&mut w, T0 + 100, "图片内容不适宜，请立即调整", 4);
+    // Mask (rank 2) and dialog (rank 7) within the window: never merged,
+    // never dropped, never an upgrade of the WARNING row.
+    warning_own_row(&mut w, T0 + 101, "当前直播间涉嫌违规", 2);
+    warning_own_row(
+        &mut w,
+        T0 + 102,
+        "您本场直播存在挂机、录播等消极直播行为，请及时整改（警告）",
+        7,
+    );
+    // Even identical text in a non-WARNING frame keeps its row.
+    warning_own_row(&mut w, T0 + 103, "当前直播间涉嫌违规", 2);
+    // The WARNING repeated verbatim is still dropped.
+    warning(&mut w, T0 + 104, "图片内容不适宜，请立即调整", 4);
+    assert_eq!(
+        violation_rows(&w, "bili.warning"),
+        vec![
+            "图片内容不适宜，请立即调整".to_string(),
+            "当前直播间涉嫌违规".to_string(),
+            "您本场直播存在挂机、录播等消极直播行为，请及时整改（警告）".to_string(),
+            "当前直播间涉嫌违规".to_string(),
+        ]
+    );
+    assert!(violation_rows(&w, "bili.cut_off").is_empty());
+}
+
+#[test]
+fn l4_only_cut_off_with_v2_merges_and_a_dialog_cut_keeps_its_row() {
+    let (mut w, _) = writer("l4-cut");
+    session(&mut w, 1, T0, None);
+    cut(&mut w, T0 + 100, Some(1), PLAIN_TEXT, 4);
+    cut(&mut w, T0 + 100, Some(1), V2_TEXT, 7);
+    // A dialog whose 处罚结果 contains 切断: bili.cut_off, its own row.
+    w.apply(&ev(
+        T0 + 101,
+        EventKind::BiliCutOff {
+            seq: Some(1),
+            room: 1,
+            msg: "存在挂机行为（切断本场直播）".into(),
+            rank: 7,
+            merge: false,
+        },
+    ))
+    .unwrap();
+    // A plain CUT_OFF after it still merges into the V2 row (dropped).
+    cut(&mut w, T0 + 102, Some(1), PLAIN_TEXT, 4);
+    assert_eq!(
+        violation_rows(&w, "bili.cut_off"),
+        vec![
+            V2_TEXT.to_string(),
+            "存在挂机行为（切断本场直播）".to_string()
+        ]
+    );
+}
+
+#[test]
+fn l3_v2_reason_survives_a_restart_and_a_late_plain_cut_off_row() {
+    let (mut w, path) = writer("l3-restart");
+    session(&mut w, 1, T0, None);
+    cut(&mut w, T0 + 100, Some(1), V2_TEXT, 7);
+    end(&mut w, 1, T0 + 110, EndReason::BiliStopped);
+    drop(w);
+    // Restart: a fresh writer with empty in-memory state on the same file.
+    let mut w = Writer::new(schema::open_rw(&path).unwrap(), "local", 8);
+    cut(&mut w, T0 + 105, Some(1), PLAIN_TEXT, 4);
+    assert_eq!(
+        violation_rows(&w, "bili.cut_off"),
+        vec![V2_TEXT.to_string(), PLAIN_TEXT.to_string()],
+        "a duplicate plain row after a restart is accepted"
+    );
+    let item = only_session(&w, T0 + 200);
+    assert_eq!(item["end_cut_off"], json!(true));
+    assert_eq!(item["end_detail"], json!(V2_TEXT));
+}
+
+#[test]
+fn ruling4_a_full_screen_mask_warning_never_sets_the_cut_off_fields() {
+    // The mask as the danmaku client now records it: bili.warning, title only.
+    let (mut w, _) = writer("r4-mask");
+    session(&mut w, 1, T0, None);
+    warning_own_row(&mut w, T0 + 100, "当前直播间涉嫌违规", 2);
+    end(&mut w, 1, T0 + 105, EndReason::BiliStopped);
+    assert_eq!(
+        violation_rows(&w, "bili.warning"),
+        vec!["当前直播间涉嫌违规".to_string()]
+    );
+    assert!(violation_rows(&w, "bili.cut_off").is_empty());
+    let item = only_session(&w, T0 + 200);
+    assert!(item.get("end_cut_off").is_none(), "{item}");
+    assert!(item.get("end_detail").is_none(), "{item}");
+}
+
+#[test]
+fn ruling4_old_mask_cut_off_rows_are_read_as_stored() {
+    // A mask row written before ruling 4 (bili.cut_off) is not rewritten.
+    let (mut w, _) = writer("r4-old-mask");
+    session(&mut w, 1, T0, None);
+    cut(&mut w, T0 + 100, Some(1), "直播间涉嫌违规", 0);
+    end(&mut w, 1, T0 + 105, EndReason::BiliStopped);
+    let item = only_session(&w, T0 + 200);
+    assert_eq!(item["end_cut_off"], json!(true));
+    assert!(item.get("end_detail").is_none(), "{item}");
+}
+
+#[test]
+fn ruling4_old_dialog_cut_off_rows_are_read_as_stored() {
+    // A row written before ruling 4 (dialog as bili.cut_off) is not rewritten:
+    // its session still reads as cut off, the title-only text as fallback.
+    let (mut w, _) = writer("r4-old");
+    session(&mut w, 1, T0, None);
+    cut(&mut w, T0 + 100, Some(1), "直播间违规", 0);
+    end(&mut w, 1, T0 + 105, EndReason::BiliStopped);
+    let item = only_session(&w, T0 + 200);
+    assert_eq!(item["end_cut_off"], json!(true));
+    assert!(item.get("end_detail").is_none(), "{item}");
+}
+
+// ------------------------------------------- PRD ruling 3 (titles)
+
+fn violation_titles(w: &Writer) -> Vec<(String, String)> {
+    let mut stmt = w
+        .conn
+        .prepare("SELECT kind,title FROM events WHERE kind LIKE 'bili.%' ORDER BY id")
+        .unwrap();
+    stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap()
+}
+
+#[test]
+fn ruling3_new_rows_store_the_spaced_titles() {
+    let (mut w, _) = writer("r3-titles");
+    session(&mut w, 1, T0, None);
+    warning(&mut w, T0 + 10, "图片内容不适宜，请立即调整", 4);
+    cut(&mut w, T0 + 20, Some(1), V2_TEXT, 7);
+    assert_eq!(
+        violation_titles(&w),
+        vec![
+            ("bili.warning".to_string(), "B站 房间警告".to_string()),
+            ("bili.cut_off".to_string(), "B站 切断直播".to_string()),
+        ]
+    );
+    // The half-width space is exact.
+    assert!(violation_titles(&w)
+        .iter()
+        .all(|(_, t)| t.contains("B站 ") && !t.contains('\u{3000}') && !t.contains('\u{a0}')));
+    let page = query::events(&w.conn, &q(T0 - 10, T0 + 100)).unwrap();
+    let titles: Vec<&str> = page
+        .items
+        .iter()
+        .filter(|e| e.kind.starts_with("bili."))
+        .map(|e| e.title.as_str())
+        .collect();
+    assert_eq!(titles.len(), 2);
+    assert!(titles.contains(&"B站 房间警告") && titles.contains(&"B站 切断直播"));
+}
+
+#[test]
+fn ruling3_old_title_rows_still_work_because_kinds_decide() {
+    let (mut w, _) = writer("r3-old-titles");
+    session(&mut w, 1, T0, None);
+    end(&mut w, 1, T0 + 105, EndReason::BiliStopped);
+    // Rows as an older build wrote them; never rewritten.
+    for (kind, title, detail, at) in [
+        (
+            "bili.warning",
+            "B站直播警告",
+            "图片内容不适宜，请立即调整",
+            T0 + 50,
+        ),
+        ("bili.cut_off", "B站切断推流", PLAIN_TEXT, T0 + 100),
+    ] {
+        w.conn
+            .execute(
+                "INSERT INTO events(eid,at,node,kind,subject,severity,title,detail,session_id)
+                 VALUES (?1,?2,'local',?3,'1','warn',?4,?5,NULL)",
+                rusqlite::params![format!("old:{kind}"), at, kind, title, detail],
+            )
+            .unwrap();
+    }
+    let item = only_session(&w, T0 + 200);
+    assert_eq!(item["end_cut_off"], json!(true));
+    assert_eq!(item["end_detail"], json!(PLAIN_TEXT));
+    let page = query::events(&w.conn, &q(T0 - 10, T0 + 300)).unwrap();
+    let old: Vec<(&str, &str)> = page
+        .items
+        .iter()
+        .filter(|e| e.kind.starts_with("bili."))
+        .map(|e| (e.kind.as_str(), e.title.as_str()))
+        .collect();
+    assert_eq!(
+        old,
+        vec![
+            ("bili.cut_off", "B站切断推流"),
+            ("bili.warning", "B站直播警告")
+        ],
+        "newest first, titles as stored"
+    );
+    let ended = page
+        .items
+        .iter()
+        .find(|e| e.kind == "stream.ended")
+        .unwrap();
+    assert!(ended.detail.ends_with("· B站 切断直播"), "{}", ended.detail);
+    // A row titled like a cut but of kind bili.warning never marks a cut.
+    let (mut w, _) = writer("r3-title-spoof");
+    session(&mut w, 1, T0, None);
+    end(&mut w, 1, T0 + 105, EndReason::BiliStopped);
+    w.conn
+        .execute(
+            "INSERT INTO events(eid,at,node,kind,subject,severity,title,detail,session_id)
+             VALUES ('x',?1,'local','bili.warning','1','warn','B站 切断直播','x',NULL)",
+            [T0 + 100],
+        )
+        .unwrap();
+    let item = only_session(&w, T0 + 200);
+    assert!(item.get("end_cut_off").is_none(), "{item}");
 }

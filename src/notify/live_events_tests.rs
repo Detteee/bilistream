@@ -1094,3 +1094,124 @@ async fn an_unclear_active_retry_on_a_held_notice_stays_held_without_a_wakeup() 
     assert!(!qq2.modes().contains(&"wakeup"));
     assert!(ledger.wakeups_left(start + 61) >= Some(2), "reserve intact");
 }
+
+// ------------------------------------------- cutoff-reason (PRD R3)
+
+fn reason(text: &str, rank: u8) -> Option<crate::events::EndDetail> {
+    Some(crate::events::EndDetail {
+        text: text.into(),
+        rank,
+    })
+}
+
+const V2_REASON: &str =
+    "您本场直播存在挂机、录播等消极直播行为，因此直播被切断，请您及时整改（切断本场直播）";
+
+#[test]
+fn the_end_notice_carries_bilibilis_reason_after_the_fixed_label() {
+    let mut ledger = started();
+    assert!(ledger.live.end_with(
+        NOW + 60,
+        BroadcastEndCause::WarningCut,
+        reason(V2_REASON, 7)
+    ));
+    let text = render(LiveEventKey::end(), &ledger.live.broadcast, false, "a");
+    assert!(
+        text.contains(&format!("\n结束原因：B站警告/切断 · {V2_REASON}\n")),
+        "{text}"
+    );
+}
+
+#[test]
+fn a_later_v2_reason_upgrades_the_notice_and_a_plain_msg_never_downgrades_it() {
+    let mut ledger = started();
+    assert!(ledger.live.end_with(
+        NOW + 60,
+        BroadcastEndCause::WarningCut,
+        reason("违反直播言论规范，请立即调整", 4)
+    ));
+    assert!(!ledger.live.end_with(
+        NOW + 61,
+        BroadcastEndCause::WarningCut,
+        reason(V2_REASON, 7)
+    ));
+    assert!(!ledger.live.end_with(
+        NOW + 62,
+        BroadcastEndCause::WarningCut,
+        reason("违反直播言论规范，请立即调整", 4)
+    ));
+    let text = render(LiveEventKey::end(), &ledger.live.broadcast, false, "a");
+    assert!(text.contains(V2_REASON), "{text}");
+    assert!(!text.contains("违反直播言论规范"), "{text}");
+}
+
+#[test]
+fn a_reason_never_attaches_to_another_cause_and_never_reaches_the_wire() {
+    let mut ledger = started();
+    assert!(ledger.live.end_with(
+        NOW + 60,
+        BroadcastEndCause::BiliStopped,
+        reason(V2_REASON, 7)
+    ));
+    assert!(ledger.live.broadcast.end_detail.is_none());
+    let text = render(LiveEventKey::end(), &ledger.live.broadcast, false, "a");
+    assert!(text.contains("结束原因：B站直播间下播\n"), "{text}");
+
+    let mut ledger = started();
+    ledger.live.end_with(
+        NOW + 60,
+        BroadcastEndCause::WarningCut,
+        reason(V2_REASON, 7),
+    );
+    let wire = serde_json::to_string(&ledger).unwrap();
+    assert!(
+        !wire.contains("挂机") && !wire.contains("end_detail"),
+        "{wire}"
+    );
+    // A peer's copy (or a restart) renders the fixed label alone.
+    let peer: NotifyLedger = serde_json::from_str(&wire).unwrap();
+    let text = render(LiveEventKey::end(), &peer.live.broadcast, false, "b");
+    assert!(text.contains("结束原因：B站警告/切断\n"), "{text}");
+    // Joining a peer's copy of the same session keeps the local reason.
+    let mut mine = ledger.clone();
+    mine.live.join(&peer.live);
+    assert_eq!(mine.live.broadcast.end_detail, reason(V2_REASON, 7));
+}
+
+#[test]
+fn the_end_notice_sanitizes_and_caps_the_reason() {
+    let mut ledger = started();
+    let long = format!("违规 https://evil.example/x {}", "很长".repeat(200));
+    ledger
+        .live
+        .end_with(NOW + 60, BroadcastEndCause::WarningCut, reason(&long, 4));
+    let text = render(LiveEventKey::end(), &ledger.live.broadcast, false, "a");
+    let line = text
+        .lines()
+        .find(|l| l.starts_with("结束原因："))
+        .unwrap()
+        .to_string();
+    assert!(
+        !line.contains("://") && !line.contains("evil.example"),
+        "{line}"
+    );
+    assert!(line.chars().count() <= "结束原因：B站警告/切断 · ".chars().count() + 160);
+}
+
+#[test]
+fn the_bus_carries_the_reason_from_the_danmaku_client_to_the_ledger() {
+    let event = crate::events::Event {
+        at: NOW,
+        kind: crate::events::EventKind::BroadcastEnded {
+            cause: BroadcastEndCause::WarningCut,
+            detail: reason(V2_REASON, 7),
+        },
+    };
+    assert_eq!(
+        crate::notify::bus::map(&event),
+        Some(LiveSignal::Ended(
+            BroadcastEndCause::WarningCut,
+            reason(V2_REASON, 7)
+        ))
+    );
+}

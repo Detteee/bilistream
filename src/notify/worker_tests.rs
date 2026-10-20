@@ -1383,6 +1383,7 @@ async fn supervisor_restarts_a_panicked_worker_and_keeps_the_channel() {
             at: 7,
             kind: crate::events::EventKind::BroadcastEnded {
                 cause: crate::events::BroadcastEndCause::BiliStopped,
+                detail: None,
             },
         }))
         .await
@@ -2531,6 +2532,7 @@ async fn a_non_holder_records_the_broadcast_but_never_sends() {
     worker.on_live_signal(
         crate::notify::live_events::LiveSignal::Ended(
             crate::events::BroadcastEndCause::BiliStopped,
+            None,
         ),
         now + 60,
     );

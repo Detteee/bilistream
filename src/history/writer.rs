@@ -19,6 +19,22 @@ pub(crate) struct Writer {
     open_session: Option<i64>,
     /// Verbatim secrets (`bili_rtmp_key`, rtmp query) scrubbed from text.
     secrets: Vec<String>,
+    /// (cut, room) → the row recorded for the current Bilibili 警告/切断.
+    violations: HashMap<(bool, u64), ViolationRow>,
+}
+
+/// Bilibili may send CUT_OFF, CUT_OFF_V2 or both for one cut, and repeat a
+/// WARNING. Frames of the same kind for the same room within this many
+/// seconds of the first recorded one are the same event: one row, upgraded
+/// in place to the most detailed reason (`rank`), never downgraded.
+pub(crate) const VIOLATION_WINDOW_SECS: i64 = 60;
+
+#[derive(Clone)]
+struct ViolationRow {
+    id: i64,
+    at: i64,
+    rank: u8,
+    detail: String,
 }
 
 /// One row for the `events` table.
@@ -47,6 +63,7 @@ impl Writer {
             runs: HashMap::new(),
             open_session: None,
             secrets: Vec::new(),
+            violations: HashMap::new(),
         }
     }
 
@@ -60,6 +77,7 @@ impl Writer {
         self.sessions.clear();
         self.runs.clear();
         self.open_session = None;
+        self.violations.clear();
     }
 
     /// Replaces verbatim secrets before any TEXT is bound (design §5.7).
@@ -95,6 +113,7 @@ impl Writer {
         let saved_runs = self.runs.clone();
         let saved_open = self.open_session;
         let saved_counter = self.counter;
+        let saved_violations = self.violations.clone();
         let mut written = 0;
         for event in batch {
             if let Err(error) = self.apply(event) {
@@ -103,6 +122,7 @@ impl Writer {
                 self.runs = saved_runs;
                 self.open_session = saved_open;
                 self.counter = saved_counter;
+                self.violations = saved_violations;
                 return Err(error);
             }
             written += 1;
@@ -115,6 +135,7 @@ impl Writer {
                 self.runs = saved_runs;
                 self.open_session = saved_open;
                 self.counter = saved_counter;
+                self.violations = saved_violations;
                 Err(error)
             }
         }
@@ -441,22 +462,89 @@ impl Writer {
                     sid: seq.and_then(|s| self.session_row(s)),
                 })?;
             }
-            EventKind::BiliWarning { seq, room, msg }
-            | EventKind::BiliCutOff { seq, room, msg } => {
+            EventKind::BiliWarning {
+                seq,
+                room,
+                msg,
+                rank,
+                merge,
+            }
+            | EventKind::BiliCutOff {
+                seq,
+                room,
+                msg,
+                rank,
+                merge,
+            } => {
                 let cut = matches!(&event.kind, EventKind::BiliCutOff { .. });
+                let key = (cut, *room);
+                // Only CUT_OFF/CUT_OFF_V2 merge, and a WARNING repeated
+                // verbatim is dropped; every other frame keeps its own row.
+                let window = self
+                    .violations
+                    .get(&key)
+                    .filter(|_| *merge)
+                    .filter(|prev| (prev.at..=prev.at + VIOLATION_WINDOW_SECS).contains(&at))
+                    .cloned();
+                if let Some(prev) = window {
+                    let detail = self.scrub(msg);
+                    if !cut {
+                        if detail == prev.detail {
+                            return Ok(());
+                        }
+                    } else if *rank > prev.rank {
+                        // A more detailed frame for the same event.
+                        let changed = self.conn.execute(
+                            "UPDATE events SET detail=?2 WHERE id=?1 AND kind=?3",
+                            params![
+                                prev.id,
+                                detail,
+                                if cut { "bili.cut_off" } else { "bili.warning" }
+                            ],
+                        )?;
+                        if changed > 0 {
+                            self.violations.insert(
+                                key,
+                                ViolationRow {
+                                    rank: *rank,
+                                    detail,
+                                    ..prev
+                                },
+                            );
+                            return Ok(());
+                        }
+                    } else if *rank < prev.rank || detail == prev.detail {
+                        // Less detailed or a repeat: never a second row.
+                        return Ok(());
+                    }
+                }
                 self.record_event(EventRecord {
                     at,
                     kind: if cut { "bili.cut_off" } else { "bili.warning" },
                     subject: Some(&room.to_string()),
                     severity: if cut { Severity::Error } else { Severity::Warn },
                     title: if cut {
-                        "B站切断推流"
+                        "B站 切断直播"
                     } else {
-                        "B站直播警告"
+                        "B站 房间警告"
                     },
                     detail: msg,
                     sid: seq.and_then(|s| self.session_row(s)),
                 })?;
+                if !*merge {
+                    return Ok(());
+                }
+                let id = self.conn.last_insert_rowid();
+                let detail = self.scrub(msg);
+                self.violations.insert(
+                    key,
+                    ViolationRow {
+                        id,
+                        at,
+                        rank: *rank,
+                        detail,
+                    },
+                );
             }
             EventKind::RoomLocked { room, until } => {
                 self.record_event(EventRecord {

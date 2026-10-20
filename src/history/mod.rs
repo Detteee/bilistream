@@ -21,6 +21,12 @@ pub(crate) use bili::{note_live_key_unavailable, room_key_or_note};
 pub use bili::{on_bili_started, on_bili_stopped};
 use event::Event;
 pub use event::{BiliTotals, EndReason, EventKind, Severity};
+pub(crate) use writer::VIOLATION_WINDOW_SECS;
+
+/// The fixed `bili.cut_off` details written when Bilibili sent no reason
+/// (CUT_OFF/CUT_OFF_V2, ANCHOR_ECOLOGY_LIVING_DIALOG, FULL_SCREEN_MASK_OPEN).
+/// A session's `end_detail` never shows one of these.
+pub(crate) const CUT_OFF_FALLBACKS: [&str; 3] = ["直播间切断", "直播间违规", "直播间涉嫌违规"];
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};

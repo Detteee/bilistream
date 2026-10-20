@@ -36,27 +36,8 @@ pub(crate) fn capture_warning_message(
     ) {
         return None;
     }
-    if cmd == "WARNING" {
-        let text = message
-            .data
-            .as_ref()
-            .and_then(|data| data["msg"].as_str())
-            .unwrap_or("No message");
-        warn!("Warning: {}", safe_text(text, 160));
-    } else if cmd != "ROOM_LOCK" {
-        let key = if cmd == "ANCHOR_ECOLOGY_LIVING_DIALOG" {
-            "dialog_title"
-        } else if cmd == "FULL_SCREEN_MASK_OPEN" {
-            "title"
-        } else {
-            "msg"
-        };
-        let text = message
-            .data
-            .as_ref()
-            .and_then(|data| data[key].as_str())
-            .unwrap_or("Stream cut off");
-        warn!("Cut off/Warning: {}", safe_text(text, 160));
+    if let Some(line) = violation_log_line(message) {
+        warn!("{}", line);
     }
     let mut event = warnings.capture_event();
     if cmd != "ROOM_LOCK" {
@@ -65,6 +46,30 @@ pub(crate) fn capture_warning_message(
         }
     }
     Some(event)
+}
+
+/// The warn line for a 警告/切断 frame: Bilibili's cleaned, capped reason
+/// (R3/R3b), or the existing fixed text. `ROOM_LOCK` logs elsewhere.
+fn violation_log_line(message: &DanmakuMessage) -> Option<String> {
+    let reason = || violation_reason(message).map(|reason| reason.text());
+    match message.cmd.as_str() {
+        "WARNING" => Some(format!(
+            "Warning: {}",
+            reason().as_deref().unwrap_or("No message")
+        )),
+        "FULL_SCREEN_MASK_OPEN" => Some(format!(
+            "Cut off/Warning: {}",
+            mask_title(message)
+                .map(|title| safe_text(&title, REASON_COLUMNS))
+                .as_deref()
+                .unwrap_or("Stream cut off")
+        )),
+        "CUT_OFF" | "CUT_OFF_V2" | "ANCHOR_ECOLOGY_LIVING_DIALOG" => Some(format!(
+            "Cut off/Warning: {}",
+            reason().as_deref().unwrap_or("Stream cut off")
+        )),
+        _ => None,
+    }
 }
 
 /// Complete title-only fallback while retaining the source captured at receipt.
@@ -240,6 +245,305 @@ pub struct DanmakuMessage {
     pub cmd: String,
     pub info: Option<Value>,
     pub data: Option<Value>,
+    /// Top-level `msg`: the reason text of a real `WARNING` / `CUT_OFF`.
+    #[serde(default)]
+    pub msg: Option<Value>,
+}
+
+/// Exact labels of the `{type, label, content}` rows in `CUT_OFF_V2` and
+/// `ANCHOR_ECOLOGY_LIVING_DIALOG`. Rows are found by label, never position.
+const REASON_LABEL: &str = "违规原因";
+const RESULT_LABEL: &str = "处罚结果";
+/// The `safe_text` cap of the event `detail`, the log line and the QQ line.
+const REASON_COLUMNS: usize = 160;
+
+/// Where a [`Reason`] was read from, least to most detailed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ReasonSource {
+    /// `ANCHOR_ECOLOGY_LIVING_DIALOG`'s `dialog_title` (last fallback).
+    Title,
+    /// Top-level `msg`, else `data.msg`.
+    Message,
+    /// The row labelled 违规原因.
+    Labelled,
+}
+
+/// Bilibili's own reason for a 警告/切断 (PRD R1). Both texts are cleaned
+/// (R3b) and non-empty.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Reason {
+    /// 处罚结果, e.g. 切断本场直播 / 警告.
+    pub result: Option<String>,
+    /// 违规原因, or the plain `msg`.
+    pub reason: String,
+    pub source: ReasonSource,
+}
+
+impl Reason {
+    /// 「{违规原因}（{处罚结果}）」, else the reason alone; capped.
+    pub(crate) fn text(&self) -> String {
+        let full = match &self.result {
+            Some(result) => format!("{}（{}）", self.reason, result),
+            None => self.reason.clone(),
+        };
+        safe_text(&full, REASON_COLUMNS)
+    }
+
+    /// See [`crate::events::EndDetail::rank`].
+    pub(crate) fn rank(&self) -> u8 {
+        let source = match self.source {
+            ReasonSource::Title => 1,
+            ReasonSource::Message => 2,
+            ReasonSource::Labelled => 3,
+        };
+        source * 2 + u8::from(self.result.is_some())
+    }
+
+    pub(crate) fn end_detail(&self) -> crate::events::EndDetail {
+        crate::events::EndDetail {
+            text: self.text(),
+            rank: self.rank(),
+        }
+    }
+}
+
+/// R3b: Bilibili text is untrusted. Newlines, other control and invisible
+/// format characters become one space, whitespace runs collapse, links are
+/// dropped. The cap is applied afterwards by the caller.
+fn clean_bili_text(raw: &str) -> String {
+    let mut words = String::with_capacity(raw.len());
+    let mut gap = false;
+    for ch in raw.chars() {
+        if matches!(ch, '\u{00ad}' | '\u{061c}' | '\u{180e}' | '\u{200b}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2060}'..='\u{206f}' | '\u{feff}' | '\u{fff9}'..='\u{fffb}')
+        {
+            continue;
+        }
+        if ch.is_whitespace() || ch.is_control() {
+            gap = !words.is_empty();
+            continue;
+        }
+        if gap {
+            words.push(' ');
+            gap = false;
+        }
+        words.push(ch);
+    }
+    without_links(&words)
+}
+
+/// Drop every link (R3, Clerk L1): `scheme://…` (also full-width `：／／`
+/// and `scheme:// host` with spaces), `www.…`, and `host.tld/…` such as
+/// `b23.tv/…`. A link runs to the next whitespace or CJK punctuation, so a
+/// non-ASCII path is dropped with it.
+fn without_links(text: &str) -> String {
+    let text = text
+        .replace("：／／", "://")
+        .replace("：//", "://")
+        .replace(":／／", "://");
+    let chars: Vec<(usize, char)> = text.char_indices().collect();
+    let host_char = |c: char| c.is_ascii_alphanumeric() || c == '-';
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0;
+    while i < chars.len() {
+        let ch = chars[i].1;
+        let token_start = i == 0
+            || !matches!(chars[i - 1].1, c if c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'));
+        if token_start {
+            if let Some(after) = link_body_start(&chars, i, host_char) {
+                let end = link_end(&chars, after);
+                out.push_str("[链接已省略]");
+                i = end;
+                continue;
+            }
+        }
+        out.push(ch);
+        i += 1;
+    }
+    let collapsed: Vec<&str> = out.split(' ').filter(|w| !w.is_empty()).collect();
+    collapsed.join(" ")
+}
+
+/// If a link starts at `i`, the index where its body (after any `://` and
+/// the spaces that follow it) begins.
+fn link_body_start(
+    chars: &[(usize, char)],
+    i: usize,
+    host_char: impl Fn(char) -> bool,
+) -> Option<usize> {
+    let at = |k: usize| chars.get(k).map(|(_, c)| *c);
+    // scheme://
+    if at(i).is_some_and(|c| c.is_ascii_alphabetic()) {
+        let mut k = i + 1;
+        while at(k).is_some_and(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.')) {
+            k += 1;
+        }
+        if at(k) == Some(':') && at(k + 1) == Some('/') && at(k + 2) == Some('/') {
+            let mut body = k + 3;
+            while at(body) == Some(' ') {
+                body += 1;
+            }
+            return Some(body);
+        }
+    }
+    // www.
+    let lower: String = (i..i + 4)
+        .filter_map(at)
+        .map(|c| c.to_ascii_lowercase())
+        .collect();
+    if lower == "www." {
+        return Some(i);
+    }
+    // host.tld/ (b23.tv/…): dotted ASCII labels, an alphabetic last label of
+    // two or more letters, then '/'.
+    let mut k = i;
+    let mut labels = 0;
+    let mut last_alpha;
+    loop {
+        let start = k;
+        while at(k).is_some_and(&host_char) {
+            k += 1;
+        }
+        if k == start {
+            return None;
+        }
+        labels += 1;
+        last_alpha = if (start..k).all(|j| at(j).is_some_and(|c| c.is_ascii_alphabetic())) {
+            k - start
+        } else {
+            0
+        };
+        if at(k) == Some('.') {
+            k += 1;
+        } else {
+            break;
+        }
+    }
+    (labels >= 2 && last_alpha >= 2 && at(k) == Some('/')).then_some(i)
+}
+
+/// The index after a link body: the next whitespace or CJK punctuation.
+fn link_end(chars: &[(usize, char)], mut k: usize) -> usize {
+    while let Some((_, c)) = chars.get(k) {
+        if c.is_whitespace()
+            || matches!(
+                *c,
+                '\u{3000}'
+                    ..='\u{303f}'
+                        | '\u{ff01}'
+                        | '\u{ff08}'
+                        | '\u{ff09}'
+                        | '\u{ff0c}'
+                        | '\u{ff1a}'
+                        | '\u{ff1b}'
+                        | '\u{ff1f}'
+            )
+        {
+            break;
+        }
+        k += 1;
+    }
+    k
+}
+
+/// The `content` of the first row whose `label` is exactly `label` and whose
+/// content is a non-empty string after cleaning. Absent label: `None`.
+fn labelled_row(rows: Option<&Value>, label: &str) -> Option<String> {
+    rows?
+        .as_array()?
+        .iter()
+        .filter(|row| row.get("label").and_then(Value::as_str) == Some(label))
+        .filter_map(|row| row.get("content").and_then(Value::as_str))
+        .map(clean_bili_text)
+        .find(|text| !text.is_empty())
+}
+
+/// `FULL_SCREEN_MASK_OPEN`'s `data.title`, cleaned (R3b); nothing else of
+/// the frame is read.
+fn mask_title(message: &DanmakuMessage) -> Option<String> {
+    cleaned(message.data.as_ref().and_then(|data| data.get("title")))
+}
+
+fn cleaned(value: Option<&Value>) -> Option<String> {
+    value
+        .and_then(Value::as_str)
+        .map(clean_bili_text)
+        .filter(|text| !text.is_empty())
+}
+
+/// PRD R1: the one place a 警告/切断 reason is read. The labelled 违规原因 row
+/// wins, then top-level `msg`, then `data.msg`, then (dialog only) its
+/// `dialog_title`. `None` keeps the caller's fixed fallback text.
+pub(crate) fn violation_reason(message: &DanmakuMessage) -> Option<Reason> {
+    let data = message.data.as_ref();
+    let rows = match message.cmd.as_str() {
+        "CUT_OFF_V2" => data
+            .and_then(|data| data.get("cut_off_data"))
+            .and_then(|cut| cut.get("cut_off_message_list")),
+        "ANCHOR_ECOLOGY_LIVING_DIALOG" => data.and_then(|data| data.get("dialog_message_list")),
+        "WARNING" | "CUT_OFF" => None,
+        _ => return None,
+    };
+    let result = labelled_row(rows, RESULT_LABEL);
+    let (reason, source) = labelled_row(rows, REASON_LABEL)
+        .map(|reason| (reason, ReasonSource::Labelled))
+        .or_else(|| {
+            cleaned(message.msg.as_ref())
+                .or_else(|| cleaned(data.and_then(|data| data.get("msg"))))
+                .map(|reason| (reason, ReasonSource::Message))
+        })
+        .or_else(|| {
+            cleaned(data.and_then(|data| data.get("dialog_title")))
+                .filter(|_| message.cmd == "ANCHOR_ECOLOGY_LIVING_DIALOG")
+                .map(|title| (title, ReasonSource::Title))
+        })?;
+    Some(Reason {
+        result,
+        reason,
+        source,
+    })
+}
+
+/// The newest Bilibili reason per room, for the 下播 notice's 结束原因 line.
+/// Every frame of one 警告/切断 arrives within [`VIOLATION_WINDOW`]; within
+/// it a more detailed reason replaces a less detailed one, never the reverse.
+const VIOLATION_WINDOW: Duration =
+    Duration::from_secs(crate::history::VIOLATION_WINDOW_SECS as u64);
+
+fn recent_violations(
+) -> &'static Mutex<std::collections::HashMap<u64, (Instant, crate::events::EndDetail)>> {
+    static RECENT: std::sync::OnceLock<
+        Mutex<std::collections::HashMap<u64, (Instant, crate::events::EndDetail)>>,
+    > = std::sync::OnceLock::new();
+    RECENT.get_or_init(Default::default)
+}
+
+fn note_violation(room: u64, detail: crate::events::EndDetail, now: Instant) {
+    let mut recent = recent_violations()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    match recent.get_mut(&room) {
+        Some((first, kept)) if now.saturating_duration_since(*first) <= VIOLATION_WINDOW => {
+            if detail.rank > kept.rank {
+                *kept = detail;
+            }
+        }
+        _ => {
+            recent.insert(room, (now, detail));
+        }
+    }
+}
+
+/// The best reason seen for `room` in the current window, if any. The stop
+/// call runs before the 下播 signal, so a reason stays usable for two windows
+/// after its first frame.
+pub(crate) fn recent_violation(room: u64, now: Instant) -> Option<crate::events::EndDetail> {
+    let recent = recent_violations()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    recent
+        .get(&room)
+        .filter(|(first, _)| now.saturating_duration_since(*first) <= VIOLATION_WINDOW * 2)
+        .map(|(_, detail)| detail.clone())
 }
 
 /// One room's last observed values. Identity is captured before any queued
@@ -253,30 +557,98 @@ struct AudienceCounts {
     last_emit: Option<Instant>,
 }
 
+/// The fixed event `detail` when Bilibili sent no reason. The history query
+/// treats the cut-off ones as "no reason" (`history::CUT_OFF_FALLBACKS`).
+const FALLBACK_WARNING: &str = "直播间警告";
+const FALLBACK_CUT_OFF: &str = crate::history::CUT_OFF_FALLBACKS[0];
+const FALLBACK_DIALOG: &str = crate::history::CUT_OFF_FALLBACKS[1];
+const FALLBACK_MASK: &str = crate::history::CUT_OFF_FALLBACKS[2];
+
+/// How a 警告/切断 frame stops the room. Classification (ruling 4) never
+/// changes this: a mask is recorded as a warning but still stops the room.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StopOrder {
+    /// `WARNING`: `bili_stop_live` first, then the 换台 danmaku.
+    StopFirst,
+    /// The 换台 danmaku first, then `bili_stop_live`.
+    DanmakuFirst,
+}
+
+fn violation_stop(cmd: &str) -> Option<StopOrder> {
+    match cmd {
+        "WARNING" => Some(StopOrder::StopFirst),
+        "CUT_OFF" | "CUT_OFF_V2" | "ANCHOR_ECOLOGY_LIVING_DIALOG" | "FULL_SCREEN_MASK_OPEN" => {
+            Some(StopOrder::DanmakuFirst)
+        }
+        _ => None,
+    }
+}
+
+/// PRD ruling 4: which history kind a 警告/切断 frame is recorded as.
+/// `WARNING` and the timed `FULL_SCREEN_MASK_OPEN` cover are `bili.warning`;
+/// `CUT_OFF` and `CUT_OFF_V2` are `bili.cut_off`. The warning dialog
+/// `ANCHOR_ECOLOGY_LIVING_DIALOG` is a `bili.warning` unless its 处罚结果 row
+/// (exact label) contains 切断. Rows already stored are never rewritten.
+fn records_as_cut_off(message: &DanmakuMessage) -> bool {
+    match message.cmd.as_str() {
+        "WARNING" | "FULL_SCREEN_MASK_OPEN" => false,
+        "ANCHOR_ECOLOGY_LIVING_DIALOG" => labelled_row(
+            message
+                .data
+                .as_ref()
+                .and_then(|data| data.get("dialog_message_list")),
+            RESULT_LABEL,
+        )
+        .is_some_and(|result| result.contains("切断")),
+        _ => true,
+    }
+}
+
 fn room_history_event(
     message: &DanmakuMessage,
     room: u64,
     seq: Option<u64>,
 ) -> Option<crate::history::EventKind> {
     use crate::history::EventKind;
-    let data = message.data.as_ref();
-    let (key, fallback) = match message.cmd.as_str() {
-        "WARNING" => ("msg", "直播间警告"),
-        "CUT_OFF" | "CUT_OFF_V2" => ("msg", "直播间切断"),
-        "ANCHOR_ECOLOGY_LIVING_DIALOG" => ("dialog_title", "直播间违规"),
-        "FULL_SCREEN_MASK_OPEN" => ("title", "直播间涉嫌违规"),
-        _ => return None,
+    let (msg, rank) = match message.cmd.as_str() {
+        // Ruling 4: the mask's detail is `data.title` only (never `lines`,
+        // `icon` or `room_id`), cleaned like every reason.
+        "FULL_SCREEN_MASK_OPEN" => match mask_title(message) {
+            Some(title) => (safe_text(&title, REASON_COLUMNS), 2),
+            None => (FALLBACK_MASK.to_string(), 0),
+        },
+        cmd => {
+            let fallback = match cmd {
+                "WARNING" => FALLBACK_WARNING,
+                "CUT_OFF" | "CUT_OFF_V2" => FALLBACK_CUT_OFF,
+                "ANCHOR_ECOLOGY_LIVING_DIALOG" => FALLBACK_DIALOG,
+                _ => return None,
+            };
+            match violation_reason(message) {
+                Some(reason) => (reason.text(), reason.rank()),
+                None => (fallback.to_string(), 0),
+            }
+        }
     };
-    let msg = safe_text(
-        data.and_then(|data| data.get(key))
-            .and_then(Value::as_str)
-            .unwrap_or(fallback),
-        160,
-    );
-    Some(if message.cmd == "WARNING" {
-        EventKind::BiliWarning { seq, room, msg }
+    // PRD 65e7118b / Clerk L4: only CUT_OFF with CUT_OFF_V2 merge (and an
+    // identical repeated WARNING is dropped); every other frame keeps its row.
+    let merge = matches!(message.cmd.as_str(), "CUT_OFF" | "CUT_OFF_V2" | "WARNING");
+    Some(if !records_as_cut_off(message) {
+        EventKind::BiliWarning {
+            seq,
+            room,
+            msg,
+            rank,
+            merge,
+        }
     } else {
-        EventKind::BiliCutOff { seq, room, msg }
+        EventKind::BiliCutOff {
+            seq,
+            room,
+            msg,
+            rank,
+            merge,
+        }
     })
 }
 
@@ -650,6 +1022,9 @@ impl BilibiliDanmakuClient {
                     .unwrap_or_else(|e| e.into_inner())
                     .observe(self.room_id, seq, message, observed_at, sample_secs)
             } else {
+                if let Some(reason) = violation_reason(message) {
+                    note_violation(self.room_id, reason.end_detail(), observed_at);
+                }
                 room_history_event(message, self.room_id, seq)
             };
             if let Some(event) = event {
@@ -739,8 +1114,9 @@ impl BilibiliDanmakuClient {
                 }
             }
             "LIVE" | "PREPARING" => {}
-            "WARNING" => {
+            cmd if violation_stop(cmd) == Some(StopOrder::StopFirst) => {
                 let cfg = self.app_config.clone();
+                let room = self.room_id;
                 if let Some(warning) = warning {
                     tokio::spawn(async move {
                         let warning =
@@ -752,8 +1128,9 @@ impl BilibiliDanmakuClient {
                             // The room is offline: this is the session's 下播
                             // cause, and the runtime cannot tell a cut from a
                             // plain stop (Addendum E rev 5 item 20).
-                            Ok(()) => crate::notify::live_ended(
+                            Ok(()) => crate::notify::live_ended_with(
                                 crate::events::BroadcastEndCause::WarningCut,
+                                recent_violation(room, Instant::now()),
                             ),
                             Err(error) => {
                                 error!(
@@ -776,8 +1153,9 @@ impl BilibiliDanmakuClient {
                     });
                 }
             }
-            "CUT_OFF" | "CUT_OFF_V2" | "ANCHOR_ECOLOGY_LIVING_DIALOG" | "FULL_SCREEN_MASK_OPEN" => {
+            cmd if violation_stop(cmd) == Some(StopOrder::DanmakuFirst) => {
                 let cfg = self.app_config.clone();
+                let room = self.room_id;
                 if let Some(warning) = warning {
                     tokio::spawn(async move {
                         let warning =
@@ -796,8 +1174,9 @@ impl BilibiliDanmakuClient {
                             return;
                         }
                         match bili_stop_live(&cfg).await {
-                            Ok(()) => crate::notify::live_ended(
+                            Ok(()) => crate::notify::live_ended_with(
                                 crate::events::BroadcastEndCause::WarningCut,
+                                recent_violation(room, Instant::now()),
                             ),
                             Err(error) => {
                                 error!(
@@ -1070,6 +1449,7 @@ mod tests {
             cmd: cmd.into(),
             data: Some(data),
             info: None,
+            msg: None,
         }
     }
 
@@ -1251,12 +1631,13 @@ mod tests {
             client.record_history_messages(&messages, Some(11), 123, Instant::now(), 5)
         });
         let warning = rx.try_recv().unwrap();
-        let cut = rx.try_recv().unwrap();
+        let dialog = rx.try_recv().unwrap();
         assert!(
-            matches!(&warning.kind, EventKind::BiliWarning { seq: Some(11), room: 1, msg } if !msg.contains("SYNTHETIC-RTMP"))
+            matches!(&warning.kind, EventKind::BiliWarning { seq: Some(11), room: 1, msg, rank: 4, merge: true } if !msg.contains("SYNTHETIC-RTMP") && !msg.contains("rtmp://"))
         );
+        // Ruling 4: a dialog without a 切断 处罚结果 is a warning.
         assert!(
-            matches!(&cut.kind, EventKind::BiliCutOff { seq: Some(11), room: 1, msg } if msg=="直播间违规")
+            matches!(&dialog.kind, EventKind::BiliWarning { seq: Some(11), room: 1, msg, rank: 2, merge: false } if msg=="直播间违规")
         );
         assert!(rx.try_recv().is_err());
     }
@@ -1276,6 +1657,7 @@ mod tests {
                 info: Some(serde_json::json!({"raw_body": "SYNTHETIC-UNSAFE-BODY"})),
                 data: (cmd != "ROOM_CONTENT_AUDIT_REPORT")
                     .then(|| serde_json::json!({"body": "SYNTHETIC-UNSAFE-BODY"})),
+                msg: None,
             };
             client
                 .process_danmaku_command(&message)
@@ -1301,6 +1683,7 @@ mod tests {
                 [2, "示例用户001"]
             ])),
             data: None,
+            msg: None,
         };
         client
             .process_danmaku_command(&message)
@@ -1352,6 +1735,7 @@ mod tests {
             cmd: "CUT_OFF".into(),
             info: None,
             data: None,
+            msg: None,
         };
         let mut captured = capture_warning_message(&warnings, &packet).unwrap();
         assert!(!captured.has_source());
@@ -1462,5 +1846,620 @@ mod tests {
 
         assert!(nested);
         assert_eq!(decoded.as_ref(), payload);
+    }
+
+    // --------------------------------------- cutoff-reason (PRD R1–R3b)
+
+    /// Real payloads from the research report (bilibili-API-collect mirror,
+    /// EricEcho/BilibiliTool), public captures with no user data.
+    const FIX_WARNING_1: &str =
+        r#"{"cmd":"WARNING","msg":"图片内容不适宜，请立即调整","roomid":22195814}"#;
+    const FIX_WARNING_2: &str =
+        r#"{"cmd":"WARNING","msg":"禁止直播违禁游戏，请立即更换","roomid":776023}"#;
+    const FIX_CUT_OFF: &str =
+        r#"{"cmd":"CUT_OFF","msg":"违反直播言论规范，请立即调整","roomid":23993070}"#;
+    /// CUT_OFF_V2 capture of 2024-11-14 as trimmed in the report.
+    const FIX_CUT_OFF_V2: &str = r#"{"cmd":"CUT_OFF_V2","data":{"cut_off_scene":1,"timestamp":1731590280,"cut_off_version":1,
+ "cut_off_data":{"cut_off_title":"违规提示","cut_off_message_list":[
+  {"type":1,"label":"处罚结果","content":"切断本场直播"},
+  {"type":1,"label":"违规原因","content":"您本场直播存在挂机、录播等消极直播行为，因此直播被切断，请您及时整改"},
+  {"type":1,"label":"处罚时间","content":"2024年11月14日21时17分"}],
+ "cut_off_tip_list":[{"show_platform":[3,4],"message_list":[{"type":1,"content":"请在","link_url":""},
+  {"type":2,"content":"【处罚中心】","link_url":"https://link.bilibili.com/p/center/index?my-room/violation-records#/my-room/violation-records"},
+  {"type":1,"content":"查看你的违规记录","link_url":""}]}],
+ "cut_off_button_list":[{"show_platform":[1,2],"button_text":"了解详情","button_action":2,
+  "button_link_url":"https://live.bilibili.com/p/html/live-anchor-galaxy/violation_records/mobile.html?-Abrowser=live&is_live_webview=1"},
+  {"show_platform":[3,4],"button_text":"我知道了","button_action":1,"button_link_url":""}]}}}"#;
+    /// ANCHOR_ECOLOGY_LIVING_DIALOG: the report's 2024-11-13 rows inside the
+    /// documented envelope (tip and button lists as in CUT_OFF_V2).
+    const FIX_DIALOG: &str = r#"{"cmd":"ANCHOR_ECOLOGY_LIVING_DIALOG","data":{"dialog_scene":1,"timestamp":1731504840,"valid_timestamp":1731505840,
+ "dialog_title":"直播间违规","dialog_message_list":[
+  {"type":1,"label":"处罚结果","content":"警告"},
+  {"type":1,"label":"违规原因","content":"您本场直播存在挂机、录播等消极直播行为，请及时整改"},
+  {"type":1,"label":"处罚时间","content":"2024年11月13日21时34分"}],
+ "dialog_tip_list":[{"show_platform":[3,4],"message_list":[{"type":2,"content":"【处罚中心】","link_url":"https://link.bilibili.com/p/center/index#/my-room/violation-records"}]}],
+ "dialog_button_list":[{"show_platform":[1,2],"button_text":"了解详情","button_action":2,"button_link_url":"https://live.bilibili.com/p/html/live-anchor-galaxy/violation_records/mobile.html"}]}}"#;
+
+    const V2_EXPECTED: &str =
+        "您本场直播存在挂机、录播等消极直播行为，因此直播被切断，请您及时整改（切断本场直播）";
+    const DIALOG_EXPECTED: &str = "您本场直播存在挂机、录播等消极直播行为，请及时整改（警告）";
+
+    fn parse(json: &str) -> DanmakuMessage {
+        serde_json::from_str(json).unwrap()
+    }
+
+    fn history(message: &DanmakuMessage) -> (bool, String, u8) {
+        use crate::history::EventKind;
+        match room_history_event(message, 1, None).unwrap() {
+            EventKind::BiliWarning { msg, rank, .. } => (false, msg, rank),
+            EventKind::BiliCutOff { msg, rank, .. } => (true, msg, rank),
+            _ => unreachable!(),
+        }
+    }
+
+    fn v2_with_rows(rows: Value) -> DanmakuMessage {
+        audience_message(
+            "CUT_OFF_V2",
+            serde_json::json!({"cut_off_data": {"cut_off_message_list": rows}}),
+        )
+    }
+
+    #[test]
+    fn real_payloads_give_the_exact_history_text() {
+        for (json, cut, text, rank) in [
+            (FIX_WARNING_1, false, "图片内容不适宜，请立即调整", 4),
+            (FIX_WARNING_2, false, "禁止直播违禁游戏，请立即更换", 4),
+            (FIX_CUT_OFF, true, "违反直播言论规范，请立即调整", 4),
+            (FIX_CUT_OFF_V2, true, V2_EXPECTED, 7),
+            (FIX_DIALOG, false, DIALOG_EXPECTED, 7),
+        ] {
+            let message = parse(json);
+            assert_eq!(history(&message), (cut, text.to_string(), rank), "{json}");
+            let reason = violation_reason(&message).unwrap();
+            assert_eq!(reason.text(), text);
+            assert_eq!(reason.end_detail().rank, rank);
+        }
+        let v2 = violation_reason(&parse(FIX_CUT_OFF_V2)).unwrap();
+        assert_eq!(v2.result.as_deref(), Some("切断本场直播"));
+        assert_eq!(v2.source, ReasonSource::Labelled);
+    }
+
+    #[test]
+    fn rows_are_found_by_exact_label_in_any_order_with_extra_rows() {
+        let rows = serde_json::json!([
+            {"type":1,"label":"处罚时间","content":"2024年11月14日21时17分"},
+            {"type":1,"label":"违规原因说明","content":"不是这一行"},
+            {"type":1,"label":" 违规原因","content":"也不是这一行"},
+            {"type":1,"label":"违规原因","content":"您本场直播存在挂机、录播等消极直播行为，因此直播被切断，请您及时整改"},
+            {"type":2,"label":"备注","content":"额外行"},
+            {"type":1,"label":"处罚结果","content":"切断本场直播"}
+        ]);
+        assert_eq!(history(&v2_with_rows(rows)), (true, V2_EXPECTED.into(), 7));
+    }
+
+    #[test]
+    fn a_missing_label_leaves_that_field_out() {
+        // No 违规原因 row: no reason, so the fixed fallback stays.
+        let only_result = v2_with_rows(serde_json::json!([
+            {"label":"处罚结果","content":"切断本场直播"},
+            {"label":"处罚时间","content":"2024年11月14日21时17分"}
+        ]));
+        assert!(violation_reason(&only_result).is_none());
+        assert_eq!(history(&only_result), (true, "直播间切断".into(), 0));
+        // No 处罚结果 row: the reason alone, no brackets.
+        let only_reason = v2_with_rows(serde_json::json!([
+            {"label":"处罚时间","content":"2024年11月14日21时17分"},
+            {"label":"违规原因","content":"存在挂机、录播等消极直播行为"}
+        ]));
+        assert_eq!(
+            history(&only_reason),
+            (true, "存在挂机、录播等消极直播行为".into(), 6)
+        );
+        // Row content is never taken by position.
+        let unlabelled = v2_with_rows(serde_json::json!([
+            {"content":"切断本场直播"},
+            {"content":"存在挂机、录播等消极直播行为"}
+        ]));
+        assert_eq!(history(&unlabelled), (true, "直播间切断".into(), 0));
+    }
+
+    #[test]
+    fn non_string_or_blank_content_is_ignored() {
+        let rows = v2_with_rows(serde_json::json!([
+            {"label":"违规原因","content":12345},
+            {"label":"违规原因","content":" \n\t "},
+            {"label":"违规原因","content":{"text":"对象"}},
+            {"label":"违规原因","content":"真正的原因"},
+            {"label":"处罚结果","content":["数组"]}
+        ]));
+        assert_eq!(history(&rows), (true, "真正的原因".into(), 6));
+        let none = v2_with_rows(serde_json::json!([{"label":"违规原因","content":null}]));
+        assert_eq!(history(&none), (true, "直播间切断".into(), 0));
+        let not_a_list = audience_message(
+            "CUT_OFF_V2",
+            serde_json::json!({"cut_off_data": {"cut_off_message_list": "违规原因"}}),
+        );
+        assert_eq!(history(&not_a_list), (true, "直播间切断".into(), 0));
+    }
+
+    #[test]
+    fn message_fallbacks_top_level_msg_then_data_msg_then_fixed_text() {
+        // Only top-level msg (the real WARNING/CUT_OFF shape).
+        assert_eq!(
+            history(&parse(r#"{"cmd":"CUT_OFF","msg":"顶层原因"}"#)),
+            (true, "顶层原因".into(), 4)
+        );
+        // Only data.msg: the old test shape still works.
+        assert_eq!(
+            history(&parse(r#"{"cmd":"WARNING","data":{"msg":"旧格式原因"}}"#)),
+            (false, "旧格式原因".into(), 4)
+        );
+        // Both: the top-level one wins.
+        assert_eq!(
+            history(&parse(
+                r#"{"cmd":"WARNING","msg":"顶层原因","data":{"msg":"旧格式原因"}}"#
+            )),
+            (false, "顶层原因".into(), 4)
+        );
+        // A non-string msg is ignored.
+        assert_eq!(
+            history(&parse(
+                r#"{"cmd":"CUT_OFF","msg":{"a":1},"data":{"msg":7}}"#
+            )),
+            (true, "直播间切断".into(), 0)
+        );
+        // None at all: today's fallback text.
+        assert_eq!(
+            history(&parse(r#"{"cmd":"WARNING","roomid":1}"#)),
+            (false, "直播间警告".into(), 0)
+        );
+        assert_eq!(
+            history(&parse(r#"{"cmd":"CUT_OFF","roomid":1}"#)),
+            (true, "直播间切断".into(), 0)
+        );
+        assert_eq!(
+            history(&parse(r#"{"cmd":"CUT_OFF_V2","data":{}}"#)),
+            (true, "直播间切断".into(), 0)
+        );
+        // The dialog's title is only the last fallback.
+        assert_eq!(
+            history(&parse(
+                r#"{"cmd":"ANCHOR_ECOLOGY_LIVING_DIALOG","data":{"dialog_title":"直播间违规"}}"#
+            )),
+            (false, "直播间违规".into(), 2)
+        );
+        assert_eq!(
+            history(&parse(
+                r#"{"cmd":"ANCHOR_ECOLOGY_LIVING_DIALOG","data":{}}"#
+            )),
+            (false, "直播间违规".into(), 0)
+        );
+        // ROOM_LOCK keeps today's handling; a mask is a warning (ruling 4).
+        assert!(
+            room_history_event(&parse(r#"{"cmd":"ROOM_LOCK","expire":"x"}"#), 1, None).is_none()
+        );
+        assert!(violation_reason(&parse(r#"{"cmd":"ROOM_LOCK","msg":"x"}"#)).is_none());
+        assert_eq!(
+            history(&parse(
+                r#"{"cmd":"FULL_SCREEN_MASK_OPEN","data":{"title":"遮罩标题"}}"#
+            )),
+            (false, "遮罩标题".into(), 2)
+        );
+    }
+
+    #[test]
+    fn control_characters_and_newlines_cannot_fake_lines_or_break_layout() {
+        let message = audience_message(
+            "WARNING",
+            serde_json::json!({"msg": "违规\n2026-10-20T00:00:00 INFO fake\r\t\u{7}\u{202e}末尾  多\u{3000}空格\u{200b}"}),
+        );
+        let (_, msg, _) = history(&message);
+        assert_eq!(msg, "违规 2026-10-20T00:00:00 INFO fake 末尾 多 空格");
+        assert!(!msg.contains('\\'), "{msg}");
+        let rows = v2_with_rows(serde_json::json!([
+            {"label":"违规原因","content":"第一行\n第二行"},
+            {"label":"处罚结果","content":"\u{1b}[31m切断\u{1b}[0m"}
+        ]));
+        let (_, msg, _) = history(&rows);
+        assert!(!msg.chars().any(char::is_control), "{msg:?}");
+        assert!(msg.starts_with("第一行 第二行（"), "{msg}");
+    }
+
+    #[test]
+    fn over_cap_text_is_capped_after_cleaning() {
+        let long = "很长".repeat(200);
+        let message = audience_message("CUT_OFF", serde_json::json!({"msg": long}));
+        let (_, msg, rank) = history(&message);
+        assert_eq!(rank, 4);
+        assert!(unicode_width::UnicodeWidthStr::width(msg.as_str()) <= REASON_COLUMNS);
+        assert!(msg.starts_with("很长很长"));
+        assert!(msg.chars().count() < long.chars().count());
+        // Newlines are stripped before the cap, so they never cost columns.
+        let spaced = audience_message(
+            "CUT_OFF",
+            serde_json::json!({"msg": format!("{}{}", "\n".repeat(500), "原因")}),
+        );
+        assert_eq!(history(&spaced).1, "原因");
+    }
+
+    #[test]
+    fn links_in_the_payload_are_never_stored() {
+        for json in [FIX_CUT_OFF_V2, FIX_DIALOG] {
+            let (_, msg, _) = history(&parse(json));
+            assert!(
+                !msg.contains("http") && !msg.contains("bilibili.com"),
+                "{msg}"
+            );
+            assert!(
+                !msg.contains("1731590280") && !msg.contains("2024年"),
+                "{msg}"
+            );
+        }
+        let inline = audience_message(
+            "CUT_OFF",
+            serde_json::json!({"msg": "请查看 https://live.bilibili.com/p/x?a=1&b=2 处罚中心，或rtmp://h.example/live?key=SYNTHETIC-RTMP。"}),
+        );
+        let (_, msg, _) = history(&inline);
+        assert_eq!(msg, "请查看 [链接已省略] 处罚中心，或[链接已省略]。");
+    }
+
+    #[test]
+    fn the_warn_log_line_carries_the_reason_and_no_link() {
+        for (json, line) in [
+            (
+                FIX_WARNING_1,
+                "Warning: 图片内容不适宜，请立即调整".to_string(),
+            ),
+            (
+                FIX_WARNING_2,
+                "Warning: 禁止直播违禁游戏，请立即更换".to_string(),
+            ),
+            (
+                FIX_CUT_OFF,
+                "Cut off/Warning: 违反直播言论规范，请立即调整".to_string(),
+            ),
+            (FIX_CUT_OFF_V2, format!("Cut off/Warning: {V2_EXPECTED}")),
+            (FIX_DIALOG, format!("Cut off/Warning: {DIALOG_EXPECTED}")),
+            (r#"{"cmd":"WARNING"}"#, "Warning: No message".to_string()),
+            (
+                r#"{"cmd":"CUT_OFF_V2"}"#,
+                "Cut off/Warning: Stream cut off".to_string(),
+            ),
+        ] {
+            assert_eq!(
+                violation_log_line(&parse(json)).as_deref(),
+                Some(line.as_str())
+            );
+        }
+        assert_eq!(violation_log_line(&parse(r#"{"cmd":"ROOM_LOCK"}"#)), None);
+    }
+
+    #[tokio::test]
+    async fn the_captured_cut_log_contains_the_reason_and_no_url() {
+        let (dispatch, logs) = crate::logging::test_capture::subscriber(tracing::Level::DEBUG);
+        for json in [FIX_CUT_OFF_V2, FIX_DIALOG] {
+            let message = parse(json);
+            async { capture_warning_message(&warning_tracker(), &message) }
+                .with_subscriber(dispatch.clone())
+                .await;
+        }
+        let output = logs.text();
+        assert!(output.contains(V2_EXPECTED), "{output}");
+        assert!(output.contains(DIALOG_EXPECTED), "{output}");
+        for leak in ["http", "bilibili.com", "link_url", "1731590280", "2024年"] {
+            assert!(!output.contains(leak), "{leak}: {output}");
+        }
+    }
+
+    #[test]
+    fn the_notice_reason_keeps_the_most_detailed_frame_per_room() {
+        let room = 9_100_001;
+        let now = Instant::now();
+        let plain = violation_reason(&parse(FIX_CUT_OFF)).unwrap().end_detail();
+        let v2 = violation_reason(&parse(FIX_CUT_OFF_V2))
+            .unwrap()
+            .end_detail();
+        // CUT_OFF then V2: upgraded.
+        note_violation(room, plain.clone(), now);
+        note_violation(room, v2.clone(), now + Duration::from_millis(5));
+        assert_eq!(
+            recent_violation(room, now + Duration::from_secs(1)),
+            Some(v2.clone())
+        );
+        // A later plain msg never downgrades it.
+        note_violation(room, plain.clone(), now + Duration::from_millis(10));
+        assert_eq!(
+            recent_violation(room, now + Duration::from_secs(1)),
+            Some(v2.clone())
+        );
+        // V2 then CUT_OFF for another room.
+        let other = room + 1;
+        note_violation(other, v2.clone(), now);
+        note_violation(other, plain.clone(), now);
+        assert_eq!(recent_violation(other, now), Some(v2.clone()));
+        // V2 alone; nothing for an untouched room; stale after the window.
+        let alone = room + 2;
+        note_violation(alone, v2.clone(), now);
+        assert_eq!(recent_violation(alone, now), Some(v2));
+        assert_eq!(recent_violation(room + 3, now), None);
+        assert_eq!(
+            recent_violation(alone, now + VIOLATION_WINDOW * 3),
+            None,
+            "an old cut is not this 下播's reason"
+        );
+        // A new cut after the window starts over, even when less detailed.
+        note_violation(alone, plain.clone(), now + VIOLATION_WINDOW * 3);
+        assert_eq!(
+            recent_violation(alone, now + VIOLATION_WINDOW * 3),
+            Some(plain)
+        );
+    }
+
+    #[test]
+    fn one_frame_with_cut_off_and_v2_emits_both_ranked_for_the_writer() {
+        use crate::history::EventKind;
+        let client = client_for_messages();
+        let bus = Arc::new(crate::events::Bus::new());
+        let mut rx = bus.register("cut-facts", 8, |_| true);
+        bus.seal();
+        let messages = [parse(FIX_CUT_OFF), parse(FIX_CUT_OFF_V2)];
+        crate::events::with_sync_test_bus(bus, || {
+            client.record_history_messages(&messages, Some(3), 500, Instant::now(), 5)
+        });
+        let first = rx.try_recv().unwrap();
+        let second = rx.try_recv().unwrap();
+        assert!(
+            matches!(&first.kind, EventKind::BiliCutOff { rank: 4, msg, .. } if msg == "违反直播言论规范，请立即调整")
+        );
+        assert!(
+            matches!(&second.kind, EventKind::BiliCutOff { rank: 7, msg, .. } if msg == V2_EXPECTED)
+        );
+        assert!(rx.try_recv().is_err());
+    }
+
+    // ------------------------------------------- PRD ruling 4 (kinds)
+
+    #[test]
+    fn ruling4_the_2024_11_13_warning_dialog_is_recorded_as_bili_warning() {
+        use crate::history::EventKind;
+        let message = parse(FIX_DIALOG);
+        assert!(!records_as_cut_off(&message));
+        assert!(matches!(
+            room_history_event(&message, 1, Some(2)).unwrap(),
+            EventKind::BiliWarning { seq: Some(2), room: 1, ref msg, rank: 7, merge: false } if msg == DIALOG_EXPECTED
+        ));
+    }
+
+    #[test]
+    fn ruling4_a_dialog_whose_result_contains_cut_is_recorded_as_bili_cut_off() {
+        use crate::history::EventKind;
+        // Synthetic: the dialog shape with a 切断 处罚结果, rows reordered.
+        let message = parse(
+            r#"{"cmd":"ANCHOR_ECOLOGY_LIVING_DIALOG","data":{"dialog_title":"直播间违规","dialog_message_list":[
+              {"type":1,"label":"违规原因","content":"您本场直播存在挂机、录播等消极直播行为"},
+              {"type":1,"label":"处罚时间","content":"2026年10月20日19时00分"},
+              {"type":1,"label":"处罚结果","content":"切断本场直播"}]}}"#,
+        );
+        assert!(records_as_cut_off(&message));
+        assert!(matches!(
+            room_history_event(&message, 1, None).unwrap(),
+            EventKind::BiliCutOff { ref msg, rank: 7, .. }
+                if msg == "您本场直播存在挂机、录播等消极直播行为（切断本场直播）"
+        ));
+        // 切断 decides only through the exact 处罚结果 label.
+        let elsewhere = parse(
+            r#"{"cmd":"ANCHOR_ECOLOGY_LIVING_DIALOG","data":{"dialog_title":"切断","dialog_message_list":[
+              {"label":"违规原因","content":"可能被切断"},
+              {"label":"处罚结果说明","content":"切断"},
+              {"label":"处罚结果","content":"警告"}]}}"#,
+        );
+        assert!(!records_as_cut_off(&elsewhere));
+        // A 切断 result with no 违规原因 is still a cut, with the fallback text.
+        let no_reason = parse(
+            r#"{"cmd":"ANCHOR_ECOLOGY_LIVING_DIALOG","data":{"dialog_message_list":[
+              {"label":"处罚结果","content":"切断本场直播"}]}}"#,
+        );
+        assert!(matches!(
+            room_history_event(&no_reason, 1, None).unwrap(),
+            EventKind::BiliCutOff { ref msg, rank: 0, .. } if msg == "直播间违规"
+        ));
+    }
+
+    /// FULL_SCREEN_MASK_OPEN in the shape of the sjh8130/bili_danmaku capture
+    /// (room id and image host replaced with synthetic values).
+    const FIX_MASK: &str = r#"{"cmd":"FULL_SCREEN_MASK_OPEN","data":{"has_mask":true,"icon":"https://i0.example.invalid/bfs/live/mask.png","lines":"主播及时更改，可继续直播，若继续违规，直播间将被关闭。","overlay_second":60,"room_id":9999999999,"title":"当前直播间涉嫌违规"}}"#;
+
+    #[test]
+    fn ruling4_cut_frames_stay_bili_cut_off_and_warnings_stay_warnings() {
+        use crate::history::EventKind;
+        for json in [FIX_CUT_OFF, FIX_CUT_OFF_V2] {
+            let message = parse(json);
+            assert!(records_as_cut_off(&message), "{json}");
+            assert!(
+                matches!(
+                    room_history_event(&message, 1, None).unwrap(),
+                    EventKind::BiliCutOff { .. }
+                ),
+                "{json}"
+            );
+        }
+        for json in [FIX_WARNING_1, FIX_WARNING_2, FIX_MASK] {
+            assert!(!records_as_cut_off(&parse(json)), "{json}");
+        }
+    }
+
+    #[test]
+    fn ruling4_full_screen_mask_is_a_warning_with_the_title_only() {
+        use crate::history::EventKind;
+        let message = parse(FIX_MASK);
+        assert!(matches!(
+            room_history_event(&message, 1, Some(4)).unwrap(),
+            EventKind::BiliWarning { seq: Some(4), room: 1, ref msg, rank: 2, merge: false }
+                if msg == "当前直播间涉嫌违规"
+        ));
+        assert_eq!(
+            violation_log_line(&message).as_deref(),
+            Some("Cut off/Warning: 当前直播间涉嫌违规")
+        );
+        let (_, msg, _) = history(&message);
+        for never in [
+            "主播及时更改",
+            "example.invalid",
+            "http",
+            "9999999999",
+            "60",
+        ] {
+            assert!(!msg.contains(never), "{never}: {msg}");
+        }
+        // The title is cleaned and stripped of links like every reason.
+        let dirty = audience_message(
+            "FULL_SCREEN_MASK_OPEN",
+            serde_json::json!({"title": "涉嫌\n违规\u{202e} https://x.example.invalid/a", "lines": "不读"}),
+        );
+        assert_eq!(history(&dirty), (false, "涉嫌 违规 [链接已省略]".into(), 2));
+        // No title: the existing fallback text, as a warning.
+        assert_eq!(
+            history(&parse(
+                r#"{"cmd":"FULL_SCREEN_MASK_OPEN","data":{"lines":"只有说明"}}"#
+            )),
+            (false, "直播间涉嫌违规".into(), 0)
+        );
+        assert_eq!(
+            violation_log_line(&parse(r#"{"cmd":"FULL_SCREEN_MASK_OPEN"}"#)).as_deref(),
+            Some("Cut off/Warning: Stream cut off")
+        );
+    }
+
+    #[test]
+    fn ruling4_a_mask_still_stops_the_room_like_a_cut() {
+        // Classification changed, the stop did not: the mask is captured as
+        // a warning event and routed to the same stop arm as CUT_OFF.
+        for cmd in [
+            "CUT_OFF",
+            "CUT_OFF_V2",
+            "ANCHOR_ECOLOGY_LIVING_DIALOG",
+            "FULL_SCREEN_MASK_OPEN",
+        ] {
+            assert_eq!(violation_stop(cmd), Some(StopOrder::DanmakuFirst), "{cmd}");
+        }
+        assert_eq!(violation_stop("WARNING"), Some(StopOrder::StopFirst));
+        for cmd in ["ROOM_LOCK", "PREPARING", "DANMU_MSG"] {
+            assert_eq!(violation_stop(cmd), None, "{cmd}");
+        }
+        let warnings = Arc::new(WarningTracker::default());
+        assert!(
+            capture_warning_message(&warnings, &parse(FIX_MASK)).is_some(),
+            "a mask yields the warning event the stop task runs on"
+        );
+    }
+
+    // ------------------------------------------- Clerk gate L1, item 4
+
+    fn stripped(raw: &str) -> String {
+        clean_bili_text(raw)
+    }
+
+    #[test]
+    fn l1_scheme_links_with_full_width_or_spaced_separators_are_dropped() {
+        assert_eq!(stripped("看 https://a.example/x 吧"), "看 [链接已省略] 吧");
+        assert_eq!(
+            stripped("看 https：／／a.example/x 吧"),
+            "看 [链接已省略] 吧"
+        );
+        assert_eq!(stripped("看https：//a.example/x。"), "看[链接已省略]。");
+        assert_eq!(stripped("看 https:// a.example/x 吧"), "看 [链接已省略] 吧");
+        assert_eq!(
+            stripped("看 https://   a.example/x 吧"),
+            "看 [链接已省略] 吧"
+        );
+        // A non-ASCII path no longer ends the link early.
+        assert_eq!(
+            stripped("见 https://a.example/路径/秘密 后面"),
+            "见 [链接已省略] 后面"
+        );
+    }
+
+    #[test]
+    fn l1_www_and_short_links_without_a_scheme_are_dropped() {
+        assert_eq!(
+            stripped("访问 www.example.invalid/x 了解"),
+            "访问 [链接已省略] 了解"
+        );
+        assert_eq!(
+            stripped("访问WWW.Example.invalid，了解"),
+            "访问[链接已省略]，了解"
+        );
+        assert_eq!(
+            stripped("短链 b23.tv/AbCdEf 详情"),
+            "短链 [链接已省略] 详情"
+        );
+        assert_eq!(
+            stripped("短链b23.tv/AbCdEf（详情）"),
+            "短链[链接已省略]（详情）"
+        );
+        // Not links: numbers, versions, a dotted word without '/'.
+        assert_eq!(
+            stripped("版本 1.5/2 与 v2.0 和 a.b"),
+            "版本 1.5/2 与 v2.0 和 a.b"
+        );
+    }
+
+    #[test]
+    fn item4_a_dialog_without_a_result_row_is_a_warning() {
+        use crate::history::EventKind;
+        let message = parse(
+            r#"{"cmd":"ANCHOR_ECOLOGY_LIVING_DIALOG","data":{"dialog_title":"直播间违规","dialog_message_list":[
+              {"label":"违规原因","content":"您本场直播存在挂机、录播等消极直播行为，请及时整改"},
+              {"label":"处罚时间","content":"2024年11月13日21时34分"}]}}"#,
+        );
+        assert!(!records_as_cut_off(&message));
+        assert!(matches!(
+            room_history_event(&message, 1, None).unwrap(),
+            EventKind::BiliWarning { ref msg, rank: 6, merge: false, .. }
+                if msg == "您本场直播存在挂机、录播等消极直播行为，请及时整改"
+        ));
+        // The stop path is the same as for a cut.
+        assert_eq!(
+            violation_stop("ANCHOR_ECOLOGY_LIVING_DIALOG"),
+            Some(StopOrder::DanmakuFirst)
+        );
+    }
+
+    #[test]
+    fn item4_mask_title_with_a_link_and_control_characters_is_fully_cleaned() {
+        use crate::history::EventKind;
+        let message = audience_message(
+            "FULL_SCREEN_MASK_OPEN",
+            serde_json::json!({
+                "has_mask": true,
+                "icon": "https://i0.example.invalid/mask.png",
+                "lines": "主播及时更改，可继续直播，若继续违规，直播间将被关闭。",
+                "overlay_second": 60,
+                "room_id": 9999999999u64,
+                "title": "当前直播间\r\n涉嫌违规\u{0}\u{1b}[31m 详见 www.example.invalid/r 或 b23.tv/x1\u{202e}"
+            }),
+        );
+        let expected = "当前直播间 涉嫌违规 [31m 详见 [链接已省略] 或 [链接已省略]";
+        assert!(matches!(
+            room_history_event(&message, 1, None).unwrap(),
+            EventKind::BiliWarning { ref msg, rank: 2, merge: false, .. } if msg == expected
+        ));
+        let log = violation_log_line(&message).unwrap();
+        assert_eq!(log, format!("Cut off/Warning: {expected}"));
+        for never in [
+            "主播及时更改",
+            "example.invalid",
+            "b23.tv",
+            "http",
+            "\u{1b}",
+            "\n",
+        ] {
+            assert!(!log.contains(never), "{never}: {log:?}");
+        }
+        assert!(!records_as_cut_off(&message));
+        assert_eq!(
+            violation_stop("FULL_SCREEN_MASK_OPEN"),
+            Some(StopOrder::DanmakuFirst)
+        );
     }
 }

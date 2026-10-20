@@ -102,6 +102,18 @@ impl BroadcastEndCause {
     }
 }
 
+/// Bilibili's 警告/切断 reason as shown after 结束原因 in the 下播 notice.
+/// Never serialized: the synced ledger keeps only the cause code.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct EndDetail {
+    /// 「{违规原因}（{处罚结果}）」 or the reason alone; cleaned and capped.
+    pub text: String,
+    /// 0 = no reason, 2–3 = dialog title, 4–5 = plain `msg`, 6–7 = the
+    /// labelled 违规原因 row; +1 when a 处罚结果 row is present. A higher
+    /// rank may replace a lower one for the same cut, never the reverse.
+    pub rank: u8,
+}
+
 /// StopLiveData totals after the allowlist. No revenue field exists.
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct BiliTotals {
@@ -203,6 +215,9 @@ pub enum EventKind {
     /// session (a source switch never ends it).
     BroadcastEnded {
         cause: BroadcastEndCause,
+        /// Bilibili's own 警告/切断 reason for a `WarningCut`, already
+        /// cleaned and capped by the danmaku client. In-process only.
+        detail: Option<EndDetail>,
     },
     ProcessStarted {
         version: &'static str,
@@ -282,15 +297,24 @@ pub enum EventKind {
         seq: Option<u64>,
         error: String,
     },
+    /// `msg` is Bilibili's reason (cleaned, capped) or the fixed fallback;
+    /// `rank` orders how detailed it is (see [`EndDetail::rank`]) so the
+    /// writer keeps one row per warning or cut.
+    /// `merge`: the frame takes part in the writer's 60 s window (CUT_OFF
+    /// with CUT_OFF_V2; an identical repeated WARNING). Others always get a row.
     BiliWarning {
         seq: Option<u64>,
         room: u64,
         msg: String,
+        rank: u8,
+        merge: bool,
     },
     BiliCutOff {
         seq: Option<u64>,
         room: u64,
         msg: String,
+        rank: u8,
+        merge: bool,
     },
     RoomLocked {
         room: u64,

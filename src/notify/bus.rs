@@ -25,7 +25,9 @@ pub fn map(event: &Event) -> Option<LiveSignal> {
             channel: channel.clone(),
             title: title.clone(),
         })),
-        EventKind::BroadcastEnded { cause } => Some(LiveSignal::Ended(*cause)),
+        EventKind::BroadcastEnded { cause, detail } => {
+            Some(LiveSignal::Ended(*cause, detail.clone()))
+        }
         _ => None,
     }
 }

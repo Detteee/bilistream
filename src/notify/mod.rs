@@ -242,7 +242,15 @@ pub fn live_source(info: live_events::LiveSource) {
 
 /// The Bilibili room went offline, for `cause`. Only an open session ends.
 pub fn live_ended(cause: crate::events::BroadcastEndCause) {
-    crate::events::emit(crate::events::EventKind::BroadcastEnded { cause });
+    live_ended_with(cause, None);
+}
+
+/// [`live_ended`] with Bilibili's 警告/切断 reason for the 结束原因 line.
+pub fn live_ended_with(
+    cause: crate::events::BroadcastEndCause,
+    detail: Option<crate::events::EndDetail>,
+) {
+    crate::events::emit(crate::events::EventKind::BroadcastEnded { cause, detail });
 }
 
 /// Ledger to advertise in this node's heartbeat snapshot.

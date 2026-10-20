@@ -45,6 +45,8 @@ pub const CODE_RATE_LIMITED: i64 = 40034100;
 pub const PASSIVE_CLOSED_CODES: [i64; 3] = [40034005, 304103, 40034128];
 const TITLE_CHARS: usize = 40;
 const NAME_CHARS: usize = 40;
+/// Bilibili's 警告/切断 reason after 结束原因; the same cap as the history detail.
+const REASON_CHARS: usize = 160;
 const SHANGHAI_SECS: i32 = 8 * 3600;
 /// Switched sources kept for the 下播 chain; older ones only survive as the
 /// session's first source.
@@ -271,6 +273,11 @@ pub struct Broadcast {
     /// Why the room went offline; absent while it is live.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub end_cause: Option<BroadcastEndCause>,
+    /// Bilibili's reason for a `WarningCut`. Local to the node that saw the
+    /// danmaku frame and never on the wire or on disk (no ledger change): a
+    /// peer or a restarted node renders the fixed label instead.
+    #[serde(skip)]
+    pub end_detail: Option<crate::events::EndDetail>,
 }
 
 /// `active_push` per node (Addendum E rev 2 item 10). Stored as unix
@@ -365,12 +372,21 @@ impl LiveLedger {
             } else {
                 merge_records(&mut self.delivery, &other.delivery);
             }
+            let end_detail = if same_session && end_cause == mine.end_cause {
+                mine.end_detail.clone()
+            } else {
+                None
+            };
             self.broadcast = theirs;
             self.broadcast.ended_at = ended;
             self.broadcast.end_cause = end_cause;
+            self.broadcast.end_detail = end_detail;
         } else if same_session {
             if theirs.ended_at > mine.ended_at {
                 self.broadcast.ended_at = theirs.ended_at;
+                if self.broadcast.end_cause != theirs.end_cause {
+                    self.broadcast.end_detail = None;
+                }
                 self.broadcast.end_cause = theirs.end_cause;
             } else if theirs.ended_at == mine.ended_at && self.broadcast.end_cause.is_none() {
                 self.broadcast.end_cause = theirs.end_cause;
@@ -443,11 +459,38 @@ impl LiveLedger {
     /// The Bilibili room went offline. Only an open broadcast ends, once, and
     /// the first cause wins.
     pub fn end(&mut self, now: u64, cause: BroadcastEndCause) -> bool {
-        if self.broadcast.generation == 0 || self.broadcast.ended_at.is_some() {
+        self.end_with(now, cause, None)
+    }
+
+    /// [`Self::end`] carrying Bilibili's reason. A later, more detailed
+    /// reason for the same `WarningCut` (CUT_OFF then CUT_OFF_V2) replaces a
+    /// less detailed one; an equal or less detailed one never does. Only the
+    /// first end changes the synced ledger.
+    pub fn end_with(
+        &mut self,
+        now: u64,
+        cause: BroadcastEndCause,
+        detail: Option<crate::events::EndDetail>,
+    ) -> bool {
+        if self.broadcast.generation == 0 {
+            return false;
+        }
+        let detail = detail
+            .filter(|d| cause == BroadcastEndCause::WarningCut && d.rank > 0 && !d.text.is_empty());
+        if self.broadcast.ended_at.is_some() {
+            if self.broadcast.end_cause == Some(BroadcastEndCause::WarningCut) {
+                if let Some(detail) = detail {
+                    let current = self.broadcast.end_detail.as_ref().map_or(0, |d| d.rank);
+                    if detail.rank > current {
+                        self.broadcast.end_detail = Some(detail);
+                    }
+                }
+            }
             return false;
         }
         self.broadcast.ended_at = Some(now.max(self.broadcast.started_at));
         self.broadcast.end_cause = Some(cause);
+        self.broadcast.end_detail = detail;
         true
     }
 
@@ -571,8 +614,9 @@ pub enum SourceOutcome {
 pub enum LiveSignal {
     /// A source is selected and the Bilibili room is live.
     Source(LiveSource),
-    /// The Bilibili room went offline.
-    Ended(BroadcastEndCause),
+    /// The Bilibili room went offline, with Bilibili's reason for a
+    /// `WarningCut` when the danmaku client saw one.
+    Ended(BroadcastEndCause, Option<crate::events::EndDetail>),
 }
 
 pub fn shanghai_month(now: u64) -> u32 {
@@ -630,7 +674,17 @@ pub fn render(key: LiveEventKey, broadcast: &Broadcast, catch_up: bool, sender: 
             lines.push(session_line(broadcast, &length));
             if let Some(cause) = broadcast.end_cause {
                 let source = clean(&newest_source_channel(broadcast), NAME_CHARS);
-                lines.push(format!("结束原因：{}", cause.notice_label(&source)));
+                let label = cause.notice_label(&source);
+                let detail = broadcast
+                    .end_detail
+                    .as_ref()
+                    .filter(|_| cause == BroadcastEndCause::WarningCut)
+                    .map(|d| clean(&d.text, REASON_CHARS))
+                    .filter(|text| !text.is_empty());
+                lines.push(match detail {
+                    Some(text) => format!("结束原因：{label} · {text}"),
+                    None => format!("结束原因：{label}"),
+                });
             }
             end
         }

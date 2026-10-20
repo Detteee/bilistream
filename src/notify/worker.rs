@@ -366,8 +366,8 @@ impl Worker {
                 }
                 SourceOutcome::Same(_) => false,
             },
-            LiveSignal::Ended(cause) => {
-                let ended = self.ledger.live.end(now, cause);
+            LiveSignal::Ended(cause, detail) => {
+                let ended = self.ledger.live.end_with(now, cause, detail);
                 if ended {
                     tracing::info!("QQ 下播通知: 结束原因 {}", cause.as_str());
                 }

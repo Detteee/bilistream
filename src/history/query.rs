@@ -322,6 +322,15 @@ pub(crate) struct SessionItem {
     #[serde(default)]
     pub broadcast_id: String,
     pub bili: Option<BiliItem>,
+    /// PRD R5: this `bili_stopped` session was ended by a Bilibili 切断
+    /// (a `bili.cut_off` event of the session). Derived at read time; absent
+    /// (false) from an older peer, which then renders as before.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub end_cut_off: bool,
+    /// The `detail` of the session's latest `bili.cut_off` event that is not a
+    /// generic fallback text: Bilibili's own reason. Absent when none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_detail: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -634,8 +643,66 @@ fn watched_sample(conn: &Connection, session: i64) -> rusqlite::Result<Option<(i
         [session],|r|Ok((r.get(0)?,r.get(1)?))).optional()
 }
 
+/// The session label for a cut-off `bili_stopped` session (PRD R5).
+pub(crate) const CUT_OFF_END_LABEL: &str = "B站 切断直播";
+
+/// `(end_cut_off, end_detail)` for an ended `bili_stopped` session: its
+/// `bili.cut_off` events (linked to it, or on its node within
+/// `[started_at, ended_at]`), the latest non-fallback detail. The writer
+/// already keeps one row per cut, upgraded to the most detailed frame.
+fn session_cut_off(
+    conn: &Connection,
+    id: i64,
+    node: &str,
+    started_at: i64,
+    ended_at: Option<i64>,
+    end_reason: Option<&str>,
+) -> rusqlite::Result<(bool, Option<String>)> {
+    let Some(ended_at) = ended_at else {
+        return Ok((false, None));
+    };
+    if end_reason != Some(EndReason::BiliStopped.as_str()) {
+        return Ok((false, None));
+    }
+    let mut stmt = conn.prepare_cached(
+        "SELECT at,detail FROM events WHERE kind='bili.cut_off'
+           AND (session_id=?1 OR (node=?2 AND at>=?3 AND at<=?4))
+         ORDER BY at DESC, id DESC",
+    )?;
+    let rows: Vec<(i64, String)> = stmt
+        .query_map(params![id, node, started_at, ended_at], |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        })?
+        .collect::<rusqlite::Result<_>>()?;
+    Ok((!rows.is_empty(), cut_off_detail(&rows)))
+}
+
+/// The session's reason among its `bili.cut_off` rows (newest first): the
+/// latest cut that has a real reason, and within that cut's window the
+/// labelled 「违规原因（处罚结果）」 form over a plain `msg`, whatever order
+/// the rows were written in (a restart can add a late plain CUT_OFF row).
+fn cut_off_detail(rows: &[(i64, String)]) -> Option<String> {
+    let real = |d: &str| !d.trim().is_empty() && !super::CUT_OFF_FALLBACKS.contains(&d);
+    let labelled = |d: &str| d.ends_with('）') && d.contains('（');
+    let (latest_at, latest) = rows.iter().find(|(_, d)| real(d))?;
+    rows.iter()
+        .filter(|(at, d)| {
+            real(d) && (latest_at - super::VIOLATION_WINDOW_SECS..=*latest_at).contains(at)
+        })
+        .find(|(_, d)| labelled(d))
+        .map_or(Some(latest.clone()), |(_, d)| Some(d.clone()))
+}
+
 fn item(conn: &Connection, row: Row, now: i64) -> rusqlite::Result<SessionItem> {
     let runs = runs_of(conn, row.id)?;
+    let (end_cut_off, end_detail) = session_cut_off(
+        conn,
+        row.id,
+        &row.node,
+        row.started_at,
+        row.ended_at,
+        row.end_reason.as_deref(),
+    )?;
     let bili = Some(bili_item(conn, &row, now)?);
     let broadcast_id = broadcast_id(&row.platform, &row.live_key, &row.source_id, &row.eid);
     Ok(SessionItem {
@@ -668,6 +735,8 @@ fn item(conn: &Connection, row: Row, now: i64) -> rusqlite::Result<SessionItem> 
         source_id: row.source_id,
         broadcast_id,
         bili,
+        end_cut_off,
+        end_detail,
     })
 }
 
@@ -972,16 +1041,19 @@ pub(crate) fn events(conn: &Connection, q: &Query) -> rusqlite::Result<EventsPag
             if let Some(end) = ended.filter(|end| in_window(*end)) {
                 let code = reason.clone().unwrap_or_default();
                 let bad = matches!(code.as_str(), "aborted" | "process_restart");
+                let (cut_off, _) =
+                    session_cut_off(conn, id, &node, started, Some(end), Some(&code))?;
+                let label = if cut_off {
+                    CUT_OFF_END_LABEL
+                } else {
+                    end_reason_label(&code)
+                };
                 all.push(base(
                     "end",
                     end,
                     "stream.ended",
                     format!("转播结束：{name}"),
-                    format!(
-                        "时长 {} 分钟 · {}",
-                        (end - started).max(0) / 60,
-                        end_reason_label(&code)
-                    ),
+                    format!("时长 {} 分钟 · {}", (end - started).max(0) / 60, label),
                     if bad { "warn" } else { "info" },
                 ));
             }

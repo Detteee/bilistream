@@ -136,6 +136,7 @@ fn saturated_emit_latency() {
         100_002,
         EventKind::BroadcastEnded {
             cause: BroadcastEndCause::BiliStopped,
+            detail: None,
         },
     );
     assert!(matches!(

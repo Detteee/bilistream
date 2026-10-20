@@ -4215,7 +4215,7 @@ mod tests {
                 let old_owner = warnings.own_source(100, old_source.clone());
                 capture_warning_message(&warnings, &DanmakuMessage {
                     cmd: "CUT_OFF".into(), info: None,
-                    data: Some(serde_json::json!({"msg": "Stream cut off"})),
+                    data: Some(serde_json::json!({"msg": "Stream cut off"})), msg: None,
                 }).unwrap();
                 assert!(warnings.snapshot().holds(&old_source));
                 drop(old_owner);
@@ -4329,6 +4329,7 @@ mod tests {
                     cmd: "CUT_OFF".into(),
                     info: None,
                     data: Some(serde_json::json!({"msg": "Stream cut off"})),
+                    msg: None,
                 },
             )
             .unwrap();

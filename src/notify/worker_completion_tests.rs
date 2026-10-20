@@ -1146,11 +1146,15 @@ fn history_only_facts_never_create_secondary_qq_alerts() {
             seq: None,
             room: 42,
             msg: "fixture".into(),
+            rank: 0,
+            merge: false,
         },
         FactKind::BiliCutOff {
             seq: None,
             room: 42,
             msg: "fixture".into(),
+            rank: 0,
+            merge: false,
         },
         FactKind::RoomLocked { room: 42, until: 1 },
         FactKind::LocalFault {
