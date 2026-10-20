@@ -302,12 +302,17 @@ pub enum EventKind {
     /// writer keeps one row per warning or cut.
     /// `merge`: the frame takes part in the writer's 60 s window (CUT_OFF
     /// with CUT_OFF_V2; an identical repeated WARNING). Others always get a row.
+    /// `stop`: the frame stopped the room. A stopping warning is stored as
+    /// `bili.warning.stop` (the session then derives `end_warning_stop`); a
+    /// warning that did not stop stays `bili.warning`. Every warning frame
+    /// today stops the room.
     BiliWarning {
         seq: Option<u64>,
         room: u64,
         msg: String,
         rank: u8,
         merge: bool,
+        stop: bool,
     },
     BiliCutOff {
         seq: Option<u64>,

@@ -468,6 +468,7 @@ impl Writer {
                 msg,
                 rank,
                 merge,
+                stop: _,
             }
             | EventKind::BiliCutOff {
                 seq,
@@ -477,6 +478,15 @@ impl Writer {
                 merge,
             } => {
                 let cut = matches!(&event.kind, EventKind::BiliCutOff { .. });
+                // A stopping warning is a sub-kind: the session derives
+                // `end_warning_stop` from it; a plain warning never does.
+                let kind = if cut {
+                    "bili.cut_off"
+                } else if matches!(&event.kind, EventKind::BiliWarning { stop: true, .. }) {
+                    "bili.warning.stop"
+                } else {
+                    "bili.warning"
+                };
                 let key = (cut, *room);
                 // Only CUT_OFF/CUT_OFF_V2 merge, and a WARNING repeated
                 // verbatim is dropped; every other frame keeps its own row.
@@ -496,11 +506,7 @@ impl Writer {
                         // A more detailed frame for the same event.
                         let changed = self.conn.execute(
                             "UPDATE events SET detail=?2 WHERE id=?1 AND kind=?3",
-                            params![
-                                prev.id,
-                                detail,
-                                if cut { "bili.cut_off" } else { "bili.warning" }
-                            ],
+                            params![prev.id, detail, kind],
                         )?;
                         if changed > 0 {
                             self.violations.insert(
@@ -520,7 +526,7 @@ impl Writer {
                 }
                 self.record_event(EventRecord {
                     at,
-                    kind: if cut { "bili.cut_off" } else { "bili.warning" },
+                    kind,
                     subject: Some(&room.to_string()),
                     severity: if cut { Severity::Error } else { Severity::Warn },
                     title: if cut {

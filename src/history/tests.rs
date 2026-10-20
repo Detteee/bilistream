@@ -1219,6 +1219,7 @@ fn rtmp_key_never_reaches_db_bytes_or_api_bodies() {
             msg: "警告 SYNTHKEY-0123456789".into(),
             rank: 4,
             merge: true,
+            stop: true,
         },
     ))
     .unwrap();
@@ -1633,6 +1634,7 @@ async fn cluster_scope_merges_peers_and_reports_missing_nodes() {
             gaps: vec![],
             median_bitrate_kbps: None,
             source_id: None,
+            end_warning_stop: false,
             broadcast_id: String::new(),
             bili: None,
             end_cut_off: false,
@@ -3232,6 +3234,7 @@ fn warning(w: &mut Writer, at: i64, msg: &str, rank: u8) {
             msg: msg.into(),
             rank,
             merge: true,
+            stop: true,
         },
     ))
     .unwrap();
@@ -3247,6 +3250,7 @@ fn warning_own_row(w: &mut Writer, at: i64, msg: &str, rank: u8) {
             msg: msg.into(),
             rank,
             merge: false,
+            stop: true,
         },
     ))
     .unwrap();
@@ -3315,12 +3319,12 @@ fn repeated_warning_is_one_row_but_a_different_warning_is_kept() {
     session(&mut w, 1, T0, None);
     warning(&mut w, T0 + 10, "图片内容不适宜，请立即调整", 4);
     warning(&mut w, T0 + 20, "图片内容不适宜，请立即调整", 4);
-    assert_eq!(violation_rows(&w, "bili.warning").len(), 1);
+    assert_eq!(violation_rows(&w, "bili.warning.stop").len(), 1);
     // L4: a different warning, even one without text, keeps its own row.
     warning(&mut w, T0 + 21, "直播间警告", 0);
     warning(&mut w, T0 + 30, "禁止直播违禁游戏，请立即更换", 4);
     assert_eq!(
-        violation_rows(&w, "bili.warning"),
+        violation_rows(&w, "bili.warning.stop"),
         vec![
             "图片内容不适宜，请立即调整".to_string(),
             "直播间警告".to_string(),
@@ -3443,13 +3447,15 @@ fn cut_off_session_v2_then_plain_msg_shows_v2() {
 
 #[test]
 fn warning_only_or_non_bili_stopped_sessions_have_no_cut_fields() {
+    // A warning stop sets the warning fields, never the cut ones.
     let (mut w, _) = writer("r5-warning");
     session(&mut w, 1, T0, None);
     warning(&mut w, T0 + 100, "图片内容不适宜，请立即调整", 4);
     end(&mut w, 1, T0 + 105, EndReason::BiliStopped);
     let item = only_session(&w, T0 + 200);
     assert!(item.get("end_cut_off").is_none(), "{item}");
-    assert!(item.get("end_detail").is_none(), "{item}");
+    assert_eq!(item["end_warning_stop"], json!(true));
+    assert_eq!(item["end_detail"], json!("图片内容不适宜，请立即调整"));
 
     let (mut w, _) = writer("r5-other-end");
     session(&mut w, 1, T0, None);
@@ -3569,7 +3575,11 @@ async fn cluster_merge_keeps_cut_fields_and_accepts_an_older_peer_without_them()
     assert_eq!(items.len(), 3, "{data}");
     let by_node = |node: &str| items.iter().find(|i| i["node"] == node).unwrap();
     let old = by_node("tokyo-1");
-    assert!(old.get("end_cut_off").is_none() && old.get("end_detail").is_none());
+    assert!(
+        old.get("end_cut_off").is_none()
+            && old.get("end_warning_stop").is_none()
+            && old.get("end_detail").is_none()
+    );
     assert_eq!(old["end_reason"], json!("bili_stopped"));
     assert_eq!(by_node("sg-3")["end_cut_off"], json!(true));
     assert_eq!(by_node("sg-3")["end_detail"], json!(PLAIN_TEXT));
@@ -3587,9 +3597,13 @@ fn session_item_serializes_end_fields_as_a_bare_bool_and_string() {
         "median_bitrate_kbps": null, "bili": null
     }))
     .unwrap();
-    assert!(!item.end_cut_off && item.end_detail.is_none());
+    assert!(!item.end_cut_off && !item.end_warning_stop && item.end_detail.is_none());
     let plain = serde_json::to_value(&item).unwrap();
-    assert!(plain.get("end_cut_off").is_none() && plain.get("end_detail").is_none());
+    assert!(
+        plain.get("end_cut_off").is_none()
+            && plain.get("end_warning_stop").is_none()
+            && plain.get("end_detail").is_none()
+    );
     item.end_cut_off = true;
     item.end_detail = Some(PLAIN_TEXT.into());
     let out = serde_json::to_value(&item).unwrap();
@@ -3597,6 +3611,11 @@ fn session_item_serializes_end_fields_as_a_bare_bool_and_string() {
     assert_eq!(out["end_detail"], Value::String(PLAIN_TEXT.into()));
     let back: query::SessionItem = serde_json::from_value(out).unwrap();
     assert_eq!(back, item);
+    item.end_cut_off = false;
+    item.end_warning_stop = true;
+    let out = serde_json::to_value(&item).unwrap();
+    assert_eq!(out["end_warning_stop"], Value::Bool(true));
+    assert!(out.get("end_cut_off").is_none());
 }
 
 // ------------------------------------------- PRD ruling 4 (kinds)
@@ -3613,11 +3632,15 @@ fn ruling4_a_warning_dialog_never_sets_the_cut_off_fields() {
         7,
     );
     end(&mut w, 1, T0 + 105, EndReason::BiliStopped);
-    assert_eq!(violation_rows(&w, "bili.warning").len(), 1);
+    assert_eq!(violation_rows(&w, "bili.warning.stop").len(), 1);
     assert!(violation_rows(&w, "bili.cut_off").is_empty());
     let item = only_session(&w, T0 + 200);
     assert!(item.get("end_cut_off").is_none(), "{item}");
-    assert!(item.get("end_detail").is_none(), "{item}");
+    assert_eq!(item["end_warning_stop"], json!(true));
+    assert_eq!(
+        item["end_detail"],
+        json!("您本场直播存在挂机、录播等消极直播行为，请及时整改（警告）")
+    );
     let page = query::events(&w.conn, &q(T0 - 10, T0 + 300)).unwrap();
     let ended = page
         .items
@@ -3625,7 +3648,7 @@ fn ruling4_a_warning_dialog_never_sets_the_cut_off_fields() {
         .find(|e| e.kind == "stream.ended")
         .unwrap();
     assert!(
-        ended.detail.ends_with("· 正常结束（B站 已下播）"),
+        ended.detail.ends_with("· B站 违规警示 · 已自动停播"),
         "{}",
         ended.detail
     );
@@ -3650,7 +3673,7 @@ fn l4_a_dialog_or_mask_right_after_a_warning_keeps_its_own_row() {
     // The WARNING repeated verbatim is still dropped.
     warning(&mut w, T0 + 104, "图片内容不适宜，请立即调整", 4);
     assert_eq!(
-        violation_rows(&w, "bili.warning"),
+        violation_rows(&w, "bili.warning.stop"),
         vec![
             "图片内容不适宜，请立即调整".to_string(),
             "当前直播间涉嫌违规".to_string(),
@@ -3718,12 +3741,87 @@ fn ruling4_a_full_screen_mask_warning_never_sets_the_cut_off_fields() {
     warning_own_row(&mut w, T0 + 100, "当前直播间涉嫌违规", 2);
     end(&mut w, 1, T0 + 105, EndReason::BiliStopped);
     assert_eq!(
-        violation_rows(&w, "bili.warning"),
+        violation_rows(&w, "bili.warning.stop"),
         vec!["当前直播间涉嫌违规".to_string()]
     );
     assert!(violation_rows(&w, "bili.cut_off").is_empty());
     let item = only_session(&w, T0 + 200);
     assert!(item.get("end_cut_off").is_none(), "{item}");
+    assert_eq!(item["end_warning_stop"], json!(true));
+    assert_eq!(item["end_detail"], json!("当前直播间涉嫌违规"));
+}
+
+#[test]
+fn warning_stop_without_a_real_reason_has_no_detail() {
+    // A mask with no title is stored with the stock fallback; the flag is
+    // still true, but the panel gets no stock text as the reason.
+    let (mut w, _) = writer("r5-warn-stock");
+    session(&mut w, 1, T0, None);
+    warning(&mut w, T0 + 100, "直播间警告", 0);
+    end(&mut w, 1, T0 + 105, EndReason::BiliStopped);
+    let item = only_session(&w, T0 + 200);
+    assert_eq!(item["end_warning_stop"], json!(true));
+    assert!(item.get("end_detail").is_none(), "{item}");
+}
+
+#[test]
+fn a_warning_stop_older_than_600_seconds_does_not_mark_the_session() {
+    let (mut w, _) = writer("r5-warn-window");
+    let window = query::WARNING_STOP_WINDOW_SECS;
+    session(&mut w, 1, T0, None);
+    warning(&mut w, T0 + 100, "图片内容不适宜，请立即调整", 4);
+    // Exactly at the window edge still counts; one second earlier does not.
+    end(&mut w, 1, T0 + 100 + window, EndReason::BiliStopped);
+    let item = only_session(&w, T0 + 2000);
+    assert_eq!(item["end_warning_stop"], json!(true), "{item}");
+
+    let (mut w, _) = writer("r5-warn-too-old");
+    session(&mut w, 1, T0, None);
+    warning(&mut w, T0 + 100, "图片内容不适宜，请立即调整", 4);
+    end(&mut w, 1, T0 + 100 + window + 1, EndReason::BiliStopped);
+    let item = only_session(&w, T0 + 2000);
+    assert!(item.get("end_warning_stop").is_none(), "{item}");
+    assert!(item.get("end_detail").is_none(), "{item}");
+}
+
+#[test]
+fn a_cut_wins_over_a_warning_stop() {
+    let (mut w, _) = writer("r5-cut-wins");
+    session(&mut w, 1, T0, None);
+    warning(&mut w, T0 + 100, "图片内容不适宜，请立即调整", 4);
+    cut(&mut w, T0 + 101, Some(1), V2_TEXT, 7);
+    end(&mut w, 1, T0 + 105, EndReason::BiliStopped);
+    let item = only_session(&w, T0 + 200);
+    assert_eq!(item["end_cut_off"], json!(true));
+    assert_eq!(item["end_detail"], json!(V2_TEXT));
+    assert!(item.get("end_warning_stop").is_none(), "{item}");
+}
+
+#[test]
+fn a_plain_warning_that_did_not_stop_never_marks_the_session() {
+    // Older builds stored every warning as `bili.warning`; those rows read as
+    // warnings that did not stop, so they never explain the 下播.
+    let (mut w, _) = writer("r5-plain-warning");
+    session(&mut w, 1, T0, None);
+    w.apply(&ev(
+        T0 + 100,
+        EventKind::BiliWarning {
+            seq: Some(1),
+            room: 1,
+            msg: "图片内容不适宜，请立即调整".into(),
+            rank: 4,
+            merge: true,
+            stop: false,
+        },
+    ))
+    .unwrap();
+    end(&mut w, 1, T0 + 105, EndReason::BiliStopped);
+    assert_eq!(
+        violation_rows(&w, "bili.warning"),
+        vec!["图片内容不适宜，请立即调整".to_string()]
+    );
+    let item = only_session(&w, T0 + 200);
+    assert!(item.get("end_warning_stop").is_none(), "{item}");
     assert!(item.get("end_detail").is_none(), "{item}");
 }
 
@@ -3774,7 +3872,7 @@ fn ruling3_new_rows_store_the_spaced_titles() {
     assert_eq!(
         violation_titles(&w),
         vec![
-            ("bili.warning".to_string(), "B站 房间警告".to_string()),
+            ("bili.warning.stop".to_string(), "B站 房间警告".to_string()),
             ("bili.cut_off".to_string(), "B站 切断直播".to_string()),
         ]
     );

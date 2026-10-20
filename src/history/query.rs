@@ -327,8 +327,14 @@ pub(crate) struct SessionItem {
     /// (false) from an older peer, which then renders as before.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub end_cut_off: bool,
-    /// The `detail` of the session's latest `bili.cut_off` event that is not a
-    /// generic fallback text: Bilibili's own reason. Absent when none.
+    /// PRD warning-stop: this `bili_stopped` session was ended by a Bilibili
+    /// warning (a `bili.warning.stop` row within 600 s of the end) and not by
+    /// a cut. Derived at read time; absent from an older peer, which then
+    /// renders as before.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub end_warning_stop: bool,
+    /// The session's own reason: the cut-off detail when a cut wins, else the
+    /// warning-stop detail. A generic stock fallback is never shown.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub end_detail: Option<String>,
 }
@@ -645,36 +651,65 @@ fn watched_sample(conn: &Connection, session: i64) -> rusqlite::Result<Option<(i
 
 /// The session label for a cut-off `bili_stopped` session (PRD R5).
 pub(crate) const CUT_OFF_END_LABEL: &str = "B站 切断直播";
+/// The session label for a warning-stopped `bili_stopped` session.
+pub(crate) const WARNING_STOP_END_LABEL: &str = "B站 违规警示 · 已自动停播";
+/// How long before the end a `bili.warning.stop` row may still explain the
+/// stop; an older warning belongs to an earlier moment of the stream.
+pub(crate) const WARNING_STOP_WINDOW_SECS: i64 = 600;
 
-/// `(end_cut_off, end_detail)` for an ended `bili_stopped` session: its
-/// `bili.cut_off` events (linked to it, or on its node within
-/// `[started_at, ended_at]`), the latest non-fallback detail. The writer
-/// already keeps one row per cut, upgraded to the most detailed frame.
-fn session_cut_off(
+/// A row detail that is a real Bilibili reason, never a stock fallback.
+fn real_detail(detail: &str) -> bool {
+    !detail.trim().is_empty() && !super::is_stock_detail(detail)
+}
+
+/// `(end_cut_off, end_warning_stop, end_detail)` for an ended
+/// `bili_stopped` session. One read over the session's violation rows
+/// (linked to it, or on its node within `[started_at, ended_at]`, because a
+/// restart can desync the id): a cut wins; otherwise a `bili.warning.stop`
+/// row within [`WARNING_STOP_WINDOW_SECS`] of the end marks the session.
+/// `end_detail` is the latest row with a real reason.
+fn session_end_state(
     conn: &Connection,
     id: i64,
     node: &str,
     started_at: i64,
     ended_at: Option<i64>,
     end_reason: Option<&str>,
-) -> rusqlite::Result<(bool, Option<String>)> {
+) -> rusqlite::Result<(bool, bool, Option<String>)> {
     let Some(ended_at) = ended_at else {
-        return Ok((false, None));
+        return Ok((false, false, None));
     };
     if end_reason != Some(EndReason::BiliStopped.as_str()) {
-        return Ok((false, None));
+        return Ok((false, false, None));
     }
     let mut stmt = conn.prepare_cached(
-        "SELECT at,detail FROM events WHERE kind='bili.cut_off'
-           AND (session_id=?1 OR (node=?2 AND at>=?3 AND at<=?4))
+        "SELECT kind,at,detail FROM events
+           WHERE kind IN ('bili.cut_off','bili.warning.stop')
+             AND (session_id=?1 OR (node=?2 AND at>=?3 AND at<=?4))
          ORDER BY at DESC, id DESC",
     )?;
-    let rows: Vec<(i64, String)> = stmt
+    let rows: Vec<(String, i64, String)> = stmt
         .query_map(params![id, node, started_at, ended_at], |r| {
-            Ok((r.get(0)?, r.get(1)?))
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?))
         })?
         .collect::<rusqlite::Result<_>>()?;
-    Ok((!rows.is_empty(), cut_off_detail(&rows)))
+    let mut cut_rows = Vec::new();
+    let mut stop_rows = Vec::new();
+    for (kind, at, detail) in rows {
+        if kind == "bili.cut_off" {
+            cut_rows.push((at, detail));
+        } else if at >= ended_at - WARNING_STOP_WINDOW_SECS {
+            stop_rows.push((at, detail));
+        }
+    }
+    if !cut_rows.is_empty() {
+        return Ok((true, false, cut_off_detail(&cut_rows)));
+    }
+    let detail = stop_rows
+        .iter()
+        .find(|(_, d)| real_detail(d))
+        .map(|(_, d)| d.clone());
+    Ok((false, !stop_rows.is_empty(), detail))
 }
 
 /// The session's reason among its `bili.cut_off` rows (newest first): the
@@ -688,12 +723,11 @@ fn session_cut_off(
 /// 处罚结果 row. The panel then shows the less detailed of two real texts —
 /// never a stock fallback or another session's reason.
 fn cut_off_detail(rows: &[(i64, String)]) -> Option<String> {
-    let real = |d: &str| !d.trim().is_empty() && !super::is_stock_detail(d);
     let labelled = |d: &str| d.ends_with('）') && d.contains('（');
-    let (latest_at, latest) = rows.iter().find(|(_, d)| real(d))?;
+    let (latest_at, latest) = rows.iter().find(|(_, d)| real_detail(d))?;
     rows.iter()
         .filter(|(at, d)| {
-            real(d) && (latest_at - super::VIOLATION_WINDOW_SECS..=*latest_at).contains(at)
+            real_detail(d) && (latest_at - super::VIOLATION_WINDOW_SECS..=*latest_at).contains(at)
         })
         .find(|(_, d)| labelled(d))
         .map_or(Some(latest.clone()), |(_, d)| Some(d.clone()))
@@ -701,7 +735,7 @@ fn cut_off_detail(rows: &[(i64, String)]) -> Option<String> {
 
 fn item(conn: &Connection, row: Row, now: i64) -> rusqlite::Result<SessionItem> {
     let runs = runs_of(conn, row.id)?;
-    let (end_cut_off, end_detail) = session_cut_off(
+    let (end_cut_off, end_warning_stop, end_detail) = session_end_state(
         conn,
         row.id,
         &row.node,
@@ -742,6 +776,7 @@ fn item(conn: &Connection, row: Row, now: i64) -> rusqlite::Result<SessionItem> 
         broadcast_id,
         bili,
         end_cut_off,
+        end_warning_stop,
         end_detail,
     })
 }
@@ -1047,10 +1082,12 @@ pub(crate) fn events(conn: &Connection, q: &Query) -> rusqlite::Result<EventsPag
             if let Some(end) = ended.filter(|end| in_window(*end)) {
                 let code = reason.clone().unwrap_or_default();
                 let bad = matches!(code.as_str(), "aborted" | "process_restart");
-                let (cut_off, _) =
-                    session_cut_off(conn, id, &node, started, Some(end), Some(&code))?;
+                let (cut_off, warning_stop, _) =
+                    session_end_state(conn, id, &node, started, Some(end), Some(&code))?;
                 let label = if cut_off {
                     CUT_OFF_END_LABEL
+                } else if warning_stop {
+                    WARNING_STOP_END_LABEL
                 } else {
                     end_reason_label(&code)
                 };

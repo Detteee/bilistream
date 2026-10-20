@@ -514,11 +514,21 @@ fn link_end(orig: &[char], norm: &[char], mut k: usize) -> usize {
         // Judge punctuation on the original character: a full-width `：` was
         // only normalised for matching and still ends a body.
         if c.is_whitespace() || orig.get(k).is_some_and(|o| is_cjk_punct(*o)) {
-            // `。` between host labels (`https://b23。tv`) is a dot, not the
-            // end of the body.
-            if orig.get(k) == Some(&'。') && norm.get(k + 1).copied().is_some_and(host_char) {
-                k += 1;
-                continue;
+            // `。` is a host dot only when a whole host label follows it
+            // (`https://b23。tv`), never when prose follows (`x.com。B站官方`).
+            if orig.get(k) == Some(&'。') {
+                let mut next = k + 1;
+                while norm.get(next).copied().is_some_and(host_char) {
+                    next += 1;
+                }
+                let label_ends = next == norm.len()
+                    || norm[next].is_whitespace()
+                    || matches!(orig.get(next), Some(&'/') | Some(&':'))
+                    || orig.get(next).is_some_and(|o| is_cjk_punct(*o));
+                if next > k + 1 && label_ends {
+                    k = next;
+                    continue;
+                }
             }
             break;
         }
@@ -715,6 +725,10 @@ fn room_history_event(
     // PRD 65e7118b / Clerk L4: only CUT_OFF with CUT_OFF_V2 merge (and an
     // identical repeated WARNING is dropped); every other frame keeps its row.
     let merge = matches!(message.cmd.as_str(), "CUT_OFF" | "CUT_OFF_V2" | "WARNING");
+    // Ruling: a warning that stops the room is stored as `bili.warning.stop`,
+    // and the session then reads `end_warning_stop`. Every warning frame we
+    // know stops the room.
+    let stop = violation_stop(&message.cmd).is_some();
     Some(if !records_as_cut_off(message) {
         EventKind::BiliWarning {
             seq,
@@ -722,6 +736,7 @@ fn room_history_event(
             msg,
             rank,
             merge,
+            stop,
         }
     } else {
         EventKind::BiliCutOff {
@@ -1715,11 +1730,11 @@ mod tests {
         let warning = rx.try_recv().unwrap();
         let dialog = rx.try_recv().unwrap();
         assert!(
-            matches!(&warning.kind, EventKind::BiliWarning { seq: Some(11), room: 1, msg, rank: 4, merge: true } if !msg.contains("SYNTHETIC-RTMP") && !msg.contains("rtmp://"))
+            matches!(&warning.kind, EventKind::BiliWarning { seq: Some(11), room: 1, msg, rank: 4, merge: true, stop: true } if !msg.contains("SYNTHETIC-RTMP") && !msg.contains("rtmp://"))
         );
         // Ruling 4: a dialog without a 切断 处罚结果 is a warning.
         assert!(
-            matches!(&dialog.kind, EventKind::BiliWarning { seq: Some(11), room: 1, msg, rank: 2, merge: false } if msg=="直播间违规")
+            matches!(&dialog.kind, EventKind::BiliWarning { seq: Some(11), room: 1, msg, rank: 2, merge: false, stop: true } if msg=="直播间违规")
         );
         assert!(rx.try_recv().is_err());
     }
@@ -2308,7 +2323,7 @@ mod tests {
         assert!(!records_as_cut_off(&message));
         assert!(matches!(
             room_history_event(&message, 1, Some(2)).unwrap(),
-            EventKind::BiliWarning { seq: Some(2), room: 1, ref msg, rank: 7, merge: false } if msg == DIALOG_EXPECTED
+            EventKind::BiliWarning { seq: Some(2), room: 1, ref msg, rank: 7, merge: false, stop: true } if msg == DIALOG_EXPECTED
         ));
     }
 
@@ -2376,7 +2391,7 @@ mod tests {
         let message = parse(FIX_MASK);
         assert!(matches!(
             room_history_event(&message, 1, Some(4)).unwrap(),
-            EventKind::BiliWarning { seq: Some(4), room: 1, ref msg, rank: 2, merge: false }
+            EventKind::BiliWarning { seq: Some(4), room: 1, ref msg, rank: 2, merge: false, stop: true }
                 if msg == "当前直播间涉嫌违规"
         ));
         assert_eq!(
@@ -2583,9 +2598,13 @@ mod tests {
         assert_eq!(stripped("短链 b23．tv/x 详情"), "短链 [链接已省略] 详情");
         assert_eq!(stripped("短链 b23。tv 详情"), "短链 [链接已省略] 详情");
         assert_eq!(stripped("短链 b23｡tv 详情"), "短链 [链接已省略] 详情");
-        // The ideographic dot stays a host dot inside a scheme URL and a
-        // non-ASCII path.
+        // The ideographic dot stays a host dot inside a scheme URL, but a
+        // sentence continues after it when prose follows.
         assert_eq!(stripped("看 https://b23。tv 吧"), "看 [链接已省略] 吧");
+        assert_eq!(
+            stripped("看 https://x.com。B站官方 吧"),
+            "看 [链接已省略]。B站官方 吧"
+        );
         // Running Chinese text and punctuation right after a bare host do not
         // keep the host visible.
         assert_eq!(

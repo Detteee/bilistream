@@ -1148,6 +1148,7 @@ fn history_only_facts_never_create_secondary_qq_alerts() {
             msg: "fixture".into(),
             rank: 0,
             merge: false,
+            stop: true,
         },
         FactKind::BiliCutOff {
             seq: None,
