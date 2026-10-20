@@ -3410,6 +3410,26 @@ fn cut_off_session_with_only_fallback_has_flag_but_no_detail() {
     assert!(item.get("end_detail").is_none(), "{item}");
 }
 
+/// Clerk follow-up: the warning stock text joins the three cut-off ones in
+/// one shared list, so no stock text can surface as a session's reason.
+#[test]
+fn every_stock_fallback_is_never_a_session_detail() {
+    for (index, stock) in crate::history::STOCK_FALLBACKS.iter().enumerate() {
+        assert!(crate::history::is_stock_detail(stock), "{stock}");
+        let (mut w, _) = writer(&format!("r5-stock-{index}"));
+        session(&mut w, 1, T0, None);
+        cut(&mut w, T0 + 100, Some(1), stock, 0);
+        end(&mut w, 1, T0 + 105, EndReason::BiliStopped);
+        let item = only_session(&w, T0 + 200);
+        assert_eq!(item["end_cut_off"], json!(true), "{stock}: {item}");
+        assert!(item.get("end_detail").is_none(), "{stock}: {item}");
+    }
+    // A real reason is still shown, so the filter is not a blanket removal.
+    assert!(!crate::history::is_stock_detail(
+        "图片内容不适宜，请立即调整"
+    ));
+}
+
 #[test]
 fn cut_off_session_v2_then_plain_msg_shows_v2() {
     let (mut w, _) = writer("r5-v2-plain");

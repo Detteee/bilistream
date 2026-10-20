@@ -681,8 +681,14 @@ fn session_cut_off(
 /// latest cut that has a real reason, and within that cut's window the
 /// labelled 「违规原因（处罚结果）」 form over a plain `msg`, whatever order
 /// the rows were written in (a restart can add a late plain CUT_OFF row).
+///
+/// Known limit (Clerk L3a, documented not fixed): a restart wipes the
+/// writer's 60 s merge memory, so a plain `CUT_OFF` row arriving after the
+/// restart can win over a `CUT_OFF_V2` row that was capped away or carried no
+/// 处罚结果 row. The panel then shows the less detailed of two real texts —
+/// never a stock fallback or another session's reason.
 fn cut_off_detail(rows: &[(i64, String)]) -> Option<String> {
-    let real = |d: &str| !d.trim().is_empty() && !super::CUT_OFF_FALLBACKS.contains(&d);
+    let real = |d: &str| !d.trim().is_empty() && !super::is_stock_detail(d);
     let labelled = |d: &str| d.ends_with('）') && d.contains('（');
     let (latest_at, latest) = rows.iter().find(|(_, d)| real(d))?;
     rows.iter()

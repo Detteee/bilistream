@@ -331,113 +331,195 @@ fn clean_bili_text(raw: &str) -> String {
     without_links(&words)
 }
 
-/// Drop every link (R3, Clerk L1): `scheme://…` (also full-width `：／／`
-/// and `scheme:// host` with spaces), `www.…`, and `host.tld/…` such as
-/// `b23.tv/…`. A link runs to the next whitespace or CJK punctuation, so a
-/// non-ASCII path is dropped with it.
+/// Drop every link (R3, Clerk L1/L1a/L1b): any `://` — ASCII, full-width
+/// `：／／`, or a scheme with no ASCII letters such as `看://` — plus `www.…`
+/// and a bare host: `host.tld`, `host:port`, `1.2.3.4[:port]`, with an
+/// optional path, and with full-width or ideographic dots. A link runs to the
+/// next whitespace or CJK punctuation, so a non-ASCII path is dropped with it.
 fn without_links(text: &str) -> String {
-    let text = text
-        .replace("：／／", "://")
-        .replace("：//", "://")
-        .replace(":／／", "://");
-    let chars: Vec<(usize, char)> = text.char_indices().collect();
-    let host_char = |c: char| c.is_ascii_alphanumeric() || c == '-';
+    // Compare on a normalised copy so full-width `：／／` and full-width or
+    // ideographic dots read as link punctuation. Only the link is replaced;
+    // every other character is emitted exactly as Bilibili sent it.
+    let orig: Vec<char> = text.chars().collect();
+    let norm: Vec<char> = orig
+        .iter()
+        .map(|c| match c {
+            '：' => ':',
+            '／' => '/',
+            '．' | '｡' | '。' => '.',
+            _ => *c,
+        })
+        .collect();
     let mut out = String::with_capacity(text.len());
     let mut i = 0;
-    while i < chars.len() {
-        let ch = chars[i].1;
-        let token_start = i == 0
-            || !matches!(chars[i - 1].1, c if c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'));
+    while i < norm.len() {
+        let token_start = i == 0 || !is_token_char(orig[i - 1]);
         if token_start {
-            if let Some(after) = link_body_start(&chars, i, host_char) {
-                let end = link_end(&chars, after);
+            if let Some(end) = link_from_token(&orig, &norm, i) {
                 out.push_str("[链接已省略]");
                 i = end;
                 continue;
             }
+        } else if norm[i] == ':' && norm.get(i + 1) == Some(&'/') && norm.get(i + 2) == Some(&'/') {
+            // L1a: a `://` later in a token still removes the link; the text
+            // already emitted before the colon stays.
+            out.push_str("[链接已省略]");
+            i = link_body_end(&orig, &norm, i + 3);
+            continue;
         }
-        out.push(ch);
+        out.push(orig[i]);
         i += 1;
     }
     let collapsed: Vec<&str> = out.split(' ').filter(|w| !w.is_empty()).collect();
     collapsed.join(" ")
 }
 
-/// If a link starts at `i`, the index where its body (after any `://` and
-/// the spaces that follow it) begins.
-fn link_body_start(
-    chars: &[(usize, char)],
-    i: usize,
-    host_char: impl Fn(char) -> bool,
-) -> Option<usize> {
-    let at = |k: usize| chars.get(k).map(|(_, c)| *c);
-    // scheme://
-    if at(i).is_some_and(|c| c.is_ascii_alphabetic()) {
-        let mut k = i + 1;
-        while at(k).is_some_and(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.')) {
-            k += 1;
-        }
-        if at(k) == Some(':') && at(k + 1) == Some('/') && at(k + 2) == Some('/') {
-            let mut body = k + 3;
-            while at(body) == Some(' ') {
-                body += 1;
-            }
-            return Some(body);
-        }
+/// The link starting at token-start `i`, if any, and the index after it.
+fn link_from_token(orig: &[char], norm: &[char], i: usize) -> Option<usize> {
+    let at = |k: usize| norm.get(k).copied();
+    // Scheme.run:// (ASCII, full-width, or no scheme at all — L1a).
+    let mut scheme_end = i;
+    while at(scheme_end).is_some_and(scheme_char) {
+        scheme_end += 1;
     }
-    // www.
-    let lower: String = (i..i + 4)
-        .filter_map(at)
-        .map(|c| c.to_ascii_lowercase())
-        .collect();
-    if lower == "www." {
-        return Some(i);
+    let scheme = at(i).is_some_and(char::is_alphanumeric);
+    if (scheme || scheme_end == i)
+        && at(scheme_end) == Some(':')
+        && at(scheme_end + 1) == Some('/')
+        && at(scheme_end + 2) == Some('/')
+    {
+        return Some(link_body_end(orig, norm, scheme_end + 3));
     }
-    // host.tld/ (b23.tv/…): dotted ASCII labels, an alphabetic last label of
-    // two or more letters, then '/'.
+    host_link_end(orig, norm, i)
+}
+
+/// The index after a link body: spaces after `://` belong to the link, then
+/// the body runs to whitespace or CJK punctuation.
+fn link_body_end(orig: &[char], norm: &[char], mut body: usize) -> usize {
+    while norm.get(body) == Some(&' ') {
+        body += 1;
+    }
+    link_end(orig, norm, body)
+}
+
+/// L1b: a bare host at token-start `i` — `www.…`, `host.tld`, `host:port`,
+/// `1.2.3.4[:port]`, with an optional path, and with full-width or
+/// ideographic dots. Dotted versions and words without a host-shaped last
+/// label are not links.
+fn host_link_end(orig: &[char], norm: &[char], i: usize) -> Option<usize> {
+    let at = |k: usize| norm.get(k).copied();
+    if starts_with_www(norm, i) {
+        return Some(link_end(orig, norm, i));
+    }
     let mut k = i;
-    let mut labels = 0;
+    let mut labels = 0usize;
     let mut last_alpha;
+    let mut all_numeric = true;
     loop {
         let start = k;
-        while at(k).is_some_and(&host_char) {
+        while at(k).is_some_and(host_char) {
             k += 1;
         }
         if k == start {
             return None;
         }
+        let label = &norm[start..k];
         labels += 1;
-        last_alpha = if (start..k).all(|j| at(j).is_some_and(|c| c.is_ascii_alphabetic())) {
-            k - start
+        last_alpha = if label.iter().all(|c| c.is_ascii_alphabetic()) {
+            label.len()
         } else {
             0
         };
-        if at(k) == Some('.') {
+        all_numeric &= label.iter().all(|c| c.is_ascii_digit());
+        if at(k) == Some('.') && at(k + 1).is_some_and(host_char) {
             k += 1;
         } else {
             break;
         }
     }
-    (labels >= 2 && last_alpha >= 2 && at(k) == Some('/')).then_some(i)
+    if labels < 2 {
+        return None;
+    }
+    let ip = labels == 4 && all_numeric;
+    // host.tld: an alphabetic last label of two or more letters.
+    let domain = !all_numeric && last_alpha >= 2;
+    if !ip && !domain {
+        return None;
+    }
+    // Optional `:port` (host:port / IP:port).
+    if at(k) == Some(':') && at(k + 1).is_some_and(|c| c.is_ascii_digit()) {
+        k += 1;
+        while at(k).is_some_and(|c| c.is_ascii_digit()) {
+            k += 1;
+        }
+    }
+    if at(k) == Some('/') {
+        return Some(link_end(orig, norm, k));
+    }
+    // A bare host ends where its labels (and port) stop; running Chinese text
+    // after it does not keep the host visible.
+    Some(k)
+}
+
+/// `www.` in any ASCII letter case.
+fn starts_with_www(norm: &[char], i: usize) -> bool {
+    ['w', 'w', 'w', '.']
+        .into_iter()
+        .enumerate()
+        .all(|(offset, expected)| {
+            norm.get(i + offset)
+                .is_some_and(|c| c.to_ascii_lowercase() == expected)
+        })
+}
+
+/// ASCII or full-width letters/digits/`+`/`-`/`.`, i.e. URL scheme material.
+fn scheme_char(c: char) -> bool {
+    c.is_ascii_alphanumeric()
+        || matches!(c, '+' | '-' | '.')
+        || matches!(
+            c,
+            '\u{ff10}'..='\u{ff19}' | '\u{ff21}'..='\u{ff3a}' | '\u{ff41}'..='\u{ff5a}'
+        )
+}
+
+/// ASCII letters/digits/`-`, i.e. host label material.
+fn host_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == '-'
+}
+
+/// A character that continues a token, so a link cannot start mid-word.
+fn is_token_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.')
+}
+
+/// The CJK punctuation that ends a link body and a token.
+fn is_cjk_punct(c: char) -> bool {
+    matches!(
+        c,
+        '\u{3000}'
+            ..='\u{303f}'
+                | '\u{ff01}'
+                | '\u{ff08}'
+                | '\u{ff09}'
+                | '\u{ff0c}'
+                | '\u{ff1a}'
+                | '\u{ff1b}'
+                | '\u{ff1f}'
+    )
 }
 
 /// The index after a link body: the next whitespace or CJK punctuation.
-fn link_end(chars: &[(usize, char)], mut k: usize) -> usize {
-    while let Some((_, c)) = chars.get(k) {
-        if c.is_whitespace()
-            || matches!(
-                *c,
-                '\u{3000}'
-                    ..='\u{303f}'
-                        | '\u{ff01}'
-                        | '\u{ff08}'
-                        | '\u{ff09}'
-                        | '\u{ff0c}'
-                        | '\u{ff1a}'
-                        | '\u{ff1b}'
-                        | '\u{ff1f}'
-            )
-        {
+fn link_end(orig: &[char], norm: &[char], mut k: usize) -> usize {
+    while let Some(&c) = norm.get(k) {
+        // Judge punctuation on the original character: a full-width `：` was
+        // only normalised for matching and still ends a body.
+        if c.is_whitespace() || orig.get(k).is_some_and(|o| is_cjk_punct(*o)) {
+            // `。` between host labels (`https://b23。tv`) is a dot, not the
+            // end of the body.
+            if orig.get(k) == Some(&'。') && norm.get(k + 1).copied().is_some_and(host_char) {
+                k += 1;
+                continue;
+            }
             break;
         }
         k += 1;
@@ -558,11 +640,11 @@ struct AudienceCounts {
 }
 
 /// The fixed event `detail` when Bilibili sent no reason. The history query
-/// treats the cut-off ones as "no reason" (`history::CUT_OFF_FALLBACKS`).
-const FALLBACK_WARNING: &str = "直播间警告";
-const FALLBACK_CUT_OFF: &str = crate::history::CUT_OFF_FALLBACKS[0];
-const FALLBACK_DIALOG: &str = crate::history::CUT_OFF_FALLBACKS[1];
-const FALLBACK_MASK: &str = crate::history::CUT_OFF_FALLBACKS[2];
+/// treats every one as "no reason" (`history::STOCK_FALLBACKS`).
+const FALLBACK_WARNING: &str = crate::history::STOCK_FALLBACKS[0];
+const FALLBACK_CUT_OFF: &str = crate::history::STOCK_FALLBACKS[1];
+const FALLBACK_DIALOG: &str = crate::history::STOCK_FALLBACKS[2];
+const FALLBACK_MASK: &str = crate::history::STOCK_FALLBACKS[3];
 
 /// How a 警告/切断 frame stops the room. Classification (ruling 4) never
 /// changes this: a mask is recorded as a warning but still stops the room.
@@ -2461,5 +2543,63 @@ mod tests {
             violation_stop("FULL_SCREEN_MASK_OPEN"),
             Some(StopOrder::DanmakuFirst)
         );
+    }
+
+    #[test]
+    fn l1a_any_double_slash_starts_a_link_and_full_width_separators_are_converted() {
+        // The old rule: `://` starts a link even with no ASCII scheme before
+        // it (`看://…`, full-width letters).
+        assert_eq!(stripped("看://x.example 吧"), "看[链接已省略] 吧");
+        assert_eq!(
+            stripped("看 ｈｔｔｐｓ://x.example 吧"),
+            "看 [链接已省略] 吧"
+        );
+        assert_eq!(
+            stripped("看ｈｔｔｐｓ：／／x.example 吧"),
+            "看[链接已省略] 吧"
+        );
+        // Full-width `：` and `／` are converted character by character, so a
+        // mixed separator works too.
+        assert_eq!(stripped("看 h：／／x.example 吧"), "看 [链接已省略] 吧");
+        assert_eq!(stripped("看 ：／／x.example 吧"), "看 [链接已省略] 吧");
+        // A `://` later in a token is still a delimiter, even when the run
+        // before it is not a valid scheme (`-https://`, `.://`).
+        assert_eq!(stripped(".://x.example 吧"), ".[链接已省略] 吧");
+        assert_eq!(stripped("-https://x.example 吧"), "-https[链接已省略] 吧");
+    }
+
+    #[test]
+    fn l1b_bare_domains_ips_ports_and_full_width_dots_are_dropped() {
+        assert_eq!(stripped("短链 b23.tv 详情"), "短链 [链接已省略] 详情");
+        assert_eq!(stripped("访问 example.invalid 吧"), "访问 [链接已省略] 吧");
+        // An IP address, a host with a port, and an IP with a port.
+        assert_eq!(stripped("地址 1.2.3.4 吧"), "地址 [链接已省略] 吧");
+        assert_eq!(stripped("地址 1.2.3.4:8080 吧"), "地址 [链接已省略] 吧");
+        assert_eq!(
+            stripped("端口 example.invalid:8443 吧"),
+            "端口 [链接已省略] 吧"
+        );
+        // Full-width and ideographic dots work as host dots.
+        assert_eq!(stripped("短链 b23．tv/x 详情"), "短链 [链接已省略] 详情");
+        assert_eq!(stripped("短链 b23。tv 详情"), "短链 [链接已省略] 详情");
+        assert_eq!(stripped("短链 b23｡tv 详情"), "短链 [链接已省略] 详情");
+        // The ideographic dot stays a host dot inside a scheme URL and a
+        // non-ASCII path.
+        assert_eq!(stripped("看 https://b23。tv 吧"), "看 [链接已省略] 吧");
+        // Running Chinese text and punctuation right after a bare host do not
+        // keep the host visible.
+        assert_eq!(
+            stripped("如b23.tv等第三方链接 吧"),
+            "如[链接已省略]等第三方链接 吧"
+        );
+        assert_eq!(stripped("见 b23.tv. 吧"), "见 [链接已省略]. 吧");
+        assert_eq!(stripped("短链b23.tv!详情"), "短链[链接已省略]!详情");
+        // Still not links: numbers, versions, and a dotted word without a
+        // host-shaped last label.
+        assert_eq!(
+            stripped("版本 1.5/2 与 v2.0 和 a.b"),
+            "版本 1.5/2 与 v2.0 和 a.b"
+        );
+        assert_eq!(stripped("端口 8080 与 2024.11"), "端口 8080 与 2024.11");
     }
 }
