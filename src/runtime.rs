@@ -655,7 +655,7 @@ fn should_auto_stop_after_end(live_hours: i64) -> bool {
 
 fn log_selected_stream(identity: &FfmpegStreamIdentity, title: Option<&str>, priority: bool) {
     tracing::info!(
-        "{identity} 源直播可用；标题={}；选台原因={}",
+        "{identity} 标题={}；选台原因={}",
         safe_text(title.unwrap_or("无标题"), 80),
         if priority {
             "可用优先频道"
@@ -1326,9 +1326,21 @@ async fn skip_stream_if_banned_keyword(
     };
 
     if should_warn {
-        tracing::error!("{}直播标题/分区包含不支持的关键词: {}", platform, keyword);
-        if let Err(e) =
-            send_danmaku(cfg, &format!("错误：{}标题/分区含:{}", platform, keyword)).await
+        tracing::error!(
+            "{} 在 {} 的直播标题/分区包含不支持的关键词: {}",
+            crate::logging::safe_text(&stream.channel_name, 64),
+            platform,
+            keyword
+        );
+        if let Err(e) = send_danmaku(
+            cfg,
+            &crate::plugins::danmaku::banned_keyword_reply(
+                &stream.channel_name,
+                platform,
+                &keyword,
+            ),
+        )
+        .await
         {
             tracing::error!("Failed to send danmaku: {}", e);
         }
@@ -4342,8 +4354,8 @@ mod tests {
                 "弹幕 %转播%",
                 "监听目标已更新",
                 "跳过频道",
-                "选台结果=TW/示例频道 002",
-                "源直播可用",
+                "选台结果=[TW] 示例频道 002",
+                "标题=示例直播 002",
                 "Connection refused",
                 "已观察到推流输出",
                 "另一频道已确认推流",

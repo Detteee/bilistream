@@ -1303,6 +1303,16 @@ impl BilibiliDanmakuClient {
                                 .and_then(|u| u.first())
                                 .and_then(|n| n.as_u64())
                                 .unwrap_or(0);
+                            let uname = user_info
+                                .and_then(|u| u.get(1))
+                                .and_then(Value::as_str)
+                                .unwrap_or("")
+                                .trim();
+                            let sender = if uname.is_empty() {
+                                "未知发送者".to_string()
+                            } else {
+                                safe_text(uname, 64)
+                            };
 
                             // Get owner UID from config
                             let owner_uid = self.config.dede_user_id.parse::<u64>().unwrap_or(0);
@@ -1319,6 +1329,7 @@ impl BilibiliDanmakuClient {
                                     crate::plugins::danmaku::process_danmaku_with_owner(
                                         &formatted_message,
                                         true, // is_owner = true
+                                        &sender,
                                     )
                                     .await;
                                 } else if self.enable_commands.load(Ordering::Relaxed)
@@ -1329,6 +1340,7 @@ impl BilibiliDanmakuClient {
                                     crate::plugins::danmaku::process_danmaku_with_owner(
                                         &formatted_message,
                                         false, // is_owner = false
+                                        &sender,
                                     )
                                     .await;
                                 } else if danmaku_text.contains("%查询") {
@@ -1336,12 +1348,14 @@ impl BilibiliDanmakuClient {
                                     crate::plugins::danmaku::process_danmaku_with_owner(
                                         &formatted_message,
                                         false, // is_owner = false
+                                        &sender,
                                     )
                                     .await;
                                 } else {
                                     crate::plugins::danmaku::reject_disabled_danmaku_target(
                                         &self.app_config.cluster.node_id,
                                         &danmaku_text,
+                                        &sender,
                                     );
                                 }
                             }
@@ -1963,7 +1977,7 @@ mod tests {
         assert!(output.contains("换台命令未启用"));
         assert!(!output.contains("监听目标已更新"));
         assert!(output.contains("弹幕 %转播%"));
-        assert!(!output.contains("示例用户001"));
+        assert!(output.contains("（示例用户001）"), "{output}");
         assert!(!client.enable_commands.load(Ordering::Relaxed));
     }
 

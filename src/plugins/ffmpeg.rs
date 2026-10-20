@@ -265,7 +265,6 @@ pub struct FfmpegStreamIdentity {
     node: String,
     platform: String,
     channel: String,
-    channel_id: String,
     history: Option<FfmpegRunHistory>,
     source: BroadcastSource,
     warnings: Arc<WarningTracker>,
@@ -291,7 +290,6 @@ impl FfmpegStreamIdentity {
                 },
                 24,
             ),
-            channel_id: safe_text(channel_id, usize::MAX),
             history: None,
             source: BroadcastSource::new(platform, channel, channel_id, None),
             warnings: warning_tracker(),
@@ -320,7 +318,7 @@ impl FfmpegStreamIdentity {
 
 impl fmt::Display for FfmpegStreamIdentity {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{} {}/{}", self.node, self.platform, self.channel)
+        write!(f, "[{}] [{}] {}", self.node, self.platform, self.channel)
     }
 }
 
@@ -408,11 +406,7 @@ impl ChildLogContext {
         } else {
             ""
         };
-        tracing::info!(
-            "{self} 进程已启动 pid={}{state}；channel={}",
-            self.pid_label(),
-            self.session.identity.channel_id
-        );
+        tracing::info!("{self} 进程已启动 pid={}{state}", self.pid_label());
     }
 
     fn exited(&self, status: &std::process::ExitStatus) {
@@ -3505,11 +3499,11 @@ mod tests {
             })
         });
         assert_eq!(output.lines().count(), 3, "{output}");
-        assert!(output.contains("ERROR jp YT/示例频道001 s=41 推流"));
+        assert!(output.contains("ERROR [jp] [YT] 示例频道001 s=41 推流"));
         assert!(output.contains("示例诊断"));
         assert_eq!(output.matches("Broken pipe").count(), 1);
         assert_eq!(output.matches("Conversion failed").count(), 1);
-        assert!(output.contains("WARN jp"));
+        assert!(output.contains("WARN [jp]"), "{output}");
         assert!(!output.contains('�'));
         assert!(!output.contains("SYNTHETIC_"));
         assert!(!output.contains("example.invalid"));
@@ -3616,10 +3610,10 @@ mod tests {
                 .await;
             })
         });
-        assert!(output.contains("jp YT/示例频道001 s=44 缓存；HTTP error 403 Forbidden"));
-        assert!(output.contains("jp YT/示例频道001 s=44 缓存；Broken pipe"));
-        assert!(output.contains("jp YT/示例频道001 s=44 推流；Broken pipe"));
-        assert!(output.contains("ca TW/示例频道002 s=45 推流；Broken pipe"));
+        assert!(output.contains("[jp] [YT] 示例频道001 s=44 缓存；HTTP error 403 Forbidden"));
+        assert!(output.contains("[jp] [YT] 示例频道001 s=44 缓存；Broken pipe"));
+        assert!(output.contains("[jp] [YT] 示例频道001 s=44 推流；Broken pipe"));
+        assert!(output.contains("[ca] [TW] 示例频道002 s=45 推流；Broken pipe"));
         assert!(output.contains("已合并1条重复诊断"));
         assert_eq!(output.lines().count(), 5, "{output}");
     }
@@ -3791,7 +3785,7 @@ mod tests {
         );
         assert!(output.contains("已合并20条重复诊断"));
         assert!(output.contains("诊断读取结束；已合并1条重复诊断"));
-        assert!(output.contains("ERROR jp YT/示例频道001 s=46 摄取；ERROR new decoder failure"));
+        assert!(output.contains("ERROR [jp] [YT] 示例频道001 s=46 摄取；ERROR new decoder failure"));
         assert!(output
             .lines()
             .any(|line| line.starts_with("DEBUG") && line.contains("keepalive request failed")));

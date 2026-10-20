@@ -529,7 +529,9 @@ struct DanmakuTargetLog {
     requested_area: Option<u64>,
     forced_without_title: bool,
     request_id: u64,
-    is_owner: bool,
+    /// The sender's display name, so the log line identifies the real sender
+    /// instead of a role placeholder.
+    sender: String,
     channel_id: String,
 }
 
@@ -583,13 +585,14 @@ fn accept_target_request(request: &TargetRequest) {
     set_config_updated();
 }
 
-pub(crate) fn reject_disabled_danmaku_target(node: &str, command: &str) {
+pub(crate) fn reject_disabled_danmaku_target(node: &str, command: &str, sender: &str) {
     let parts: Vec<_> = command.split('%').collect();
     DanmakuTargetLog {
         node: node.to_owned(),
         platform: parts.get(2).unwrap_or(&"").to_uppercase(),
         channel: parts.get(3).unwrap_or(&"").to_string(),
         request_id: NEXT_TARGET_REQUEST.fetch_add(1, Ordering::Relaxed),
+        sender: sender.to_owned(),
         ..Default::default()
     }
     .reject("换台命令未启用");
@@ -633,7 +636,7 @@ pub(crate) fn report_target_decision(
         || "暂无可用频道".to_owned(),
         |source| {
             format!(
-                "{}/{}",
+                "[{}] {}",
                 safe_text(&source.platform, 8),
                 safe_text(&source.channel_name, 64)
             )
@@ -656,7 +659,7 @@ pub(crate) fn report_target_decision(
         pending.last_decision = Some(decision.clone());
     }
     tracing::info!(
-        "{} 弹幕 %转播% #{} 选台结果={}；请求={}/{}",
+        "[{}] 弹幕 %转播% #{} 选台结果={}；请求=[{}] {}",
         safe_text(&request.node, 64),
         request.id,
         decision,
@@ -684,13 +687,17 @@ impl DanmakuTargetLog {
         let origin = format!(
             "弹幕 %转播% #{}（{}）",
             self.request_id,
-            if self.is_owner { "主播" } else { "观众" }
+            if self.sender.is_empty() {
+                "未知发送者".to_string()
+            } else {
+                safe_text(&self.sender, 96)
+            }
         );
         let identity = if self.platform.is_empty() {
-            format!("{node} {origin}")
+            format!("[{node}] {origin}")
         } else {
             format!(
-                "{node} {origin} {}/{}",
+                "[{node}] {origin} [{}] {}",
                 safe_text(&self.platform, 16),
                 safe_text(
                     if self.channel.is_empty() {
@@ -798,13 +805,26 @@ async fn finish_target_update<AfterUpdate, AfterFuture, Reply, ReplyFuture>(
     }
 }
 
-/// Processes a single danmaku command.
-pub async fn process_danmaku(command: &str) {
-    process_danmaku_with_owner(command, false).await;
+/// One owner-facing sentence for a banned keyword hit; the command reply and
+/// the auto-monitor alert share it, so the channel comes first and the reader
+/// cannot mistake it for a bad area argument.
+pub(crate) fn banned_keyword_reply(channel_name: &str, platform: &str, keyword: &str) -> String {
+    format!(
+        "错误：{} 在 {} 的标题/分区含禁播关键词: {}",
+        safe_text(channel_name, 32),
+        safe_text(platform, 8),
+        safe_text(keyword, 32)
+    )
 }
 
-/// Processes a single danmaku command with owner flag.
-pub async fn process_danmaku_with_owner(command: &str, is_owner: bool) {
+/// Processes a single danmaku command.
+pub async fn process_danmaku(command: &str) {
+    process_danmaku_with_owner(command, false, "").await;
+}
+
+/// Processes a single danmaku command with owner flag and sender identity
+/// (`uid=… uname`, used only for the log line).
+pub async fn process_danmaku_with_owner(command: &str, is_owner: bool, sender: &str) {
     if !command.starts_with(" :") {
         return;
     }
@@ -870,7 +890,7 @@ pub async fn process_danmaku_with_owner(command: &str, is_owner: bool) {
     let mut outcome = DanmakuTargetLog {
         node: cfg.cluster.node_id.clone(),
         request_id: NEXT_TARGET_REQUEST.fetch_add(1, Ordering::Relaxed),
-        is_owner,
+        sender: sender.to_owned(),
         ..Default::default()
     };
     let warnings = warning_tracker();
@@ -1053,7 +1073,7 @@ pub async fn process_danmaku_with_owner(command: &str, is_owner: bool) {
             outcome.reject(&format!("直播标题/分区包含不支持的关键词: {}", keyword));
             let _ = bilibili::send_danmaku(
                 &cfg,
-                &format!("错误：{} 的标题/分区含:{}", platform, keyword),
+                &banned_keyword_reply(channel_name, &platform, &keyword),
             )
             .await;
             return;
@@ -1674,7 +1694,7 @@ mod tests {
                 },
                 "{output}"
             );
-            assert!(output.contains("ca 弹幕 %转播% #0（观众） YT/示例频道001"));
+            assert!(output.contains("[ca] 弹幕 %转播% #0（未知发送者） [YT] 示例频道001"));
             assert!(output.contains("分区=其他单机(235)"));
             assert!(output.contains(expected));
             if expected == "监听目标更新已拒绝" {
@@ -1835,6 +1855,7 @@ mod tests {
             platform: "TW".into(),
             channel: "示例频道002\nERROR forged\u{1b}[31m".into(),
             area: Some((235, "其他单机".into())),
+            sender: "示例观众\nforged".into(),
             ..Default::default()
         };
         tracing::dispatcher::with_default(&dispatch, || {
@@ -2020,5 +2041,34 @@ mod tests {
 
         assert!(waiter.await.unwrap());
         clear_config_updated();
+    }
+
+    #[test]
+    fn a_banned_keyword_reply_names_the_channel_before_the_platform() {
+        assert_eq!(
+            banned_keyword_reply("英リサ", "YT", "apex"),
+            "错误：英リサ 在 YT 的标题/分区含禁播关键词: apex"
+        );
+        let dirty = banned_keyword_reply("频\n道", "YT", "k\u{1b}[31m");
+        assert!(!dirty.contains('\n'), "{dirty}");
+        assert!(!dirty.contains('\u{1b}'), "{dirty}");
+    }
+
+    #[test]
+    fn the_target_log_uses_the_sender_identity_instead_of_a_role() {
+        let (dispatch, logs) = crate::logging::test_capture::subscriber(tracing::Level::DEBUG);
+        let context = DanmakuTargetLog {
+            node: "jp".into(),
+            platform: "YT".into(),
+            channel: "示例频道001".into(),
+            sender: "示例观众".into(),
+            ..Default::default()
+        };
+        tracing::dispatcher::with_default(&dispatch, || {
+            context.emit(DanmakuTargetOutcome::Unchanged);
+        });
+        let output = logs.text();
+        assert!(output.contains("（示例观众）"), "{output}");
+        assert!(!output.contains("（观众）"), "{output}");
     }
 }
