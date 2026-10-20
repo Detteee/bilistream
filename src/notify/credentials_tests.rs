@@ -1367,13 +1367,32 @@ async fn forwarding_errors_name_only_the_node_kind_and_outcome() {
             _ => assert!(body["data"].get("holder_status").is_none()),
         }
     }
-    // A local (non-forwarded) refusal keeps its old body: no outcome.
-    let response = crate::webui::api::notify::credentials_refused_for_tests(SaveError::Invalid);
-    let bytes = axum::body::to_bytes(response.into_body(), 1 << 16)
-        .await
-        .unwrap();
-    let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-    assert!(body["data"].get("outcome").is_none());
+    // A local (non-forwarded) refusal: the pre-commit codes say `not_sent`;
+    // a store failure keeps its old body (no outcome).
+    for (error, outcome) in [
+        (SaveError::Invalid, Some("not_sent")),
+        (SaveError::Conflict { current: 1 }, Some("not_sent")),
+        (SaveError::WatchConflict { current: 1 }, Some("not_sent")),
+        (SaveError::HolderMoved, Some("not_sent")),
+        (SaveError::WatchBaseRequired, Some("not_sent")),
+        (SaveError::Store, None),
+    ] {
+        let response = crate::webui::api::notify::credentials_refused_for_tests(error);
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 16)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(
+            body["data"].get("outcome").and_then(|v| v.as_str()),
+            outcome,
+            "{}",
+            error.code()
+        );
+    }
+    let (status, body) = response_json(crate::webui::api::notify::base_generation_required()).await;
+    assert_eq!(status, 400);
+    assert_eq!(body["data"]["code"], "base_generation_required");
+    assert_eq!(body["data"]["outcome"], "not_sent");
 }
 
 #[test]
@@ -2401,4 +2420,149 @@ async fn a_store_failure_inside_the_forward_transaction_changes_nothing_on_the_h
     let error = crate::notify::openid_sync::forward_reply(500, wire).unwrap_err();
     assert_eq!(error, SaveError::Store);
     assert_eq!(error.forward_outcome(), "unknown");
+}
+
+async fn response_json(response: axum::response::Response) -> (u16, serde_json::Value) {
+    let status = response.status().as_u16();
+    let bytes = axum::body::to_bytes(response.into_body(), 1 << 16)
+        .await
+        .unwrap();
+    (status, serde_json::from_slice(&bytes).unwrap())
+}
+
+/// Clerk M1: a non-holder forwards only the credential part (the holder does
+/// not advertise `watch_sync`, e.g. its heartbeat is not seen yet); the holder
+/// commits it; the local follow-list save then fails (stale base). The answer
+/// keeps the watch code but says `outcome: "unknown"`: the credentials were
+/// committed, so the panel must not say nothing was saved.
+#[tokio::test]
+async fn a_partial_forward_whose_local_watch_save_fails_answers_outcome_unknown() {
+    use crate::notify::config::WatchChannel;
+    use crate::notify::watch_sync::WatchSave;
+    use crate::webui::api::notify::save_watch_after_forward;
+    let (a, b) = (holder("a"), temp());
+    let cluster = MemCluster::new(&[("a", a.1.clone()), ("b", b.1.clone())]);
+    *cluster.holder.lock().unwrap() = Some("a".into());
+    cluster.no_watch.lock().unwrap().insert("a".into());
+    push_all(&a.1, &cluster.link("a"), FAST).await.unwrap();
+    // b's follow list is at revision 1.
+    let first = WatchSave {
+        base_revision: Some(0),
+        enabled: true,
+        channels: vec![WatchChannel::Configured {
+            name: "SyntheticConfigured".into(),
+        }],
+    };
+    assert!(matches!(
+        save_watch_after_forward(b.1.clone(), first.clone(), "b".into()).await,
+        Ok(true)
+    ));
+    // The credential part lands on the holder.
+    let request = save_req(
+        Some(load_meta(&b.1).unwrap().generation),
+        Some(APPID2),
+        None,
+    );
+    let outcome = save(
+        &b.1,
+        &cluster.link("b"),
+        &Holder::Peer("a".into()),
+        &request,
+        "b",
+        NOW,
+    )
+    .await
+    .unwrap();
+    assert!(outcome.changed);
+    assert_eq!(appid(&a.1), APPID2);
+    // The local follow-list half fails: stale base 0, current 1.
+    let Err(error) = save_watch_after_forward(b.1.clone(), first, "b".into()).await else {
+        panic!("a stale base must fail");
+    };
+    let (status, body) = response_json(error.into_response()).await;
+    assert_eq!(status, 409);
+    assert_eq!(body["data"]["code"], "watch_conflict");
+    assert_eq!(body["data"]["current_revision"], 1);
+    assert_eq!(body["data"]["outcome"], "unknown");
+    assert_eq!(body["success"], false);
+    // The holder's commit stands.
+    assert_eq!(appid(&a.1), APPID2);
+}
+
+/// Audit of `update_notify`'s local path: the single transaction committed,
+/// then building the answer view failed. That is `outcome: "unknown"`, not a
+/// plain failure. A failure before the commit keeps its old body (no
+/// `outcome`), and so does a refusal on the holder path before any commit.
+#[tokio::test]
+async fn a_view_failure_after_a_local_commit_answers_outcome_unknown() {
+    use crate::webui::api::notify::{apply_update_with, UpdateError};
+    let a = holder("a");
+    let revision = load_config(&a.1).unwrap().1;
+    // `after` runs last in the transaction and commits an unreadable
+    // AppSecret record, so the post-commit view cannot be built.
+    let result = apply_update_with(
+        &a.1,
+        &settings_update(revision),
+        "a",
+        &|| Ok(()),
+        None,
+        |tx| {
+            tx.write(crate::notify::store::SECRETS_RECORD, serde_json::json!(1))
+                .map(|_| ())
+        },
+    );
+    let Err(error) = result else {
+        panic!("the view must fail");
+    };
+    assert!(matches!(error, UpdateError::AfterCommit(_)));
+    // The settings change itself committed.
+    let raw =
+        a.1.read(crate::notify::store::CONFIG_RECORD)
+            .unwrap()
+            .unwrap();
+    assert_eq!(raw.value["live_events_enabled"], false);
+    let (status, body) = response_json(error.into_response()).await;
+    assert_eq!(status, 400);
+    assert_eq!(body["data"]["outcome"], "unknown");
+
+    // Before the commit (stale revision): no outcome.
+    let b = holder("b");
+    let stale = apply_update_with(
+        &b.1,
+        &settings_update(Some(load_config(&b.1).unwrap().1.unwrap_or(0) + 7)),
+        "b",
+        &|| Ok(()),
+        None,
+        |_| Ok(()),
+    )
+    .unwrap_err();
+    assert!(!matches!(stale, UpdateError::AfterCommit(_)));
+    let (status, body) = response_json(stale.into_response()).await;
+    assert_eq!(status, 409);
+    assert!(body["data"].get("outcome").is_none(), "{body}");
+
+    // The local transaction's own refusals: pre-commit codes say not_sent,
+    // a store failure keeps no outcome.
+    for (error, outcome) in [
+        (SaveError::WatchConflict { current: 2 }, Some("not_sent")),
+        (SaveError::Conflict { current: 2 }, Some("not_sent")),
+        (SaveError::Store, None),
+    ] {
+        let (_, body) = response_json(UpdateError::Credentials(error).into_response()).await;
+        assert_eq!(
+            body["data"].get("outcome").and_then(|v| v.as_str()),
+            outcome,
+            "{}",
+            error.code()
+        );
+    }
+
+    // A failed blocking task (before or after its commit): unknown, 500.
+    let joined = UpdateError::AfterCommit(Box::new(UpdateError::Status(
+        axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+        "通知设置保存失败".into(),
+    )));
+    let (status, body) = response_json(joined.into_response()).await;
+    assert_eq!(status, 500);
+    assert_eq!(body["data"], serde_json::json!({"outcome": "unknown"}));
 }

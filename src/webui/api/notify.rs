@@ -307,19 +307,38 @@ pub enum UpdateError {
     Credentials(notify::credentials::SaveError),
     /// Channel watch validation, with a stable code and field path.
     Watch(notify::config::WatchError),
+    /// A step failed after part or all of the save may already have been
+    /// committed. Same status, code and message as the inner error, plus
+    /// `outcome: "unknown"` so the panel never says nothing was saved.
+    AfterCommit(Box<UpdateError>),
 }
 
 impl UpdateError {
-    fn into_response(self) -> Response {
+    pub(crate) fn into_response(self) -> Response {
+        let (status, data, message) = self.parts();
+        reply(status, data, message)
+    }
+
+    fn parts(self) -> (StatusCode, Option<Value>, String) {
         match self {
-            UpdateError::Status(status, message) => reply(status, None, message),
-            UpdateError::Refused(refusal) => refused(refusal),
-            UpdateError::Credentials(error) => credentials_refused(error),
-            UpdateError::Watch(error) => reply(
+            UpdateError::Status(status, message) => (status, None, message),
+            UpdateError::Refused(refusal) => {
+                (StatusCode::CONFLICT, Some(refusal.data), refusal.message)
+            }
+            UpdateError::Credentials(error) => (
+                credentials_status(error),
+                Some(local_refusal_data(error)),
+                error.message().to_string(),
+            ),
+            UpdateError::Watch(error) => (
                 StatusCode::BAD_REQUEST,
                 Some(json!({"code":error.code,"field":error.field})),
                 error.message,
             ),
+            UpdateError::AfterCommit(inner) => {
+                let (status, data, message) = inner.parts();
+                (status, Some(outcome_unknown(data)), message)
+            }
         }
     }
 
@@ -330,8 +349,19 @@ impl UpdateError {
             UpdateError::Refused(_) => StatusCode::CONFLICT,
             UpdateError::Credentials(error) => credentials_status(*error),
             UpdateError::Watch(_) => StatusCode::BAD_REQUEST,
+            UpdateError::AfterCommit(inner) => inner.status(),
         }
     }
+}
+
+/// `data` with `outcome: "unknown"` (an object is created when absent).
+fn outcome_unknown(data: Option<Value>) -> Value {
+    let mut data = match data {
+        Some(Value::Object(map)) => Value::Object(map),
+        _ => json!({}),
+    };
+    data["outcome"] = json!("unknown");
+    data
 }
 
 /// Store errors: a stale revision is a `revision_conflict` refusal.
@@ -551,7 +581,8 @@ where
         after,
     )
     .map_err(store_error)?;
-    settings_view(store).map_err(store_error)
+    // Committed: a view failure from here on must not read as "nothing saved".
+    settings_view(store).map_err(|error| UpdateError::AfterCommit(Box::new(store_error(error))))
 }
 
 /// This node's id, as the openid writer records it.
@@ -581,12 +612,33 @@ pub(crate) fn credentials_status(error: notify::credentials::SaveError) -> Statu
     }
 }
 
+/// A refusal of this node's own save (browser-facing). The pre-commit
+/// refusals carry `outcome: "not_sent"`; store failures and the rest keep
+/// their old body.
 fn credentials_refused(error: notify::credentials::SaveError) -> Response {
     reply(
         credentials_status(error),
-        Some(refusal_data(error)),
+        Some(local_refusal_data(error)),
         error.message(),
     )
+}
+
+/// `refusal_data`, plus `outcome: "not_sent"` for a refusal that is decided
+/// before anything commits (the transaction rolled back or never started).
+fn local_refusal_data(error: notify::credentials::SaveError) -> Value {
+    use notify::credentials::SaveError;
+    let mut data = refusal_data(error);
+    if matches!(
+        error,
+        SaveError::Conflict { .. }
+            | SaveError::WatchConflict { .. }
+            | SaveError::HolderMoved
+            | SaveError::WatchBaseRequired
+            | SaveError::Invalid
+    ) {
+        data["outcome"] = json!("not_sent");
+    }
+    data
 }
 
 #[cfg(test)]
@@ -632,7 +684,7 @@ pub(crate) fn forward_refused(holder: &str, error: notify::credentials::SaveErro
 pub(crate) fn base_generation_required() -> Response {
     reply(
         StatusCode::BAD_REQUEST,
-        Some(json!({ "code": "base_generation_required" })),
+        Some(json!({ "code": "base_generation_required", "outcome": "not_sent" })),
         "Reload the settings and save again.",
     )
 }
@@ -751,6 +803,28 @@ async fn current_holder(local: &str) -> notify::credentials::Holder {
     }
     let digest = notify::authority::read_digest(&cfg, crate::storage::now());
     notify::credentials::pick_holder(local, notify::local_gateway_held(), &digest.nodes)
+}
+
+/// Partial forward: the holder (no `watch_sync`) already committed the
+/// credential part of this save; commit the follow list here. `Ok(changed)`.
+/// Every failure answers with `outcome: "unknown"`: the credentials may be
+/// committed even though this step failed.
+pub(crate) async fn save_watch_after_forward(
+    store: Arc<crate::storage::Store>,
+    watch: notify::watch_sync::WatchSave,
+    node: String,
+) -> Result<bool, UpdateError> {
+    let saved = tokio::task::spawn_blocking(move || {
+        notify::watch_sync::apply_save(&store, &watch, &node, crate::storage::now())
+    })
+    .await
+    .unwrap_or(Err(notify::credentials::SaveError::Store));
+    match saved {
+        Ok(saved) => Ok(saved.changed),
+        Err(error) => Err(UpdateError::AfterCommit(Box::new(
+            UpdateError::Credentials(error),
+        ))),
+    }
 }
 
 pub(crate) async fn update_notify(
@@ -909,24 +983,10 @@ pub(crate) async fn update_notify(
                 // Holder has no watch_sync: commit here and push to members
                 // that do. The credential commit on the holder already stands.
                 if let Some(watch) = watch_locally {
-                    let stored = Arc::clone(&store);
-                    let node = node_id;
-                    let saved = tokio::task::spawn_blocking(move || {
-                        notify::watch_sync::apply_save(
-                            &stored,
-                            &watch,
-                            &node,
-                            crate::storage::now(),
-                        )
-                    })
-                    .await
-                    .unwrap_or(Err(notify::credentials::SaveError::Store));
-                    match saved {
-                        Ok(saved) if saved.changed => {
-                            notify::openid_sync::spawn_push(push_store, push_node);
-                        }
-                        Ok(_) => {}
-                        Err(error) => return credentials_refused(error),
+                    match save_watch_after_forward(Arc::clone(&store), watch, node_id).await {
+                        Ok(true) => notify::openid_sync::spawn_push(push_store, push_node),
+                        Ok(false) => {}
+                        Err(error) => return error.into_response(),
                     }
                 }
                 return completed.into_response(cleared);
@@ -953,10 +1013,11 @@ pub(crate) async fn update_notify(
     })
     .await
     .unwrap_or_else(|_| {
-        Err(UpdateError::Status(
+        // The task may have failed before or after its commit.
+        Err(UpdateError::AfterCommit(Box::new(UpdateError::Status(
             StatusCode::INTERNAL_SERVER_ERROR,
             "通知设置保存失败".to_string(),
-        ))
+        ))))
     });
     match result {
         Ok(view) => {
@@ -1225,7 +1286,12 @@ pub(crate) async fn peer_credentials_save(
         Err(notify::credentials::ForwardRefusal::NotMember) => {
             peer_refusal(notify::openid_sync::ServeRefusal::NotMember)
         }
-        Err(notify::credentials::ForwardRefusal::Save(error)) => credentials_refused(error),
+        // The peer answer keeps its plain body: the sender adds `outcome`.
+        Err(notify::credentials::ForwardRefusal::Save(error)) => reply(
+            credentials_status(error),
+            Some(refusal_data(error)),
+            error.message(),
+        ),
     }
 }
 
