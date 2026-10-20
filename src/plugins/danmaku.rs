@@ -1350,6 +1350,66 @@ pub(crate) fn exempt_hold_release(
     Some(*reason_ids.iter().next().expect("checked non-empty"))
 }
 
+/// Release an exempt hold at the moment the runtime would skip the source:
+/// records the R4 rail first (a failed record keeps the hold, preserving the
+/// one-restart guarantee), then clears the hold and logs the R8 line so every
+/// later `holds()` check (ffmpeg spawn, priority transition) sees the restart.
+/// Returns true only when a hold was actually released.
+pub(crate) fn release_exempt_hold(
+    cfg: &Config,
+    warnings: &warning::WarningTracker,
+    source: &BroadcastSource,
+) -> bool {
+    let snapshot = warnings.snapshot();
+    let Some(reason) = exempt_hold_release(cfg, &snapshot, source) else {
+        return false;
+    };
+    let episode = snapshot.episode_id_for(source).map(str::to_owned);
+    if let Err(error) = crate::plugins::warning_exempt::record_restart(
+        &source.platform,
+        &source.channel_id,
+        episode.as_deref(),
+        reason.as_str(),
+        crate::storage::now(),
+    ) {
+        tracing::warn!(
+            "{}；保持跳过频道 {}",
+            safe_text(&error, 160),
+            safe_text(&source.channel_name, 64)
+        );
+        return false;
+    }
+    // A frame marked during the rail write leaves a newer hold: the release
+    // refuses, the rail spend stands (conservative) and the caller falls
+    // through to the normal skip.
+    let Some(released) = warnings.release_exempt(&snapshot, source) else {
+        return false;
+    };
+    let reason_ids = released
+        .reason_ids
+        .iter()
+        .map(|id| id.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    tracing::info!(
+        "频道 {} 已豁免警告/切断暂停；原因分类={}",
+        safe_text(&released.channel, 64),
+        reason_ids
+    );
+    crate::webui::state::request_status_refresh();
+    true
+}
+
+/// Whether a hold still keeps this source from starting: the raw hold plus a
+/// still-failing exemption decision. Read-only (no log, record or release).
+pub(crate) fn source_is_held(
+    cfg: &Config,
+    warning: &warning::WarningSnapshot,
+    source: &BroadcastSource,
+) -> bool {
+    warning.holds(source) && exempt_hold_release(cfg, warning, source).is_none()
+}
+
 /// Whether this process still holds that card's source after a warning/cut.
 pub(crate) fn source_warning_held(cfg: &Config, platform: &str) -> bool {
     let Some(source) = configured_broadcast_source(cfg, platform) else {

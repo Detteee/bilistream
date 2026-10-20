@@ -188,6 +188,13 @@ impl Drop for SourceOwner {
     }
 }
 
+/// A hold released by the warning/cut exemption; the caller logs the R8 line
+/// and records the R4 rail with the matched classes.
+pub(crate) struct ExemptRelease {
+    pub channel: String,
+    pub reason_ids: BTreeSet<ReasonId>,
+}
+
 #[derive(Clone)]
 pub(crate) struct PushWarningRelease {
     generation: u64,
@@ -202,6 +209,8 @@ pub(crate) enum WarningReleaseReason {
     Offline,
     ManualRestart,
     AdminCard,
+    /// The configured exemption allowed this source to restart (R2/R4).
+    Exempt,
 }
 
 impl WarningReleaseReason {
@@ -212,6 +221,7 @@ impl WarningReleaseReason {
             Self::Offline => "源频道已确认下播",
             Self::ManualRestart => "手动重启流",
             Self::AdminCard => "管理页卡片手动解除",
+            Self::Exempt => "已豁免警告/切断暂停",
         }
     }
 }
@@ -516,6 +526,30 @@ impl WarningTracker {
 
     pub fn clear(&self, reason: WarningReleaseReason) -> Option<WarningRelease> {
         Self::release(&mut self.lock(), reason)
+    }
+
+    /// Release the hold matching `source` because the exemption allows the
+    /// restart. `before_action` must be the snapshot the exemption decision was
+    /// taken on: a warning marked in between (the rail write is I/O) may carry
+    /// different classes or episode, so a stale release is refused. Returns the
+    /// channel and matched classes for the R8 log and the R4 rail; every later
+    /// `holds()` check then sees no hold.
+    pub fn release_exempt(
+        &self,
+        before_action: &WarningSnapshot,
+        source: &BroadcastSource,
+    ) -> Option<ExemptRelease> {
+        let mut state = self.lock();
+        if state.generation != before_action.generation || state.event != before_action.event {
+            return None;
+        }
+        let hold = state.hold.as_ref().filter(|hold| hold.matches(source))?;
+        let released = ExemptRelease {
+            channel: hold.channel_name.clone(),
+            reason_ids: hold.reason_ids.clone(),
+        };
+        Self::release(&mut state, WarningReleaseReason::Exempt)?;
+        Some(released)
     }
 
     fn release(state: &mut WarningState, reason: WarningReleaseReason) -> Option<WarningRelease> {
@@ -830,6 +864,31 @@ mod tests {
     }
 
     #[test]
+    fn a_stale_exempt_release_never_clears_a_newer_hold() {
+        let tracker = Arc::new(WarningTracker::default());
+        let source = BroadcastSource::new("YT", "n", "UC1", Some("ep-1"));
+        let _owner = tracker.own_source(1, source.clone());
+        let mut first = tracker.capture_event();
+        first.set_reason_ids([ReasonId::IdleRecording].into_iter().collect());
+        tracker.mark_event(&mut first, None).unwrap();
+        let decided_on = tracker.snapshot();
+
+        // Another frame replaces the hold after the decision snapshot.
+        let mut second = tracker.capture_event();
+        second.set_reason_ids([ReasonId::GameInfoViolation].into_iter().collect());
+        tracker.mark_event(&mut second, None).unwrap();
+        assert!(tracker.release_exempt(&decided_on, &source).is_none());
+        assert!(
+            tracker.snapshot().holds(&source),
+            "the newer hold must survive"
+        );
+        assert_eq!(
+            tracker.snapshot().hold_reasons(),
+            [ReasonId::GameInfoViolation].into_iter().collect()
+        );
+    }
+
+    #[test]
     fn a_marked_hold_keeps_the_captured_reason_classes() {
         let tracker = Arc::new(WarningTracker::default());
         let source = BroadcastSource::new("YT", "n", "UC1", Some("ep-1"));
@@ -840,6 +899,34 @@ mod tests {
         assert_eq!(
             tracker.snapshot().hold_reasons(),
             [ReasonId::IdleRecording].into_iter().collect()
+        );
+    }
+
+    #[test]
+    fn an_exempt_release_clears_the_hold_and_reports_the_classes() {
+        let tracker = Arc::new(WarningTracker::default());
+        let source = BroadcastSource::new("YT", "n", "UC1", Some("ep-1"));
+        let _owner = tracker.own_source(1, source.clone());
+        let mut event = tracker.capture_event();
+        event.set_reason_ids([ReasonId::IdleRecording].into_iter().collect());
+        tracker.mark_event(&mut event, None).unwrap();
+        let other = BroadcastSource::new("TW", "o", "tw1", None);
+        let before = tracker.snapshot();
+        assert!(
+            tracker.release_exempt(&before, &other).is_none(),
+            "different source"
+        );
+        let released = tracker.release_exempt(&before, &source).unwrap();
+        assert_eq!(released.channel, "n");
+        assert_eq!(
+            released.reason_ids,
+            [ReasonId::IdleRecording].into_iter().collect()
+        );
+        assert!(!tracker.snapshot().holds(&source), "the hold is gone");
+        let stale = tracker.snapshot();
+        assert!(
+            tracker.release_exempt(&stale, &source).is_none(),
+            "only once"
         );
     }
 }

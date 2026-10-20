@@ -959,7 +959,7 @@ async fn probe_sources(cfg: &Config, plan: &SourceProbePlan) -> Option<Vec<Probe
                     &channel.channel_id,
                     None,
                 );
-                let held = warning.holds(&source);
+                let held = bilistream::plugins::danmaku::source_is_held(cfg, &warning, &source);
                 let status = if held {
                     match channel.platform {
                         StreamPlatform::Youtube => {
@@ -1196,7 +1196,7 @@ fn report_danmaku_selection(
         probe.channel.platform.code() == request.source.platform
             && probe.channel.channel_id == request.source.channel_id
     });
-    let reason = if warning.holds(&request.source) {
+    let reason = if bilistream::plugins::danmaku::source_is_held(cfg, warning, &request.source) {
         "请求频道仍因警告/切断临时跳过"
     } else if !enabled {
         "请求平台的普通监控未启用"
@@ -1249,6 +1249,12 @@ async fn skip_stream_if_previously_warned(
     warnings: &bilistream::plugins::danmaku::warning::WarningTracker,
 ) {
     let source = stream.source_identity();
+    // An exempt source keeps the candidate live and restarts it once per
+    // episode; no skip log and no 换台 danmaku about skipping. Only a live
+    // candidate may spend the one R4 restart.
+    if stream.is_live && bilistream::plugins::danmaku::release_exempt_hold(cfg, warnings, &source) {
+        return;
+    }
     if !exclude_warned_stream(stream, &warnings.snapshot()) {
         return;
     }
@@ -3328,7 +3334,16 @@ async fn monitor_priority_channel_background(
                     &prefetched.channel_id,
                     prefetched.stream_id.as_deref(),
                 );
-                if warning_tracker().snapshot().holds(&source) {
+                // An exempt source releases its hold right before the
+                // transition, so the next `holds` check sees the restart.
+                let warnings = warning_tracker();
+                if warnings.snapshot().holds(&source)
+                    && !bilistream::plugins::danmaku::release_exempt_hold(
+                        &transition_cfg,
+                        &warnings,
+                        &source,
+                    )
+                {
                     return false;
                 }
                 store_prefetched_playable_stream(prefetched, &transition_cfg);
@@ -4013,6 +4028,50 @@ mod tests {
             area_v2: 235,
             is_priority: false,
         }
+    }
+
+    #[tokio::test]
+    async fn an_exempt_hold_releases_once_and_a_second_event_holds() {
+        use bilistream::plugins::danmaku::warning::{BroadcastSource, WarningTracker};
+        use bilistream::plugins::warning_exempt::{ExemptChannel, ReasonId};
+
+        let tracker = std::sync::Arc::new(WarningTracker::default());
+        let mut cfg = test_config();
+        let channel_name = "示例豁免频道";
+        let channel_id = "UCexempt-release-fixture";
+        cfg.youtube.channel_name = channel_name.into();
+        cfg.youtube.channel_id = channel_id.into();
+        cfg.warning_hold_exempt = vec![ExemptChannel::new("YT", channel_id, channel_name).unwrap()];
+        cfg.warning_hold_exempt_reasons = vec!["idle_recording".into()];
+
+        let source = BroadcastSource::new("YT", channel_name, channel_id, Some("ep-exempt"));
+        let _owner = tracker.own_source(11, source.clone());
+        let mut event = tracker.capture_event();
+        event.set_reason_ids([ReasonId::IdleRecording].into_iter().collect());
+        tracker.mark_event(&mut event, None).unwrap();
+        assert!(tracker.snapshot().holds(&source));
+
+        let mut stream = test_stream_candidate(StreamPlatform::Youtube, true);
+        stream.channel_name = channel_name.into();
+        stream.channel_id = channel_id.into();
+        skip_stream_if_previously_warned(&mut stream, &cfg, &tracker).await;
+        assert!(stream.is_live, "an exempt source is not skipped");
+        assert!(
+            !tracker.snapshot().holds(&source),
+            "the hold is released for the restart"
+        );
+
+        // R4: the second event for the same episode inside the window holds as
+        // today (the rail has no room left).
+        let mut event = tracker.capture_event();
+        event.set_reason_ids([ReasonId::IdleRecording].into_iter().collect());
+        tracker.mark_event(&mut event, None).unwrap();
+        let mut stream = test_stream_candidate(StreamPlatform::Youtube, true);
+        stream.channel_name = channel_name.into();
+        stream.channel_id = channel_id.into();
+        skip_stream_if_previously_warned(&mut stream, &cfg, &tracker).await;
+        assert!(!stream.is_live, "the rail keeps the second hold");
+        assert!(tracker.snapshot().holds(&source));
     }
 
     #[test]
