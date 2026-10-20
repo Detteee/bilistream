@@ -410,6 +410,9 @@ async fn unsigned_test_send(
 ) -> io::Result<PeerResponse> {
     // Cluster logic tests run without managed membership; their mock peers
     // speak plain JSON. Signed transport is covered by the real-router tests.
+    // Same route rule as signing: a route the signed path could never send
+    // must fail here too, or tests pass a call production refuses.
+    route.validate()?;
     let base = if node_id == cfg.cluster.node_id {
         cfg.cluster.public_api_url.clone()
     } else {
@@ -499,5 +502,35 @@ mod route_table_tests {
             peer_route("POST", routes::NOTIFY_CREDENTIALS_SAVE.path),
             Some((_, RouteClass::PeerOnly))
         ));
+    }
+
+    /// L2: the unsigned test transport applies the same route rule as
+    /// signing, before any address lookup or network call.
+    #[tokio::test]
+    async fn the_unsigned_test_transport_refuses_a_route_that_cannot_be_signed() {
+        let cfg = crate::test_support::config("l2", 0);
+        let put = RoutePolicy {
+            method: "PUT",
+            path: NOTIFY_CREDENTIALS_PATH,
+            max_request_bytes: 64 * 1024,
+            max_response_bytes: 64 * 1024,
+        };
+        let error = unsigned_test_send(&cfg, "nowhere", put, Vec::new(), Duration::from_secs(1))
+            .await
+            .err()
+            .expect("a PUT route is refused");
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        // A valid route gets past the rule and fails only on the unknown node.
+        let error = unsigned_test_send(
+            &cfg,
+            "nowhere",
+            routes::NOTIFY_CREDENTIALS_SAVE,
+            Vec::new(),
+            Duration::from_secs(1),
+        )
+        .await
+        .err()
+        .expect("unknown node");
+        assert_eq!(error.kind(), io::ErrorKind::NotFound);
     }
 }

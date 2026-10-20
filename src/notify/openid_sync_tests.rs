@@ -789,20 +789,20 @@ fn a_send_failure_keeps_its_kind_and_panel_code() {
         ),
         (
             SendFailure::from_io(&unsigned_error(502)),
-            SendFailure::Unreachable,
+            SendFailure::Unreachable(Some(502)),
             SaveError::HolderUnreachable,
             LinkError::Unreachable,
         ),
         (
             SendFailure::from_io(&io(io::ErrorKind::TimedOut)),
-            SendFailure::Unreachable,
+            SendFailure::Unreachable(None),
             SaveError::HolderUnreachable,
             LinkError::Unreachable,
         ),
         (
             SendFailure::from_io(&io(io::ErrorKind::ConnectionRefused)),
-            SendFailure::Unreachable,
-            SaveError::HolderUnreachable,
+            SendFailure::NotConnected,
+            SaveError::HolderNotConnected,
             LinkError::Unreachable,
         ),
         (
@@ -848,6 +848,52 @@ fn a_send_failure_keeps_its_kind_and_panel_code() {
         assert_eq!(got.save_error(), save, "{}", got.kind());
         assert_eq!(got.link_error(), link, "{}", got.kind());
     }
+    // `outcome` per sender branch: not_sent only when nothing left this node.
+    for (failure, outcome) in [
+        (SendFailure::MembershipChanged, "not_sent"),
+        (SendFailure::NotInManifest, "not_sent"),
+        (SendFailure::Transport, "not_sent"),
+        (SendFailure::TooLarge, "not_sent"),
+        (SendFailure::RouteInvalid, "not_sent"),
+        (SendFailure::Client, "not_sent"),
+        (SendFailure::NotConnected, "not_sent"),
+        (SendFailure::Unsigned(Some(401)), "not_sent"),
+        (SendFailure::Unsigned(Some(500)), "unknown"),
+        (SendFailure::Unreachable(None), "unknown"),
+        (SendFailure::Unreachable(Some(524)), "unknown"),
+        (SendFailure::BadReply, "unknown"),
+    ] {
+        assert_eq!(
+            failure.save_error().forward_outcome(),
+            outcome,
+            "{}",
+            failure.kind()
+        );
+    }
+    // Holder answers read by `forward_reply`.
+    for (status, body, outcome) in [
+        (
+            409,
+            &br#"{"data":{"code":"credentials_conflict"}}"#[..],
+            "not_sent",
+        ),
+        (409, br#"{"data":{"code":"watch_conflict"}}"#, "not_sent"),
+        (
+            400,
+            br#"{"data":{"code":"credentials_invalid"}}"#,
+            "not_sent",
+        ),
+        (403, b"", "not_sent"),
+        (500, br#"{"data":{"code":"credentials_store"}}"#, "unknown"),
+        (500, b"", "unknown"),
+        (200, b"garbage", "unknown"),
+    ] {
+        assert_eq!(
+            forward_reply(status, body).unwrap_err().forward_outcome(),
+            outcome,
+            "{status}"
+        );
+    }
     // The transport rule that yields `Transport`: plain HTTP to a remote host.
     assert!(!outbound_transport_allowed("http://jp.example.test"));
     assert!(outbound_transport_allowed("https://jp.example.test"));
@@ -860,7 +906,9 @@ fn the_forward_warn_line_carries_only_route_node_kind_and_status() {
     let (dispatch, logs) = crate::logging::test_capture::subscriber(tracing::Level::DEBUG);
     tracing::dispatcher::with_default(&dispatch, || {
         log_forward_failure("jp", SendFailure::Unsigned(Some(401)).kind(), Some(401));
-        log_forward_failure("jp", SendFailure::Unreachable.kind(), None);
+        log_forward_failure("jp", SendFailure::Unreachable(None).kind(), None);
+        let upstream = SendFailure::from_io(&crate::cluster::peer_auth::unsigned_error(524));
+        log_forward_failure("jp", upstream.kind(), upstream.status());
     });
     let text = logs.text();
     assert!(
@@ -869,5 +917,7 @@ fn the_forward_warn_line_carries_only_route_node_kind_and_status() {
     );
     assert!(text.contains("kind=unsigned_refusal status=401"), "{text}");
     assert!(text.contains("kind=unreachable"), "{text}");
+    // L1: an upstream gateway status (e.g. Cloudflare 524) is logged.
+    assert!(text.contains("kind=unreachable status=524"), "{text}");
     assert!(!text.contains("http"), "{text}");
 }

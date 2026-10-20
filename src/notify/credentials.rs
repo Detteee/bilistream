@@ -572,15 +572,15 @@ pub enum SaveError {
     WatchBaseRequired,
     /// 500.
     Store,
-    /// 502 `credentials_holder_refused`: the holder (or its signed-route
+    /// 409 `credentials_holder_refused`: the holder (or its signed-route
     /// admission) answered with this status and no code this build knows,
     /// e.g. 401 unsigned refusal or 403 not a member. Nothing was applied.
     HolderRefused { status: u16 },
-    /// 502 `credentials_holder_bad_reply`: the holder's answer failed the
+    /// 422 `credentials_holder_bad_reply`: the holder's answer failed the
     /// response checks or a 2xx did not carry an outcome. Nothing was
     /// applied here; the holder may have committed (the next sync shows it).
     HolderBadReply,
-    /// 502 `credentials_forward_refused`: this node refused to send (the
+    /// 409 `credentials_forward_refused`: this node refused to send (the
     /// holder is not in its manifest, the address breaks the transport rule,
     /// the route cannot be signed, or the request is over the route cap).
     /// Nothing was sent.
@@ -588,6 +588,10 @@ pub enum SaveError {
     /// 409 `credentials_membership_changing`: the member list moved or could
     /// not be read while forwarding. Nothing was sent.
     MembershipChanging,
+    /// 503 `credentials_holder_unreachable` (same code and copy as
+    /// `HolderUnreachable`): the connection to the holder failed to open, so
+    /// the save request never left this node (`outcome: not_sent`).
+    HolderNotConnected,
 }
 
 impl SaveError {
@@ -595,7 +599,9 @@ impl SaveError {
         match self {
             SaveError::Conflict { .. } => "credentials_conflict",
             SaveError::Invalid => "credentials_invalid",
-            SaveError::HolderUnreachable => "credentials_holder_unreachable",
+            SaveError::HolderUnreachable | SaveError::HolderNotConnected => {
+                "credentials_holder_unreachable"
+            }
             SaveError::HolderMoved => "credentials_holder_moved",
             SaveError::WatchConflict { .. } => "watch_conflict",
             SaveError::WatchBaseRequired => "base_watch_revision_required",
@@ -611,7 +617,9 @@ impl SaveError {
         match self {
             SaveError::Conflict { .. } => "机器人凭据已被其他页面或节点修改，请重新加载后再保存",
             SaveError::Invalid => "AppID 或 AppSecret 格式无效",
-            SaveError::HolderUnreachable => "暂时无法连接持有 QQ 连接的节点，请稍后再试",
+            SaveError::HolderUnreachable | SaveError::HolderNotConnected => {
+                "暂时无法连接持有 QQ 连接的节点，请稍后再试"
+            }
             // F rev 3 rule 17: handled like the other conflicts.
             SaveError::HolderMoved => "机器人凭据已被其他页面或节点修改，请重新加载后再保存",
             SaveError::WatchConflict { .. } => "关注列表已被其他节点修改，请重新加载后再保存",
@@ -624,6 +632,48 @@ impl SaveError {
             }
             SaveError::MembershipChanging => "集群成员正在变化，未保存任何更改，请稍后重试",
         }
+    }
+}
+
+impl SaveError {
+    /// For a forwarded save that did not commit: `not_sent` only when the
+    /// request provably never left this node, or the holder answered with an
+    /// explicit refusal that its transaction rolled back (a 4xx). `unknown`
+    /// when the holder may have committed: a timeout after sending, an
+    /// upstream 5xx, a reply that cannot be read, a holder 5xx. A holder's
+    /// `credentials_store` is always `unknown` here: the sender cannot prove
+    /// the rollback, and the holder also answers Store when its blocking task
+    /// fails (`peer_credentials_save`). When in doubt, `unknown`.
+    pub fn forward_outcome(&self) -> &'static str {
+        match self {
+            SaveError::Conflict { .. }
+            | SaveError::Invalid
+            | SaveError::HolderMoved
+            | SaveError::WatchConflict { .. }
+            | SaveError::WatchBaseRequired
+            | SaveError::ForwardRefused
+            | SaveError::MembershipChanging
+            | SaveError::HolderNotConnected => "not_sent",
+            SaveError::HolderRefused { status } if (400..500).contains(status) => "not_sent",
+            SaveError::HolderRefused { .. }
+            | SaveError::HolderUnreachable
+            | SaveError::HolderBadReply
+            | SaveError::Store => "unknown",
+        }
+    }
+
+    /// Errors about the forward itself (not the holder's own refusal codes):
+    /// the panel body names the holder node.
+    pub fn forwarding(&self) -> bool {
+        matches!(
+            self,
+            SaveError::HolderUnreachable
+                | SaveError::HolderNotConnected
+                | SaveError::HolderRefused { .. }
+                | SaveError::HolderBadReply
+                | SaveError::ForwardRefused
+                | SaveError::MembershipChanging
+        )
     }
 }
 

@@ -1204,40 +1204,127 @@ fn a_forwarded_refusal_passes_the_holders_code_through() {
     }
 }
 
-/// The panel body for each forwarding error: fixed code, the holder's node
-/// id (never an address), the holder's status where known, and a message
-/// that names only the node.
+/// The panel body for every error a forwarded save can end with: fixed
+/// code and status, `outcome` (`not_sent` only when nothing was sent or the
+/// holder explicitly refused before commit), the holder's node id on the
+/// forwarding errors (never an address), the holder's status where known,
+/// and a message that names only the node.
 #[tokio::test]
-async fn forwarding_errors_name_only_the_node_and_kind() {
+async fn forwarding_errors_name_only_the_node_kind_and_outcome() {
     use crate::webui::api::notify::forward_refused;
-    for (error, status, code) in [
-        (
-            SaveError::HolderUnreachable,
-            503,
-            "credentials_holder_unreachable",
-        ),
-        (
-            SaveError::HolderRefused { status: 403 },
-            502,
-            "credentials_holder_refused",
-        ),
-        (
-            SaveError::HolderBadReply,
-            502,
-            "credentials_holder_bad_reply",
-        ),
+    let cases = [
+        // Forwarding errors (named).
         (
             SaveError::ForwardRefused,
-            502,
+            409,
             "credentials_forward_refused",
+            "not_sent",
+            true,
         ),
         (
             SaveError::MembershipChanging,
             409,
             "credentials_membership_changing",
+            "not_sent",
+            true,
         ),
-        (SaveError::Store, 500, "credentials_store"),
-    ] {
+        (
+            SaveError::HolderNotConnected,
+            503,
+            "credentials_holder_unreachable",
+            "not_sent",
+            true,
+        ),
+        (
+            SaveError::HolderUnreachable,
+            503,
+            "credentials_holder_unreachable",
+            "unknown",
+            true,
+        ),
+        (
+            SaveError::HolderRefused { status: 401 },
+            409,
+            "credentials_holder_refused",
+            "not_sent",
+            true,
+        ),
+        (
+            SaveError::HolderRefused { status: 403 },
+            409,
+            "credentials_holder_refused",
+            "not_sent",
+            true,
+        ),
+        (
+            SaveError::HolderRefused { status: 413 },
+            409,
+            "credentials_holder_refused",
+            "not_sent",
+            true,
+        ),
+        (
+            SaveError::HolderRefused { status: 500 },
+            409,
+            "credentials_holder_refused",
+            "unknown",
+            true,
+        ),
+        (
+            SaveError::HolderRefused { status: 503 },
+            409,
+            "credentials_holder_refused",
+            "unknown",
+            true,
+        ),
+        (
+            SaveError::HolderBadReply,
+            422,
+            "credentials_holder_bad_reply",
+            "unknown",
+            true,
+        ),
+        // The holder's own codes, passed through (not named).
+        (
+            SaveError::Conflict { current: 3 },
+            409,
+            "credentials_conflict",
+            "not_sent",
+            false,
+        ),
+        (
+            SaveError::WatchConflict { current: 4 },
+            409,
+            "watch_conflict",
+            "not_sent",
+            false,
+        ),
+        (
+            SaveError::HolderMoved,
+            409,
+            "credentials_holder_moved",
+            "not_sent",
+            false,
+        ),
+        (
+            SaveError::WatchBaseRequired,
+            400,
+            "base_watch_revision_required",
+            "not_sent",
+            false,
+        ),
+        (
+            SaveError::Invalid,
+            400,
+            "credentials_invalid",
+            "not_sent",
+            false,
+        ),
+        (SaveError::Store, 500, "credentials_store", "unknown", false),
+    ];
+    for (error, status, code, outcome, named) in cases {
+        assert_eq!(error.forward_outcome(), outcome, "{code}");
+        assert_eq!(error.forwarding(), named, "{code}");
         let response = forward_refused("jp", error);
         assert_eq!(response.status().as_u16(), status, "{code}");
         let bytes = axum::body::to_bytes(response.into_body(), 1 << 16)
@@ -1245,23 +1332,48 @@ async fn forwarding_errors_name_only_the_node_and_kind() {
             .unwrap();
         let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(body["data"]["code"], code);
-        let keys: Vec<&String> = body["data"].as_object().unwrap().keys().collect();
-        for key in keys {
+        assert_eq!(body["data"]["outcome"], outcome, "{code}");
+        for key in body["data"].as_object().unwrap().keys() {
             assert!(
-                ["code", "node", "holder_status"].contains(&key.as_str()),
+                [
+                    "code",
+                    "outcome",
+                    "node",
+                    "holder_status",
+                    "current_generation",
+                    "current_revision"
+                ]
+                .contains(&key.as_str()),
                 "{code}: unexpected field {key}"
             );
         }
-        if error == SaveError::Store {
-            assert!(body["data"].get("node").is_none());
-        } else {
+        if named {
             assert_eq!(body["data"]["node"], "jp");
             assert!(body["message"].as_str().unwrap().contains("节点 jp"));
+        } else {
+            assert!(body["data"].get("node").is_none());
+            assert_eq!(body["message"], error.message());
         }
-        if let SaveError::HolderRefused { status } = error {
-            assert_eq!(body["data"]["holder_status"], status);
+        match error {
+            SaveError::HolderRefused { status } => {
+                assert_eq!(body["data"]["holder_status"], status)
+            }
+            SaveError::Conflict { current } => {
+                assert_eq!(body["data"]["current_generation"], current)
+            }
+            SaveError::WatchConflict { current } => {
+                assert_eq!(body["data"]["current_revision"], current)
+            }
+            _ => assert!(body["data"].get("holder_status").is_none()),
         }
     }
+    // A local (non-forwarded) refusal keeps its old body: no outcome.
+    let response = crate::webui::api::notify::credentials_refused_for_tests(SaveError::Invalid);
+    let bytes = axum::body::to_bytes(response.into_body(), 1 << 16)
+        .await
+        .unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert!(body["data"].get("outcome").is_none());
 }
 
 #[test]
@@ -2222,4 +2334,71 @@ fn credentials_meta_debug_never_shows_the_appid() {
         assert!(!text.contains("synthetic-meta-appid-7c19"), "{text}");
         assert!(text.contains("openid_appid_set: true"), "{text}");
     }
+}
+
+/// A real store failure inside the holder's forward transaction, after the
+/// credential half already wrote (the follow-list half then cannot read its
+/// record): the whole transaction rolls back, so every notify record on the
+/// holder (credentials, secret, openid, follow list and its revision) is
+/// unchanged. The sender still reports `outcome: unknown` for
+/// `credentials_store`: it cannot prove the rollback, and the holder also
+/// answers Store for a failed blocking task.
+#[tokio::test]
+async fn a_store_failure_inside_the_forward_transaction_changes_nothing_on_the_holder() {
+    let a = holder("a");
+    a.1.write(
+        crate::notify::watch_sync::WATCH_RECORD,
+        serde_json::json!({"revision": 2, "updated_by": "a", "updated_at": NOW}),
+    )
+    .unwrap();
+    let mut config =
+        a.1.read(crate::notify::store::CONFIG_RECORD)
+            .unwrap()
+            .unwrap()
+            .value;
+    config["watch"] = serde_json::json!({
+        "enabled": true,
+        "channels": [{"kind": "synthetic-unreadable", "name": "x"}]
+    });
+    a.1.write(crate::notify::store::CONFIG_RECORD, config)
+        .unwrap();
+    // Every notify record, raw (the follow list is unreadable on purpose).
+    let records = |store: &Store| {
+        let mut all: Vec<(String, serde_json::Value, u64)> =
+            crate::notify::store::settings_records(store)
+                .unwrap()
+                .into_iter()
+                .map(|(name, doc)| (name, doc.value, doc.revision))
+                .collect();
+        all.sort_by(|x, y| x.0.cmp(&y.0));
+        all
+    };
+    let before = records(&a.1);
+    assert_eq!(before.len(), 5);
+    let generation = load_meta(&a.1).unwrap().generation;
+    let mut request = save_req(Some(generation), Some(APPID2), Some(SECRET2));
+    request.watch = Some(crate::notify::watch_sync::WatchSave {
+        base_revision: Some(2),
+        enabled: true,
+        channels: vec![crate::notify::config::WatchChannel::Configured {
+            name: "SyntheticConfigured".into(),
+        }],
+    });
+    let body = serde_json::to_vec(&request).unwrap();
+    let members = vec!["a".to_string(), "b".to_string()];
+    assert_eq!(
+        serve_forward(&a.1, "b", &members, &body, true, "a", NOW),
+        Err(ForwardRefusal::Save(SaveError::Store))
+    );
+    assert!(
+        records(&a.1) == before,
+        "rolled back: no notify record changed on the holder"
+    );
+    assert_eq!(secret(&a.1).as_deref(), Some(SECRET));
+    assert_eq!(load_meta(&a.1).unwrap().generation, generation);
+    // The sender's view of that answer: still `unknown`.
+    let wire = br#"{"success":false,"data":{"code":"credentials_store"}}"#;
+    let error = crate::notify::openid_sync::forward_reply(500, wire).unwrap_err();
+    assert_eq!(error, SaveError::Store);
+    assert_eq!(error.forward_outcome(), "unknown");
 }

@@ -571,18 +571,32 @@ pub(crate) fn credentials_status(error: notify::credentials::SaveError) -> Statu
             StatusCode::CONFLICT
         }
         SaveError::Invalid | SaveError::WatchBaseRequired => StatusCode::BAD_REQUEST,
-        SaveError::HolderUnreachable => StatusCode::SERVICE_UNAVAILABLE,
-        SaveError::Store => StatusCode::INTERNAL_SERVER_ERROR,
-        SaveError::HolderRefused { .. } | SaveError::HolderBadReply | SaveError::ForwardRefused => {
-            StatusCode::BAD_GATEWAY
+        SaveError::HolderUnreachable | SaveError::HolderNotConnected => {
+            StatusCode::SERVICE_UNAVAILABLE
         }
+        SaveError::Store => StatusCode::INTERNAL_SERVER_ERROR,
+        SaveError::HolderRefused { .. } | SaveError::ForwardRefused => StatusCode::CONFLICT,
+        SaveError::HolderBadReply => StatusCode::UNPROCESSABLE_ENTITY,
         SaveError::MembershipChanging => StatusCode::CONFLICT,
     }
 }
 
 fn credentials_refused(error: notify::credentials::SaveError) -> Response {
+    reply(
+        credentials_status(error),
+        Some(refusal_data(error)),
+        error.message(),
+    )
+}
+
+#[cfg(test)]
+pub(crate) fn credentials_refused_for_tests(error: notify::credentials::SaveError) -> Response {
+    credentials_refused(error)
+}
+
+/// `{code, current_generation?, current_revision?, holder_status?}`.
+fn refusal_data(error: notify::credentials::SaveError) -> Value {
     use notify::credentials::SaveError;
-    let status = credentials_status(error);
     let mut data = json!({ "code": error.code() });
     if let SaveError::Conflict { current } = error {
         data["current_generation"] = json!(current);
@@ -593,34 +607,24 @@ fn credentials_refused(error: notify::credentials::SaveError) -> Response {
     if let SaveError::HolderRefused { status } = error {
         data["holder_status"] = json!(status);
     }
-    reply(status, Some(data), error.message())
+    data
 }
 
-/// A forwarded save that did not commit. The forwarding errors also name
-/// the holder node (its id, never its address) so the panel can say which
-/// node refused; the holder's own codes keep their usual body.
+/// A forwarded save that did not commit. Every such answer carries
+/// `outcome` (`not_sent` / `unknown`, see `SaveError::forward_outcome`).
+/// The forwarding errors also name the holder node (its id, never its
+/// address) so the panel can say which node refused; the holder's own codes
+/// keep their usual body and message.
 pub(crate) fn forward_refused(holder: &str, error: notify::credentials::SaveError) -> Response {
-    use notify::credentials::SaveError;
-    let named = matches!(
-        error,
-        SaveError::HolderUnreachable
-            | SaveError::HolderRefused { .. }
-            | SaveError::HolderBadReply
-            | SaveError::ForwardRefused
-            | SaveError::MembershipChanging
-    );
-    if !named {
-        return credentials_refused(error);
-    }
-    let mut data = json!({ "code": error.code(), "node": holder });
-    if let SaveError::HolderRefused { status } = error {
-        data["holder_status"] = json!(status);
-    }
-    reply(
-        credentials_status(error),
-        Some(data),
-        format!("{}（节点 {holder}）", error.message()),
-    )
+    let mut data = refusal_data(error);
+    data["outcome"] = json!(error.forward_outcome());
+    let message = if error.forwarding() {
+        data["node"] = json!(holder);
+        format!("{}（节点 {holder}）", error.message())
+    } else {
+        error.message().to_string()
+    };
+    reply(credentials_status(error), Some(data), message)
 }
 
 /// Rule 1: 400 for a save or 清除

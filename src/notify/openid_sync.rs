@@ -457,8 +457,11 @@ pub(crate) enum SendFailure {
     RouteInvalid,
     /// The peer client could not be built.
     Client,
-    /// Timeout, connect failure, or an upstream gateway error (502-504, 52x).
-    Unreachable,
+    /// The connection to the holder could not be opened: nothing was sent.
+    NotConnected,
+    /// Timeout, a broken exchange, or an upstream gateway error (502-504,
+    /// 52x; its status when known): the holder may have received it.
+    Unreachable(Option<u16>),
     /// An unsigned refusal before any handler ran (bad signature, stale
     /// revision, unknown member, replay): the HTTP status when known.
     Unsigned(Option<u16>),
@@ -472,10 +475,10 @@ impl SendFailure {
         match error.kind() {
             io::ErrorKind::WouldBlock => SendFailure::MembershipChanged,
             io::ErrorKind::NotFound => SendFailure::NotInManifest,
-            io::ErrorKind::TimedOut
-            | io::ErrorKind::ConnectionRefused
-            | io::ErrorKind::ConnectionAborted
-            | io::ErrorKind::Other => SendFailure::Unreachable,
+            io::ErrorKind::ConnectionRefused => SendFailure::NotConnected,
+            io::ErrorKind::TimedOut | io::ErrorKind::ConnectionAborted | io::ErrorKind::Other => {
+                SendFailure::Unreachable(status)
+            }
             io::ErrorKind::PermissionDenied if status.is_some() => SendFailure::Unsigned(status),
             _ => SendFailure::BadReply,
         }
@@ -485,7 +488,9 @@ impl SendFailure {
     fn link_error(self) -> LinkError {
         match self {
             SendFailure::MembershipChanged => LinkError::MembershipChanged,
-            SendFailure::Unreachable | SendFailure::Client => LinkError::Unreachable,
+            SendFailure::Unreachable(_) | SendFailure::NotConnected | SendFailure::Client => {
+                LinkError::Unreachable
+            }
             _ => LinkError::Refused,
         }
     }
@@ -498,7 +503,8 @@ impl SendFailure {
             SendFailure::TooLarge => "request_too_large",
             SendFailure::RouteInvalid => "route_invalid",
             SendFailure::Client => "client_unavailable",
-            SendFailure::Unreachable => "unreachable",
+            SendFailure::Unreachable(_) => "unreachable",
+            SendFailure::NotConnected => "not_connected",
             SendFailure::Unsigned(_) => "unsigned_refusal",
             SendFailure::BadReply => "bad_reply",
         }
@@ -506,7 +512,7 @@ impl SendFailure {
 
     fn status(self) -> Option<u16> {
         match self {
-            SendFailure::Unsigned(status) => status,
+            SendFailure::Unsigned(status) | SendFailure::Unreachable(status) => status,
             _ => None,
         }
     }
@@ -521,7 +527,8 @@ impl SendFailure {
             | SendFailure::TooLarge
             | SendFailure::RouteInvalid
             | SendFailure::Client => SaveError::ForwardRefused,
-            SendFailure::Unreachable => SaveError::HolderUnreachable,
+            SendFailure::Unreachable(_) => SaveError::HolderUnreachable,
+            SendFailure::NotConnected => SaveError::HolderNotConnected,
             SendFailure::Unsigned(status) => SaveError::HolderRefused {
                 status: status.unwrap_or(0),
             },

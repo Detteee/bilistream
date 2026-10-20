@@ -1937,10 +1937,11 @@ async fn a_forwarded_watch_save_is_signed_admitted_and_committed_end_to_end() {
 
     a.server.abort();
     let _ = (&mut a.server).await;
-    assert_eq!(
-        link.forward(revision, "a", &save).await,
-        Err(SaveError::HolderUnreachable)
-    );
+    // Nothing listens: the connection never opens, so nothing was sent.
+    let stopped = link.forward(revision, "a", &save).await.unwrap_err();
+    assert_eq!(stopped, SaveError::HolderNotConnected);
+    assert_eq!(stopped.code(), "credentials_holder_unreachable");
+    assert_eq!(stopped.forward_outcome(), "not_sent");
 
     // Only the forward lines: membership drivers may log on this thread too.
     let text: String = logs
@@ -1956,7 +1957,7 @@ async fn a_forwarded_watch_save_is_signed_admitted_and_committed_end_to_end() {
         "kind=request_too_large",
         "kind=unsigned_refusal status=403",
         "kind=bad_reply",
-        "kind=unreachable",
+        "kind=not_connected",
     ] {
         assert!(text.contains(kind), "{kind}: {text}");
     }
