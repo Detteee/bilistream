@@ -3952,3 +3952,30 @@ fn ruling3_old_title_rows_still_work_because_kinds_decide() {
     let item = only_session(&w, T0 + 200);
     assert!(item.get("end_cut_off").is_none(), "{item}");
 }
+
+#[test]
+fn a_start_restricted_note_has_its_own_kind_and_title() {
+    let (mut w, _) = writer("start-restricted");
+    w.apply(&ev(
+        T0,
+        EventKind::BiliStartRestricted {
+            detail: "限制开播 60031".into(),
+        },
+    ))
+    .unwrap();
+    let page = query::events(&w.conn, &q(T0 - 10, T0 + 10)).unwrap();
+    let event = page
+        .items
+        .iter()
+        .find(|event| event.kind == "bili.start_restricted")
+        .unwrap();
+    assert_eq!(event.title, "B站 限制开播，已关闭监控");
+    assert_eq!(event.detail, "限制开播 60031");
+    assert!(
+        !page
+            .items
+            .iter()
+            .any(|event| event.kind.starts_with("bili.warning")),
+        "the restricted note never counts as a warning/cut"
+    );
+}

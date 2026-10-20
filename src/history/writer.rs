@@ -451,6 +451,17 @@ impl Writer {
                     }
                 }
             }
+            EventKind::BiliStartRestricted { detail } => {
+                self.record_event(EventRecord {
+                    at,
+                    kind: "bili.start_restricted",
+                    subject: None,
+                    severity: Severity::Warn,
+                    title: "B站 限制开播，已关闭监控",
+                    detail,
+                    sid: None,
+                })?;
+            }
             EventKind::BiliStartFailed { seq, error } => {
                 self.record_event(EventRecord {
                     at,

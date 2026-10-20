@@ -297,6 +297,12 @@ pub enum EventKind {
         seq: Option<u64>,
         error: String,
     },
+    /// `BILI_START_TEMP_BAN`: Bilibili refused a new live for now, so this
+    /// node switched its monitors off. Its own kind keeps it out of the
+    /// 警告/切断 count; the detail names the cause.
+    BiliStartRestricted {
+        detail: String,
+    },
     /// `msg` is Bilibili's reason (cleaned, capped) or the fixed fallback;
     /// `rank` orders how detailed it is (see [`EndDetail::rank`]) so the
     /// writer keeps one row per warning or cut.
@@ -384,6 +390,7 @@ impl std::fmt::Debug for EventKind {
             Self::BiliLiveSummary { .. } => "BiliLiveSummary",
             Self::BiliLiveSkipped { .. } => "BiliLiveSkipped",
             Self::BiliStartFailed { .. } => "BiliStartFailed",
+            Self::BiliStartRestricted { .. } => "BiliStartRestricted",
             Self::BiliWarning { .. } => "BiliWarning",
             Self::BiliCutOff { .. } => "BiliCutOff",
             Self::RoomLocked { .. } => "RoomLocked",

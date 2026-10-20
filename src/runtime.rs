@@ -1812,6 +1812,9 @@ async fn align_bili_room(
                     && disable_monitors_after_bili_start_temp_ban(cfg)
                 {
                     tracing::warn!("检测到B站异常开播限制，已关闭 YouTube、Twitch 和优先频道监控");
+                    crate::history::emit(crate::history::EventKind::BiliStartRestricted {
+                        detail: safe_text(message, 160),
+                    });
                     if let Err(save_err) = save_config(cfg).await {
                         tracing::error!("保存配置失败: {}", save_err);
                     }

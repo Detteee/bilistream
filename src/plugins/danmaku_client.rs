@@ -39,6 +39,17 @@ pub(crate) fn capture_warning_message(
     if let Some(line) = violation_log_line(message) {
         warn!("{}", line);
     }
+    if cmd != "ROOM_LOCK" {
+        let mut keys: Vec<String> = message
+            .data
+            .as_ref()
+            .and_then(Value::as_object)
+            .map(|object| object.keys().cloned().collect())
+            .unwrap_or_default();
+        keys.sort();
+        let reason = violation_reason(message).map(|reason| reason.reason);
+        crate::history::capture::warning_frame(cmd, &keys, reason.as_deref());
+    }
     let mut event = warnings.capture_event();
     // Classify the 违规原因 once, at capture, so every later mark of this
     // frame (including the stop task's) carries the same classes.
