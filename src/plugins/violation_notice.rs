@@ -12,19 +12,19 @@ use crate::logging::safe_text;
 use crate::plugins::warning_exempt::ReasonId;
 
 /// Code cap; the sending account allows more, so short lines fit any account.
-pub const NOTICE_CAP: usize = 80;
+const NOTICE_CAP: usize = 80;
 
 /// The text kept from today: the final fallback when the paused channel's
 /// name is unknown, and the second (last) attempt when the chosen line is
 /// rejected.
-pub const GENERIC_SHORT: &str = "🚫 警告/切断状态，请换台";
+pub(crate) const GENERIC_SHORT: &str = "🚫 警告/切断状态，请换台";
 
 /// Which copy row a classified reason uses. High-risk classes and an
 /// unrecognised reason share the generic row (the owner's grouping); a reason
 /// matching several specific classes also takes the generic row, because no
 /// single short name would be true.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum NoticeKind {
+enum NoticeKind {
     IdleRecording,
     GameModeOff,
     Warning,
@@ -63,7 +63,7 @@ impl NoticeKind {
 
 /// Pick the copy row from the matched classes. High-risk classes always take
 /// the generic row; two different specific classes also do.
-pub fn kind(reason_ids: &BTreeSet<ReasonId>) -> NoticeKind {
+fn kind(reason_ids: &BTreeSet<ReasonId>) -> NoticeKind {
     let high = reason_ids.contains(&ReasonId::GameInfoViolation)
         || reason_ids.contains(&ReasonId::ContentUnsuitable);
     if high {
@@ -83,7 +83,7 @@ pub fn kind(reason_ids: &BTreeSet<ReasonId>) -> NoticeKind {
 /// The one line for this event. `channel_name` is the paused source channel
 /// (display only); it is shortened, never the fixed copy, so the line fits
 /// [`NOTICE_CAP`].
-pub fn text(reason_ids: &BTreeSet<ReasonId>, released: bool, channel_name: &str) -> String {
+pub(crate) fn text(reason_ids: &BTreeSet<ReasonId>, released: bool, channel_name: &str) -> String {
     let copy = kind(reason_ids).copy();
     let template = if released { copy.continues } else { copy.held };
     if template.contains("{channel_name}") {
