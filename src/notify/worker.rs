@@ -1492,8 +1492,8 @@ impl Worker {
             .flat_map(|channel| channel.episode_keys())
             .collect();
         // A queue left on the previous sender must disappear once a peer's
-        // shared mark says that episode was delivered. This also handles
-        // legacy per-account pending items during a rolling upgrade.
+        // shared mark says that episode was delivered, whether the pending
+        // item is keyed by the channel mark or by a per-account mark.
         self.tracker.discard(|item| {
             item.kind == EventKind::StreamLive
                 && (!self.cfg.watch.enabled

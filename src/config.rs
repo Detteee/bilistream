@@ -23,11 +23,22 @@ static PERSISTENCE_LOCK: Mutex<()> = Mutex::new(());
 static CONFIG_PUBLICATION_LOCK: RwLock<()> = RwLock::new(());
 static CONFIG_REVISION: AtomicU64 = AtomicU64::new(0);
 
-#[derive(Debug)]
+/// `json` is the whole saved config (stream key, cookies, API keys, proxy
+/// credentials), so `Debug` is manual and never prints it.
 pub(crate) struct ConfigSnapshot {
     json: serde_json::Value,
     revision: u64,
     source_keys: Vec<FileCacheKey>,
+}
+
+impl std::fmt::Debug for ConfigSnapshot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ConfigSnapshot")
+            .field("json", &"[redacted]")
+            .field("revision", &self.revision)
+            .field("source_keys", &self.source_keys)
+            .finish()
+    }
 }
 
 type FileCacheKey = Option<u64>;
@@ -120,8 +131,8 @@ pub struct ChannelPlatforms {
     pub niconico: Option<String>,
 }
 
-/// Struct representing the overall configuration.
-#[derive(Debug, Serialize, Deserialize, Clone)]
+/// Struct representing the overall configuration. `Debug` is manual (below).
+#[derive(Serialize, Deserialize, Clone)]
 pub struct Config {
     /// The read snapshot travels with clones, so all save_config callers get
     /// conflict detection without persisting runtime metadata in config.json.
@@ -189,6 +200,80 @@ pub struct Config {
     /// Local 统计 history (design §13). Per node; never synced or backed up.
     #[serde(default)]
     pub history: HistoryConfig,
+}
+
+/// Stream keys, API keys, tokens and session cookies never reach `Debug`
+/// output (and so never a log line or a panic message): only whether each
+/// one is set.
+pub(crate) fn secret(value: &str) -> &'static str {
+    if value.is_empty() {
+        "[empty]"
+    } else {
+        "[redacted]"
+    }
+}
+
+pub(crate) fn secret_opt(value: &Option<String>) -> &'static str {
+    value.as_deref().map_or("[unset]", secret)
+}
+
+/// A proxy URL with any userinfo (`user:pass@`) replaced by `[redacted]@`;
+/// scheme, host and port are kept. The last `@` before any query wins, so an
+/// unencoded `/` or `@` in a password is masked too. Text without `@` is
+/// returned unchanged.
+pub(crate) fn mask_proxy(url: &str) -> String {
+    let start = url.find("://").map_or(0, |at| at + 3);
+    let end = url[start..]
+        .find(['?', '#'])
+        .map_or(url.len(), |at| start + at);
+    match url[start..end].rfind('@') {
+        Some(at) => format!("{}[redacted]{}", &url[..start], &url[start + at..]),
+        None => url.to_string(),
+    }
+}
+
+pub(crate) fn mask_proxy_opt(value: &Option<String>) -> Option<String> {
+    value.as_deref().map(mask_proxy)
+}
+
+impl std::fmt::Debug for Config {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Config")
+            .field("snapshot", &self.snapshot)
+            .field("auto_cover", &self.auto_cover)
+            .field("enable_anti_collision", &self.enable_anti_collision)
+            .field("interval", &self.interval)
+            .field("bililive", &self.bililive)
+            .field("twitch", &self.twitch)
+            .field("youtube", &self.youtube)
+            .field("holodex_api_key", &secret_opt(&self.holodex_api_key))
+            .field("holodex_jwt", &secret_opt(&self.holodex_jwt))
+            .field("holodex_jwt_refreshed_at", &self.holodex_jwt_refreshed_at)
+            .field("holodex_username", &self.holodex_username)
+            .field("holodex_skip_jwt_verify", &self.holodex_skip_jwt_verify)
+            .field("holodex_monitor_gate", &self.holodex_monitor_gate)
+            .field("youtube_api_key", &secret_opt(&self.youtube_api_key))
+            .field("youtube_rss_enabled", &self.youtube_rss_enabled)
+            .field(
+                "youtube_websub_callback_url",
+                &self.youtube_websub_callback_url,
+            )
+            .field("youtube_websub_port", &self.youtube_websub_port)
+            .field("riot_api_key", &secret_opt(&self.riot_api_key))
+            .field("enable_lol_monitor", &self.enable_lol_monitor)
+            .field("lol_monitor_interval", &self.lol_monitor_interval)
+            .field("anti_collision_list", &self.anti_collision_list)
+            .field("show_priority_channel", &self.show_priority_channel)
+            .field("show_twitch", &self.show_twitch)
+            .field("show_niconico", &self.show_niconico)
+            .field("priority_channel", &self.priority_channel)
+            .field("enable_youtube_monitor", &self.enable_youtube_monitor)
+            .field("enable_twitch_monitor", &self.enable_twitch_monitor)
+            .field("niconico", &self.niconico)
+            .field("cluster", &self.cluster)
+            .field("history", &self.history)
+            .finish()
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -472,8 +557,8 @@ fn default_priority_area() -> u64 {
     235
 }
 
-/// Struct representing BiliLive-specific configuration.
-#[derive(Debug, Serialize, Deserialize, Clone)]
+/// Struct representing BiliLive-specific configuration. `Debug` is manual.
+#[derive(Serialize, Deserialize, Clone)]
 pub struct BiliLive {
     pub enable_danmaku_command: bool,
     pub room: i32,
@@ -481,6 +566,18 @@ pub struct BiliLive {
     pub bili_rtmp_key: String,
     #[serde(skip)]
     pub credentials: Credentials,
+}
+
+impl std::fmt::Debug for BiliLive {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BiliLive")
+            .field("enable_danmaku_command", &self.enable_danmaku_command)
+            .field("room", &self.room)
+            .field("bili_rtmp_url", &self.bili_rtmp_url)
+            .field("bili_rtmp_key", &secret(&self.bili_rtmp_key))
+            .field("credentials", &self.credentials)
+            .finish()
+    }
 }
 
 /// Struct to hold credential information extracted from cookies.json.
@@ -497,25 +594,18 @@ pub struct Credentials {
 /// panic message): only whether each one is set.
 impl std::fmt::Debug for Credentials {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let set = |value: &str| {
-            if value.is_empty() {
-                "[empty]"
-            } else {
-                "[redacted]"
-            }
-        };
         f.debug_struct("Credentials")
-            .field("sessdata", &set(&self.sessdata))
-            .field("bili_jct", &set(&self.bili_jct))
-            .field("dede_user_id", &set(&self.dede_user_id))
-            .field("dede_user_id_ckmd5", &set(&self.dede_user_id_ckmd5))
-            .field("buvid3", &set(&self.buvid3))
+            .field("sessdata", &secret(&self.sessdata))
+            .field("bili_jct", &secret(&self.bili_jct))
+            .field("dede_user_id", &secret(&self.dede_user_id))
+            .field("dede_user_id_ckmd5", &secret(&self.dede_user_id_ckmd5))
+            .field("buvid3", &secret(&self.buvid3))
             .finish()
     }
 }
 
-/// Struct representing Twitch configuration.
-#[derive(Debug, Serialize, Deserialize, Clone)]
+/// Struct representing Twitch configuration. `Debug` is manual.
+#[derive(Serialize, Deserialize, Clone)]
 pub struct Twitch {
     #[serde(default = "default_true")]
     pub enable_monitor: bool,
@@ -537,8 +627,8 @@ pub struct Twitch {
     pub ffmpeg_cache: FfmpegCache,
 }
 
-/// Struct representing YouTube configuration.
-#[derive(Debug, Serialize, Deserialize, Clone)]
+/// Struct representing YouTube configuration. `Debug` is manual.
+#[derive(Serialize, Deserialize, Clone)]
 pub struct Youtube {
     #[serde(default = "default_true")]
     pub enable_monitor: bool,
@@ -564,10 +654,44 @@ pub struct Youtube {
     pub ffmpeg_cache: FfmpegCache,
 }
 
+impl std::fmt::Debug for Twitch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Twitch")
+            .field("enable_monitor", &self.enable_monitor)
+            .field("channel_name", &self.channel_name)
+            .field("area_v2", &self.area_v2)
+            .field("channel_id", &self.channel_id)
+            .field("proxy_region", &self.proxy_region)
+            .field("quality", &self.quality)
+            .field("proxy", &mask_proxy_opt(&self.proxy))
+            .field("crop", &self.crop)
+            .field("ffmpeg_cache", &self.ffmpeg_cache)
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for Youtube {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Youtube")
+            .field("enable_monitor", &self.enable_monitor)
+            .field("channel_name", &self.channel_name)
+            .field("channel_id", &self.channel_id)
+            .field("area_v2", &self.area_v2)
+            .field("quality", &self.quality)
+            .field("cookies_file", &self.cookies_file)
+            .field("cookies_from_browser", &self.cookies_from_browser)
+            .field("proxy", &mask_proxy_opt(&self.proxy))
+            .field("deno_path", &self.deno_path)
+            .field("crop", &self.crop)
+            .field("ffmpeg_cache", &self.ffmpeg_cache)
+            .finish()
+    }
+}
+
 /// Niconico Live restream source. Ingest is streamlink (pre-muxed A+V),
 /// not a standalone m3u8 URL. Channel id/name come from `channels.json` /
-/// the WebUI, same as YouTube and Twitch.
-#[derive(Debug, Serialize, Deserialize, Clone)]
+/// the WebUI, same as YouTube and Twitch. `Debug` is manual.
+#[derive(Serialize, Deserialize, Clone)]
 pub struct Niconico {
     #[serde(default)]
     pub enable_monitor: bool,
@@ -597,6 +721,24 @@ pub struct Niconico {
     pub crop: Option<CropConfig>,
     #[serde(default = "default_niconico_ffmpeg_cache")]
     pub ffmpeg_cache: FfmpegCache,
+}
+
+impl std::fmt::Debug for Niconico {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Niconico")
+            .field("enable_monitor", &self.enable_monitor)
+            .field("channel_name", &self.channel_name)
+            .field("channel_id", &self.channel_id)
+            .field("live_id", &self.live_id)
+            .field("area_v2", &self.area_v2)
+            .field("quality", &self.quality)
+            .field("user_session", &secret_opt(&self.user_session))
+            .field("session_check_enabled", &self.session_check_enabled)
+            .field("proxy", &mask_proxy_opt(&self.proxy))
+            .field("crop", &self.crop)
+            .field("ffmpeg_cache", &self.ffmpeg_cache)
+            .finish()
+    }
 }
 
 impl Default for Niconico {
@@ -721,11 +863,21 @@ impl Config {
 }
 
 /// Structs to mirror the structure of cookies.json
-#[derive(Debug, Deserialize)]
+/// One cookies.json entry. `Debug` is manual: the name only, never the value.
+#[derive(Deserialize)]
 struct Cookie {
     name: String,
     value: String,
     // Other fields can be added if needed
+}
+
+impl std::fmt::Debug for Cookie {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Cookie")
+            .field("name", &self.name)
+            .field("value", &secret(&self.value))
+            .finish()
+    }
 }
 #[derive(Debug, Deserialize)]
 struct CookiesFile {
@@ -1205,6 +1357,87 @@ fn apply_priority_channel_lookup(priority: &mut PriorityChannel, channel: Option
 #[cfg(test)]
 mod tests {
     #[test]
+    fn config_debug_never_contains_a_stream_key_api_key_or_session() {
+        let mut config = crate::test_support::config("synthetic-node", 0);
+        config.bililive.bili_rtmp_key = "synthetic-rtmp-key-3d9e".into();
+        config.bililive.credentials.sessdata = "synthetic-sessdata-a1".into();
+        config.holodex_api_key = Some("synthetic-holodex-key-77".into());
+        config.holodex_jwt = Some("synthetic-holodex-jwt-42".into());
+        config.youtube_api_key = Some("synthetic-youtube-key-19".into());
+        config.riot_api_key = Some("synthetic-riot-key-08".into());
+        config.niconico.user_session = Some("synthetic-nico-session-5c".into());
+        for text in [
+            format!("{config:?}"),
+            format!("{config:#?}"),
+            format!("{:?}", config.bililive),
+            format!("{:#?}", config.niconico),
+        ] {
+            for value in [
+                "synthetic-rtmp-key-3d9e",
+                "synthetic-sessdata-a1",
+                "synthetic-holodex-key-77",
+                "synthetic-holodex-jwt-42",
+                "synthetic-youtube-key-19",
+                "synthetic-riot-key-08",
+                "synthetic-nico-session-5c",
+            ] {
+                assert!(!text.contains(value), "{value} leaked into Debug output");
+            }
+            assert!(text.contains("[redacted]"));
+        }
+        let text = format!("{:?}", config.bililive);
+        assert!(text.contains("bili_rtmp_key: \"[redacted]\""), "{text}");
+        config.bililive.bili_rtmp_key.clear();
+        config.holodex_api_key = None;
+        let text = format!("{config:?}");
+        assert!(text.contains("bili_rtmp_key: \"[empty]\""));
+        assert!(text.contains("holodex_api_key: \"[unset]\""));
+    }
+
+    #[test]
+    fn mask_proxy_hides_only_the_userinfo() {
+        use super::{mask_proxy, mask_proxy_opt};
+        for (raw, masked) in [
+            (
+                "http://synthetic-user:synthetic-pass@proxy.example:8080",
+                "http://[redacted]@proxy.example:8080",
+            ),
+            (
+                "socks5h://synthetic-user@10.0.0.2:1080/",
+                "socks5h://[redacted]@10.0.0.2:1080/",
+            ),
+            (
+                "synthetic-user:synthetic-pass@proxy.example:3128",
+                "[redacted]@proxy.example:3128",
+            ),
+            (
+                "http://synthetic-user:synth/p@ss@proxy.example:8080",
+                "http://[redacted]@proxy.example:8080",
+            ),
+            ("http://proxy.example:8080", "http://proxy.example:8080"),
+            ("socks5://127.0.0.1:1080", "socks5://127.0.0.1:1080"),
+            ("", ""),
+        ] {
+            assert_eq!(mask_proxy(raw), masked, "{raw}");
+        }
+        assert_eq!(mask_proxy_opt(&None), None);
+        let mut config = crate::test_support::config("synthetic-node", 0);
+        let proxy = Some("http://synthetic-user:synthetic-pass@proxy.example:8080".to_string());
+        config.twitch.proxy = proxy.clone();
+        config.youtube.proxy = proxy.clone();
+        config.niconico.proxy = proxy;
+        for text in [
+            format!("{config:?}"),
+            format!("{:#?}", config.twitch),
+            format!("{:#?}", config.youtube),
+            format!("{:#?}", config.niconico),
+        ] {
+            assert!(!text.contains("synthetic-pass") && !text.contains("synthetic-user"));
+            assert!(text.contains("[redacted]@proxy.example:8080"), "{text}");
+        }
+    }
+
+    #[test]
     fn credentials_debug_never_contains_cookie_values() {
         let credentials = super::Credentials {
             sessdata: "synthetic-sessdata-7f3a".into(),
@@ -1217,7 +1450,7 @@ mod tests {
             enable_danmaku_command: false,
             room: 1,
             bili_rtmp_url: String::new(),
-            bili_rtmp_key: String::new(),
+            bili_rtmp_key: "synthetic-rtmp-key-c4e1".into(),
             credentials: credentials.clone(),
         };
         for text in [
@@ -1230,10 +1463,76 @@ mod tests {
                 "synthetic-csrf-91c2",
                 "synthetic-uid-55",
                 "synthetic-ckmd5-0b",
+                "synthetic-rtmp-key-c4e1",
             ] {
                 assert!(!text.contains(value), "{value} leaked into Debug output");
             }
             assert!(text.contains("[redacted]") && text.contains("[empty]"));
+        }
+    }
+
+    #[test]
+    fn config_snapshot_debug_never_contains_the_saved_json() {
+        let snapshot = super::ConfigSnapshot {
+            json: serde_json::json!({
+                "bililive": {
+                    "bili_rtmp_key": "synthetic-snap-rtmp-key-61",
+                    "credentials": {"sessdata": "synthetic-snap-sessdata-2b"},
+                },
+                "holodex_api_key": "synthetic-snap-holodex-key-90",
+                "youtube_api_key": "synthetic-snap-youtube-key-3e",
+                "riot_api_key": "synthetic-snap-riot-key-d7",
+                "niconico": {"user_session": "synthetic-snap-nico-session-44"},
+                "twitch": {"proxy": "http://synthetic-snap-user:synthetic-snap-pass@proxy.example:8080"},
+            }),
+            revision: 7,
+            source_keys: vec![Some(11), None],
+        };
+        let mut config = crate::test_support::config("synthetic-node", 0);
+        config.snapshot = Some(std::sync::Arc::new(snapshot));
+        let snapshot = config.snapshot.as_deref().unwrap();
+        for text in [
+            format!("{snapshot:?}"),
+            format!("{snapshot:#?}"),
+            format!("{config:?}"),
+            format!("{config:#?}"),
+        ] {
+            for value in [
+                "synthetic-snap-rtmp-key-61",
+                "synthetic-snap-sessdata-2b",
+                "synthetic-snap-holodex-key-90",
+                "synthetic-snap-youtube-key-3e",
+                "synthetic-snap-riot-key-d7",
+                "synthetic-snap-nico-session-44",
+                "synthetic-snap-user",
+                "synthetic-snap-pass",
+                "proxy.example",
+            ] {
+                assert!(!text.contains(value), "{value} leaked into Debug output");
+            }
+        }
+        let text = format!("{snapshot:?}");
+        assert!(text.contains("json: \"[redacted]\""), "{text}");
+        assert!(text.contains("revision: 7"), "{text}");
+        assert!(text.contains("source_keys: [Some(11), None]"), "{text}");
+    }
+
+    #[test]
+    fn cookie_debug_shows_the_name_but_never_the_value() {
+        let file: super::CookiesFile = serde_json::from_value(serde_json::json!({
+            "cookie_info": {"cookies": [
+                {"name": "SESSDATA", "value": "synthetic-cookie-sessdata-5a"},
+                {"name": "bili_jct", "value": "synthetic-cookie-csrf-0e"},
+            ]}
+        }))
+        .unwrap();
+        for text in [format!("{file:?}"), format!("{file:#?}")] {
+            assert!(!text.contains("synthetic-cookie-sessdata-5a"), "{text}");
+            assert!(!text.contains("synthetic-cookie-csrf-0e"), "{text}");
+            assert!(
+                text.contains("SESSDATA") && text.contains("[redacted]"),
+                "{text}"
+            );
         }
     }
 

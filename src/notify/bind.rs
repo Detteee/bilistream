@@ -34,7 +34,8 @@ pub enum BindVia {
     FriendAdd,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// `Debug` is manual: the pairing code never reaches a log or panic message.
+#[derive(Clone, PartialEq, Eq)]
 pub enum BindState {
     Idle,
     Waiting {
@@ -56,12 +57,54 @@ pub enum BindState {
 }
 
 /// What the gateway handler should do with an inbound event.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// `Debug` is manual: the openid is never shown, in any form.
+#[derive(Clone, PartialEq, Eq)]
 pub enum BindDecision {
     /// Save this openid and reply 「绑定成功」 passively.
     Bind { openid: String, via: BindVia },
     /// No window, or the content did not match: log at debug, never reply.
     Ignore,
+}
+
+impl std::fmt::Debug for BindState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Idle => f.write_str("Idle"),
+            Self::Waiting {
+                code: _,
+                mode,
+                started_at,
+                expires_at,
+                attempts,
+            } => f
+                .debug_struct("Waiting")
+                .field("code", &"[redacted]")
+                .field("mode", mode)
+                .field("started_at", started_at)
+                .field("expires_at", expires_at)
+                .field("attempts", attempts)
+                .finish(),
+            Self::Bound { via, at } => f
+                .debug_struct("Bound")
+                .field("via", via)
+                .field("at", at)
+                .finish(),
+            Self::Expired { at } => f.debug_struct("Expired").field("at", at).finish(),
+        }
+    }
+}
+
+impl std::fmt::Debug for BindDecision {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Bind { openid: _, via } => f
+                .debug_struct("Bind")
+                .field("openid", &"[redacted]")
+                .field("via", via)
+                .finish(),
+            Self::Ignore => f.write_str("Ignore"),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -251,6 +294,31 @@ impl Binder {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bind_debug_never_shows_the_openid_or_the_pairing_code() {
+        let decision = BindDecision::Bind {
+            openid: "SYNTHETICOPENID0000000000000000BB".into(),
+            via: BindVia::Message,
+        };
+        let state = BindState::Waiting {
+            code: "731942".into(),
+            mode: BindMode::Code,
+            started_at: 1,
+            expires_at: 2,
+            attempts: 0,
+        };
+        for text in [
+            format!("{decision:?}"),
+            format!("{decision:#?}"),
+            format!("{state:?}"),
+            format!("{state:#?}"),
+        ] {
+            assert!(!text.contains("SYNTHETICOPENID"), "{text}");
+            assert!(!text.contains("731942"), "{text}");
+            assert!(text.contains("[redacted]"), "{text}");
+        }
+    }
 
     const OPENID: &str = "E4F0A1B2C3D4E5F60718293A4B5C6D7E";
 

@@ -30,8 +30,9 @@ use zeroize::Zeroizing;
 pub const CREDENTIALS_RECORD: &str = "notify-credentials";
 
 /// The set metadata on this node. `generation == 0`: never seeded (an
-/// older build's data); the openid then counts as valid.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// older build's data); the openid then counts as valid. `Debug` is manual:
+/// the AppID is write-only, so only whether `openid_appid` is set.
+#[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CredentialsMeta {
     #[serde(default)]
     pub generation: u64,
@@ -60,6 +61,19 @@ pub struct MigrationNotice {
     /// Node whose values won.
     pub winner: String,
     pub at: u64,
+}
+
+impl std::fmt::Debug for CredentialsMeta {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CredentialsMeta")
+            .field("generation", &self.generation)
+            .field("openid_appid_set", &!self.openid_appid.is_empty())
+            .field("updated_by", &self.updated_by)
+            .field("updated_at", &self.updated_at)
+            .field("holder_seed", &self.holder_seed)
+            .field("migration_notice", &self.migration_notice)
+            .finish()
+    }
 }
 
 impl CredentialsMeta {

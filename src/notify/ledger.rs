@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 pub const MAX_INCIDENT_MARKS: usize = 32;
-/// Fifty channel episodes plus their three per-account compatibility marks
+/// Fifty channel episodes plus their three per-account marks
 /// must not evict each other (or displace fault-incident history).
 pub const MAX_WATCH_MARKS: usize = super::config::WATCH_MAX_CHANNELS * 4;
 /// Shared active-message budget. Below the unverified-bot limits printed in

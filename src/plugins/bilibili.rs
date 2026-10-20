@@ -1064,7 +1064,8 @@ pub enum ResponseValue {
     Value(Value),
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+/// `Debug` is manual: cookies and tokens show only whether they are set.
+#[derive(Clone, Deserialize, Serialize)]
 pub struct LoginInfo {
     pub cookie_info: Value,
     pub sso: Vec<String>,
@@ -1072,7 +1073,8 @@ pub struct LoginInfo {
     pub platform: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+/// `Debug` is manual: tokens show only whether they are set.
+#[derive(Clone, Deserialize, Serialize)]
 pub struct TokenInfo {
     pub access_token: String,
     pub expires_in: u32,
@@ -1080,12 +1082,54 @@ pub struct TokenInfo {
     pub refresh_token: String,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+/// `Debug` is manual: the token shows only whether it is set.
+#[derive(Clone, Deserialize, Serialize)]
 pub struct OAuthInfo {
     pub mid: u64,
     pub access_token: String,
     pub expires_in: u32,
     pub refresh: bool,
+}
+
+impl std::fmt::Debug for LoginInfo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LoginInfo")
+            .field(
+                "cookie_info",
+                &if self.cookie_info.is_null() {
+                    "[unset]"
+                } else {
+                    "[redacted]"
+                },
+            )
+            .field("sso", &self.sso)
+            .field("token_info", &self.token_info)
+            .field("platform", &self.platform)
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for TokenInfo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use crate::config::secret;
+        f.debug_struct("TokenInfo")
+            .field("access_token", &secret(&self.access_token))
+            .field("expires_in", &self.expires_in)
+            .field("mid", &self.mid)
+            .field("refresh_token", &secret(&self.refresh_token))
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for OAuthInfo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OAuthInfo")
+            .field("mid", &self.mid)
+            .field("access_token", &crate::config::secret(&self.access_token))
+            .field("expires_in", &self.expires_in)
+            .field("refresh", &self.refresh)
+            .finish()
+    }
 }
 
 #[derive(Clone)]
@@ -1584,6 +1628,45 @@ pub fn stream_thumbnail_url(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn login_and_token_debug_never_contains_a_token_or_cookie() {
+        let token_info = TokenInfo {
+            access_token: "synthetic-access-token-b1".into(),
+            expires_in: 60,
+            mid: 1,
+            refresh_token: "synthetic-refresh-token-b2".into(),
+        };
+        let login = LoginInfo {
+            cookie_info: serde_json::json!({"cookies": [{"name": "SESSDATA", "value": "synthetic-sessdata-b3"}]}),
+            sso: Vec::new(),
+            token_info: token_info.clone(),
+            platform: None,
+        };
+        let oauth = OAuthInfo {
+            mid: 1,
+            access_token: "synthetic-access-token-b4".into(),
+            expires_in: 60,
+            refresh: false,
+        };
+        for text in [
+            format!("{login:#?}"),
+            format!("{token_info:?}"),
+            format!("{oauth:?}"),
+            format!("{:?}", ResponseValue::Login(login.clone())),
+            format!("{:?}", ResponseValue::OAuth(oauth.clone())),
+        ] {
+            for value in [
+                "synthetic-access-token-b1",
+                "synthetic-refresh-token-b2",
+                "synthetic-sessdata-b3",
+                "synthetic-access-token-b4",
+            ] {
+                assert!(!text.contains(value), "{value} leaked into Debug output");
+            }
+            assert!(text.contains("[redacted]"));
+        }
+    }
 
     #[tokio::test]
     async fn history_requests_require_a_cookie_and_the_configured_room() {

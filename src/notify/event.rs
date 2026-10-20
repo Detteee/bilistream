@@ -97,7 +97,7 @@ pub struct LiveInfo {
     /// Display name from the watch list.
     pub name: String,
     pub title: Option<String>,
-    /// Channel and legacy account marks written only after delivery.
+    /// The episode's channel and per-account marks, written only after delivery.
     pub episode_keys: Vec<String>,
 }
 

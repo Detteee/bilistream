@@ -562,10 +562,65 @@ pub(crate) fn exit_status(status: &ExitStatus) -> String {
 #[cfg(test)]
 mod tests {
     /// Console prints bypass the tracing redactor, so none of them may format
-    /// a B站 cookie or CSRF value (R11). Scans every `print!`-family call in
-    /// `src/` up to its terminating `;`.
+    /// a cookie, CSRF, stream key, API key, token, AppSecret, openid,
+    /// password or proxy value (R0.4/R11). Scans every `print!`-family call in
+    /// `src/` up to its terminating `;`. Only what the call formats is
+    /// checked: the code outside string literals plus each `{...}`
+    /// placeholder inside them. Static message text (a help screen naming
+    /// `--password`, a hint naming YouTube) prints no value, so it is skipped
+    /// instead of narrowing the words.
     #[test]
-    fn no_console_print_formats_a_cookie_or_csrf_value() {
+    fn no_console_print_formats_a_secret_value() {
+        fn placeholders(literal: &str, out: &mut String) {
+            let mut rest = literal;
+            while let Some(at) = rest.find('{') {
+                if rest[at + 1..].starts_with('{') {
+                    rest = &rest[at + 2..];
+                    continue;
+                }
+                let end = rest[at..].find('}').map_or(rest.len(), |e| at + e);
+                out.push_str(&rest[at + 1..end]);
+                out.push(' ');
+                rest = &rest[(end + 1).min(rest.len())..];
+            }
+        }
+        /// The call with string literals replaced by their placeholders.
+        fn formatted(call: &str) -> String {
+            let b = call.as_bytes();
+            let ident = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
+            let mut out = String::new();
+            let mut i = 0;
+            while i < b.len() {
+                if b[i] == b'r' && (i == 0 || !ident(b[i - 1])) {
+                    let mut j = i + 1;
+                    while j < b.len() && b[j] == b'#' {
+                        j += 1;
+                    }
+                    if j < b.len() && b[j] == b'"' {
+                        let close = format!("\"{}", "#".repeat(j - i - 1));
+                        let start = j + 1;
+                        let end = call[start..].find(&close).map_or(b.len(), |e| start + e);
+                        placeholders(&call[start..end], &mut out);
+                        i = (end + close.len()).min(b.len());
+                        continue;
+                    }
+                }
+                if b[i] == b'"' {
+                    let mut j = i + 1;
+                    while j < b.len() && b[j] != b'"' {
+                        j += if b[j] == b'\\' { 2 } else { 1 };
+                    }
+                    placeholders(&call[i + 1..j.min(b.len())], &mut out);
+                    i = j + 1;
+                    continue;
+                }
+                if b[i].is_ascii() {
+                    out.push(b[i] as char);
+                }
+                i += 1;
+            }
+            out
+        }
         fn files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
             for entry in std::fs::read_dir(dir).unwrap() {
                 let path = entry.unwrap().path();
@@ -582,7 +637,27 @@ mod tests {
             concat!("print", "!("),
             concat!("eprint", "!("),
         ];
-        let forbidden = ["bili_jct", "sessdata", "csrf"];
+        let forbidden = [
+            "bili_jct",
+            "sessdata",
+            "csrf",
+            "rtmp_key",
+            "user_session",
+            "cookie",
+            "api_key",
+            "holodex",
+            "riot",
+            "youtube",
+            "jwt",
+            "token",
+            "secret",
+            "openid",
+            "password",
+            "proxy",
+        ];
+        assert!(formatted(r#"x!("--password {{x}} {key}", a.b)"#).contains("key"));
+        assert!(!formatted(r#"x!("--password {{x}}", a)"#).contains("password"));
+        assert!(formatted(r##"x!(r#"{user_session:?}"#)"##).contains("user_session"));
         let mut paths = Vec::new();
         files(
             &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
@@ -597,7 +672,7 @@ mod tests {
                 while let Some(at) = rest.find(name) {
                     let call = &rest[at..];
                     let call = &call[..call.find(';').unwrap_or(call.len())];
-                    let lower = call.to_ascii_lowercase();
+                    let lower = formatted(call).to_ascii_lowercase();
                     if forbidden.iter().any(|word| lower.contains(word)) {
                         offenders.push(format!(
                             "{}: {}",

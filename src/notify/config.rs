@@ -78,7 +78,9 @@ impl Default for NotifyConfig {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+/// `Debug` is manual: the AppID is write-only (only whether it is set) and
+/// proxy userinfo is masked.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
 #[serde(default)]
 pub struct QqNotifyConfig {
     /// Not secret.
@@ -90,6 +92,18 @@ pub struct QqNotifyConfig {
     pub proxy: Option<String>,
     /// The notify sender keeps the QQ gateway session open.
     pub keep_online: bool,
+}
+
+impl std::fmt::Debug for QqNotifyConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("QqNotifyConfig")
+            .field("app_id_set", &!self.app_id.is_empty())
+            .field("api_base", &self.api_base)
+            .field("token_url", &self.token_url)
+            .field("proxy", &crate::config::mask_proxy_opt(&self.proxy))
+            .field("keep_online", &self.keep_online)
+            .finish()
+    }
 }
 
 impl Default for QqNotifyConfig {
@@ -219,6 +233,30 @@ pub fn endpoint_allowed(url: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn qq_config_debug_hides_the_appid_and_proxy_userinfo() {
+        let cfg = QqNotifyConfig {
+            app_id: "synthetic-appid-6f02".into(),
+            proxy: Some("http://synthetic-qq-user:synthetic-qq-pass@proxy.example:3128".into()),
+            ..Default::default()
+        };
+        let notify = NotifyConfig {
+            qq: cfg.clone(),
+            ..Default::default()
+        };
+        for text in [
+            format!("{cfg:?}"),
+            format!("{cfg:#?}"),
+            format!("{notify:?}"),
+        ] {
+            assert!(!text.contains("synthetic-appid-6f02"), "{text}");
+            assert!(text.contains("app_id_set: true"), "{text}");
+            assert!(!text.contains("synthetic-qq-user"), "{text}");
+            assert!(!text.contains("synthetic-qq-pass"), "{text}");
+            assert!(text.contains("[redacted]@proxy.example:3128"), "{text}");
+        }
+    }
 
     #[test]
     fn defaults_load_from_an_empty_record_and_validate() {

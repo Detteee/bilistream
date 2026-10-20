@@ -2086,3 +2086,17 @@ fn bodies_shaped_by_28a20792_still_deserialize() {
     let back = serde_json::to_value(&copy).unwrap();
     assert_eq!(back["holder_seed"], true, "round-trips to a 28a20792 peer");
 }
+
+#[test]
+fn credentials_meta_debug_never_shows_the_appid() {
+    let meta = CredentialsMeta {
+        generation: 3,
+        openid_appid: "synthetic-meta-appid-7c19".into(),
+        updated_by: "a".into(),
+        ..Default::default()
+    };
+    for text in [format!("{meta:?}"), format!("{meta:#?}")] {
+        assert!(!text.contains("synthetic-meta-appid-7c19"), "{text}");
+        assert!(text.contains("openid_appid_set: true"), "{text}");
+    }
+}

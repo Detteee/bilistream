@@ -10,7 +10,8 @@
 //! live. The notice is not tied to whether the relay actually started.
 //!
 //! One notice per channel episode, cluster-wide. All linked platforms share
-//! `stream.live:<kind>:<name>`; old per-account marks are recognized too.
+//! `stream.live:<kind>:<name>`, kept in step with a per-account mark for
+//! each linked account; an open mark on any of them covers the episode.
 //! Only an all-platform offline gap of `END_HOLD_SECS` ends an episode.
 //!
 //! All detection lives in [`LiveWatch::channel_live`], the single call site
@@ -157,8 +158,8 @@ impl ResolvedWatchChannel {
             title: observed
                 .iter()
                 .find_map(|obs| obs.title.clone().filter(|title| !title.trim().is_empty())),
-            // Preserve aliases for old senders and for a renamed configured
-            // subscription to the same account during an ongoing episode.
+            // Carry the channel mark and every per-account mark, so a renamed
+            // configured subscription to the same account keeps its episode.
             episode_keys: self.episode_keys(),
         })
     }
@@ -241,8 +242,9 @@ impl LiveWatch {
         let mut events = Vec::new();
         for channel in watched {
             let keys = channel.episode_keys();
-            // Import a delivered legacy account mark before considering a
-            // new event. Migrating a live installation must remain silent.
+            // Keep the episode's channel and per-account marks in step before
+            // considering a new event: an open mark on any of them covers the
+            // whole episode, and copying it across never sends a notice.
             if can_send {
                 if let Some(at) = channel.resolved_by_accounts(ledger) {
                     ledger.record_resolved(&channel.key(), at);
@@ -709,7 +711,7 @@ mod tests {
     }
 
     #[test]
-    fn staggered_starts_and_legacy_pending_items_do_not_duplicate_a_queued_episode() {
+    fn staggered_starts_and_account_keyed_pending_items_do_not_duplicate_a_queued_episode() {
         let watched = watch();
         let mut lw = LiveWatch::default();
         let mut ledger = NotifyLedger::default();
@@ -766,7 +768,7 @@ mod tests {
     }
 
     #[test]
-    fn an_ongoing_legacy_episode_migrates_silently_and_survives_restart() {
+    fn an_open_account_mark_covers_the_ongoing_episode_silently_and_survives_restart() {
         let watched = watch();
         let mut ledger = NotifyLedger::default();
         ledger.record_notified("stream.live:twitch:somelogin", 900);
@@ -846,7 +848,7 @@ mod tests {
     }
 
     #[test]
-    fn only_senders_migrate_or_close_shared_episode_marks() {
+    fn only_senders_sync_or_close_shared_episode_marks() {
         let mut ledger = NotifyLedger::default();
         ledger.record_notified("stream.live:twitch:somelogin", 900);
         let before = ledger.clone();

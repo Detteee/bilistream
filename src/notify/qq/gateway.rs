@@ -19,7 +19,9 @@ pub const INTENTS: u64 = 1 << 25;
 const MAX_BACKOFF: Duration = Duration::from_secs(300);
 const MAX_FRAME_BYTES: usize = 64 * 1024;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// `Debug` is manual: openids and message text (which may be the pairing
+/// code) never reach a log or panic message.
+#[derive(Clone, PartialEq, Eq)]
 pub enum GatewayEvent {
     Ready,
     Closed {
@@ -54,6 +56,57 @@ pub enum GatewayEvent {
         accepted: bool,
         at: u64,
     },
+}
+
+impl std::fmt::Debug for GatewayEvent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        const REDACTED: &str = "[redacted]";
+        match self {
+            Self::Ready => f.write_str("Ready"),
+            Self::Closed {
+                reason,
+                fatal,
+                bad_credentials,
+            } => f
+                .debug_struct("Closed")
+                .field("reason", reason)
+                .field("fatal", fatal)
+                .field("bad_credentials", bad_credentials)
+                .finish(),
+            Self::C2c {
+                openid: _,
+                msg_id,
+                content: _,
+                at,
+            } => f
+                .debug_struct("C2c")
+                .field("openid", &REDACTED)
+                .field("msg_id", msg_id)
+                .field("content", &REDACTED)
+                .field("at", at)
+                .finish(),
+            Self::FriendAdd {
+                openid: _,
+                event_id,
+                at,
+            } => f
+                .debug_struct("FriendAdd")
+                .field("openid", &REDACTED)
+                .field("event_id", event_id)
+                .field("at", at)
+                .finish(),
+            Self::ActiveMessages {
+                openid,
+                accepted,
+                at,
+            } => f
+                .debug_struct("ActiveMessages")
+                .field("openid", &openid.as_ref().map(|_| REDACTED))
+                .field("accepted", accepted)
+                .field("at", at)
+                .finish(),
+        }
+    }
 }
 
 fn text(value: &serde_json::Value, key: &str) -> Option<String> {
@@ -498,6 +551,35 @@ mod session_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gateway_event_debug_never_shows_openid_or_content() {
+        const OPENID: &str = "SYNTHETICOPENID0000000000000000AA";
+        for event in [
+            GatewayEvent::C2c {
+                openid: OPENID.into(),
+                msg_id: "synthetic-msg".into(),
+                content: "synthetic-pairing-731942".into(),
+                at: 1,
+            },
+            GatewayEvent::FriendAdd {
+                openid: OPENID.into(),
+                event_id: None,
+                at: 1,
+            },
+            GatewayEvent::ActiveMessages {
+                openid: Some(OPENID.into()),
+                accepted: true,
+                at: 1,
+            },
+        ] {
+            for text in [format!("{event:?}"), format!("{event:#?}")] {
+                assert!(!text.contains(OPENID), "{text}");
+                assert!(!text.contains("synthetic-pairing-731942"), "{text}");
+                assert!(text.contains("[redacted]"), "{text}");
+            }
+        }
+    }
 
     #[test]
     fn parses_c2c_message_with_openid_and_msg_id() {

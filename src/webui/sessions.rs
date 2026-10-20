@@ -27,10 +27,10 @@ struct Credential {
     password: Option<String>,
 }
 
+/// Not `deny_unknown_fields`: a `password_tag` key left in a record by an
+/// older build loads, is ignored, and is dropped on the next write.
 #[derive(Default, Serialize, Deserialize)]
 struct Records {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    password_tag: Option<String>, // v2 migration only; never an authority after import
     #[serde(default)]
     credential_revision: Option<u64>,
     tokens: HashMap<String, u64>,
@@ -167,19 +167,19 @@ impl Sessions {
                     if tx.read(PASSWORD_RECORD)?.is_some() {
                         return Err(conflict());
                     }
-                    let mut records = decode(tx.read(RECORD)?)?;
-                    let tag = digest(format!("bilistream-password-v2\0{password}").as_bytes());
-                    if records.password_tag.as_deref() != Some(&tag) {
-                        records.tokens.clear();
-                    }
-                    records.credential_revision = Some(tx.write(
-                        PASSWORD_RECORD,
-                        serde_json::to_value(Credential {
-                            version: 1,
-                            password: Some(password),
-                        })?,
-                    )?);
-                    records.password_tag = None;
+                    // A malformed record still fails startup; any tokens it
+                    // holds predate this password and are never carried over.
+                    decode(tx.read(RECORD)?)?;
+                    let records = Records {
+                        credential_revision: Some(tx.write(
+                            PASSWORD_RECORD,
+                            serde_json::to_value(Credential {
+                                version: 1,
+                                password: Some(password),
+                            })?,
+                        )?),
+                        ..Records::default()
+                    };
                     tx.write(RECORD, serde_json::to_value(records)?)?;
                     Ok(())
                 })?;
@@ -293,7 +293,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn migration_restart_revocation_conflicts_and_rollback() {
+    fn bootstrap_restart_revocation_conflicts_and_failed_transaction() {
         let root = std::env::temp_dir().join(format!(
             "bilistream-password-sessions-{}",
             std::process::id()
@@ -301,12 +301,19 @@ mod tests {
         let open = || Store::open(root.join("data"), root.join("key/master")).unwrap();
         let store = open();
         let token = new_token().unwrap();
+        // A pre-password session record (v2 shape, password tag included).
         store.write(RECORD, serde_json::json!({"password_tag": digest(b"bilistream-password-v2\0first"), "tokens": {digest(token.as_bytes()): 10000}})).unwrap();
         let sessions = Sessions::open(store.clone(), || Ok(None)).unwrap();
         assert!(sessions.snapshot().unwrap().revision.is_none());
         drop(sessions);
         let sessions = Sessions::open(store.clone(), || Ok(Some("first".into()))).unwrap();
-        assert!(sessions.contains(&token, 5));
+        assert!(
+            !sessions.contains(&token, 5),
+            "a session from before the password record needs one fresh login"
+        );
+        let stored = store.read(RECORD).unwrap().unwrap().value;
+        assert!(stored.get("password_tag").is_none());
+        assert_eq!(stored["tokens"], serde_json::json!({}));
         let revision = sessions.snapshot().unwrap().revision;
         let second = sessions.issue(revision, Some(&token), 10).unwrap();
         assert!(!sessions.contains(&token, 11));
@@ -416,25 +423,57 @@ mod tests {
     }
 
     #[test]
-    fn login_recovers_a_session_record_rewritten_by_an_older_binary() {
+    fn a_28a20792_session_record_with_a_password_tag_loads_and_the_tag_is_ignored() {
+        let root =
+            std::env::temp_dir().join(format!("bilistream-password-tag-{}", std::process::id()));
+        let store = Store::open(root.join("data"), root.join("key/master")).unwrap();
+        let sessions = Sessions::open(store.clone(), || Ok(Some("synthetic-pass".into()))).unwrap();
+        let revision = sessions.snapshot().unwrap().revision.unwrap();
+        // 28a20792's record shape, still carrying a leftover tag.
+        let token = new_token().unwrap();
+        store
+            .write(
+                RECORD,
+                serde_json::json!({
+                    "password_tag": digest(b"bilistream-password-v2\0synthetic-old"),
+                    "credential_revision": revision,
+                    "tokens": {digest(token.as_bytes()): 10000},
+                }),
+            )
+            .unwrap();
+        drop(sessions);
+        let sessions =
+            Sessions::open(store.clone(), || panic!("saved state ignores bootstrap")).unwrap();
+        assert!(sessions.contains(&token, 11), "the tag plays no part");
+        let next = sessions.issue(Some(revision), None, 12).unwrap();
+        assert!(sessions.contains(&token, 13));
+        assert!(sessions.contains(&next, 13));
+        assert!(store
+            .read(RECORD)
+            .unwrap()
+            .unwrap()
+            .value
+            .get("password_tag")
+            .is_none());
+        drop((sessions, store));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn login_starts_a_fresh_record_when_the_stored_one_has_no_credential_revision() {
         let root = std::env::temp_dir().join(format!(
-            "bilistream-password-rollback-{}",
+            "bilistream-password-unbound-{}",
             std::process::id()
         ));
         let store = Store::open(root.join("data"), root.join("key/master")).unwrap();
         let sessions = Sessions::open(store.clone(), || Ok(Some("saved".into()))).unwrap();
         let revision = sessions.snapshot().unwrap().revision;
         let before = sessions.issue(revision, None, 10).unwrap();
-        // A rolled-back binary ignores webui-password and rewrites the session
-        // record in its own v2 shape, without a credential revision.
         let stale = new_token().unwrap();
         store
             .write(
                 RECORD,
-                serde_json::json!({
-                    "password_tag": digest(b"bilistream-password-v2\0saved"),
-                    "tokens": {digest(stale.as_bytes()): 10000},
-                }),
+                serde_json::json!({"tokens": {digest(stale.as_bytes()): 10000}}),
             )
             .unwrap();
         assert!(!sessions.contains(&before, 11));

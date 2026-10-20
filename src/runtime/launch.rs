@@ -7,7 +7,7 @@ use crate::plugins::stop_danmaku;
 use std::time::Duration;
 use tracing_subscriber::fmt;
 
-#[derive(Debug)]
+/// `Debug` is manual: the panel password shows only whether it is set.
 struct LaunchArgs {
     bind: String,
     password: Option<String>,
@@ -16,6 +16,20 @@ struct LaunchArgs {
     port: u16,
     ffmpeg_log_level: String,
     tray: bool,
+}
+
+impl std::fmt::Debug for LaunchArgs {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LaunchArgs")
+            .field("bind", &self.bind)
+            .field("password", &crate::config::secret_opt(&self.password))
+            .field("password_file", &self.password_file)
+            .field("restart_password_file", &self.restart_password_file)
+            .field("port", &self.port)
+            .field("ffmpeg_log_level", &self.ffmpeg_log_level)
+            .field("tray", &self.tray)
+            .finish()
+    }
 }
 
 #[derive(Debug)]
@@ -687,6 +701,22 @@ fn show_windows_notification(port: u16) -> Result<(), Box<dyn std::error::Error>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn launch_args_debug_never_contains_the_password() {
+        let args = LaunchArgs {
+            bind: "127.0.0.1".into(),
+            password: Some("synthetic-panel-password-9".into()),
+            password_file: None,
+            restart_password_file: None,
+            port: 1,
+            ffmpeg_log_level: "error".into(),
+            tray: false,
+        };
+        let text = format!("{:?}", ParseOutcome::Launch(args));
+        assert!(!text.contains("synthetic-panel-password-9"), "{text}");
+        assert!(text.contains("password: \"[redacted]\""), "{text}");
+    }
     use crate::logging::test_capture::CapturedLogs as TestOutput;
     use std::io::Write as _;
 

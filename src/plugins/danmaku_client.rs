@@ -210,7 +210,8 @@ fn decode_danmaku_messages(data: &[u8]) -> Result<Vec<DanmakuMessage>> {
     Ok(messages)
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// `Debug` is manual: cookie values show only whether they are set.
+#[derive(Clone, Serialize, Deserialize)]
 pub struct DanmakuConfig {
     pub room_id: u64,
     pub sessdata: String,
@@ -218,6 +219,20 @@ pub struct DanmakuConfig {
     pub dede_user_id: String,
     pub dede_user_id_ckmd5: String,
     pub buvid3: String,
+}
+
+impl std::fmt::Debug for DanmakuConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use crate::config::secret;
+        f.debug_struct("DanmakuConfig")
+            .field("room_id", &self.room_id)
+            .field("sessdata", &secret(&self.sessdata))
+            .field("bili_jct", &secret(&self.bili_jct))
+            .field("dede_user_id", &secret(&self.dede_user_id))
+            .field("dede_user_id_ckmd5", &secret(&self.dede_user_id_ckmd5))
+            .field("buvid3", &secret(&self.buvid3))
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1012,6 +1027,28 @@ mod tests {
     use super::*;
     use std::io::Write;
     use tracing::instrument::WithSubscriber;
+
+    #[test]
+    fn danmaku_config_debug_never_contains_cookie_values() {
+        let config = DanmakuConfig {
+            room_id: 1,
+            sessdata: "synthetic-sessdata-d4".into(),
+            bili_jct: "synthetic-csrf-d5".into(),
+            dede_user_id: "synthetic-uid-d6".into(),
+            dede_user_id_ckmd5: String::new(),
+            buvid3: "synthetic-buvid-d7".into(),
+        };
+        let text = format!("{config:#?}");
+        for value in [
+            "synthetic-sessdata-d4",
+            "synthetic-csrf-d5",
+            "synthetic-uid-d6",
+            "synthetic-buvid-d7",
+        ] {
+            assert!(!text.contains(value), "{value} leaked into Debug output");
+        }
+        assert!(text.contains("[redacted]") && text.contains("[empty]"));
+    }
 
     fn client_for_messages() -> BilibiliDanmakuClient {
         BilibiliDanmakuClient::new(
