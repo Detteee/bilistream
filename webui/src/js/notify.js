@@ -819,7 +819,6 @@ function applySettings(data, { force }) {
   settings = data;
   baseline = configToForm(data.config);
   // F rev 3: the AppID is write-only; its value never goes in the input.
-  // N2: only when the backend reports appid_set; older backends unchanged.
   baseline.app_id = '';
   if (force || !previous) fillForm(baseline);
   else {
@@ -904,7 +903,7 @@ async function save() {
     setResult('');
   } catch (error) {
     // This is the settings PUT even when it also carries an openid. Only
-    // the dedicated bind route keeps legacy uncoded-503 behavior.
+    // the dedicated bind route maps an uncoded 503 to 通知服务未启动 (§16.11).
     handleRefusal(error, 'config');
     liveEventsError = liveEventsFieldError(error);
     if (liveEventsError) $('notify-live-events')?.focus();

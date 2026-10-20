@@ -6,8 +6,9 @@
 //! `storage::NAMES`: it is never synced and not part of backups.
 //!
 //! The admin openid is not here: it is write-only toward the browser and
-//! sealed in its own record `notify-openid` (`store::load_openid`). An older
-//! `qq.admin_openid` field is migrated out on the first load.
+//! sealed in its own record `notify-openid` (`store::load_openid`). A plain
+//! `qq.admin_openid` left by a pre-SQL build is reported, never migrated
+//! (see `store.rs`).
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;

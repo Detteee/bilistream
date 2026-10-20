@@ -114,3 +114,16 @@ test('no live-event capability check remains in the source', async () => {
     assert.doesNotMatch(src, /liveEventsSupported|supported: liveEventsSupported/, file);
   }
 });
+
+test('the 通知类型 group, hidden in the markup, is shown after a render', async () => {
+  const e = els();
+  e.group.hidden = true;
+  const mock = createNotifyState(() => 1_790_000_000);
+  mock.setMode('ok');
+  const settings = mock.route('GET', '/api/notify')[1].data;
+  const status = mock.route('GET', '/api/notify/status')[1].data;
+  renderLiveEventsInto(doc, e, { status, settings, statusAt: 1_000_000, now: 1_000_000 });
+  assert.equal(e.group.hidden, false);
+  const html = await readFile(new URL('../src/index.html', import.meta.url), 'utf8');
+  assert.match(html, /id="notify-types" hidden/, 'markup still starts hidden, so this render is what reveals it');
+});

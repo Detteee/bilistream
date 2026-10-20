@@ -111,12 +111,12 @@ export function watchForSave(list, settings) {
 export function watchRows(list, catalog) {
   const rows = new Map();
   for (const entry of list) {
-    const configured = entry.kind === 'configured' ? catalog.find(c => c.name === entry.name)
-      : !entry.kind ? catalog.find(c => c.targets?.some(t => watchKey(t) === watchKey(entry))) : null;
-    const key = entry.kind ? watchKey(entry) : configured ? watchKey(configured) : `legacy:${entry.name || watchKey(entry)}`;
+    // Every entry is tagged `configured` or `manual` (serde tag in watch_config.rs).
+    const configured = entry.kind === 'configured' ? catalog.find(c => c.name === entry.name) : null;
+    const key = watchKey(entry);
     if (!rows.has(key)) rows.set(key, {
       key, name: configured?.name || entry.name || '未命名频道',
-      historical: entry.kind === 'manual' || (!entry.kind && !configured),
+      historical: entry.kind === 'manual',
       unavailable: !configured,
       missing: entry.kind === 'configured' && !configured,
       platforms: [], members: [],

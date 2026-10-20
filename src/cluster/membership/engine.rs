@@ -1609,7 +1609,6 @@ mod openid_departure_tests {
             "bilistream-departure-{}",
             bytes.iter().map(|b| format!("{b:02x}")).collect::<String>()
         ));
-        std::fs::create_dir_all(root.join("legacy")).unwrap();
         let store = Store::open(root.join("data"), root.join("keys/master.key")).unwrap();
         let set = || crate::notify::store::OpenidWrite {
             change: crate::notify::store::OpenidChange::Set {

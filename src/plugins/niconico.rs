@@ -4,8 +4,6 @@ use regex::Regex;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::error::Error;
-#[cfg(test)]
-use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
 
@@ -233,58 +231,15 @@ fn streamlink_auth_args(cfg: &NiconicoConfig) -> Result<Vec<String>, Box<dyn Err
     Ok(args)
 }
 
-/// Direct value takes precedence; old installations can keep their Netscape path.
+/// `user_session` is the only Niconico credential. A stored
+/// `niconico_cookies.txt` left by an older build is never read.
 pub(crate) fn configured_user_session(cfg: &NiconicoConfig) -> Result<String, Box<dyn Error>> {
-    if let Some(session) = cfg
-        .user_session
+    cfg.user_session
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
-    {
-        return Ok(session.to_string());
-    }
-    if cfg
-        .cookies_file
-        .as_deref()
-        .is_some_and(|path| !path.is_empty())
-    {
-        if let Ok(text) = crate::storage::read_text("niconico_cookies.txt") {
-            return user_session_from_cookie_text(&text);
-        }
-    }
-    Err("Niconico user_session 未配置，请在系统设置填写".into())
-}
-
-#[cfg(test)]
-pub(crate) fn user_session_from_cookies_file(path: &Path) -> Result<String, Box<dyn Error>> {
-    let content = std::fs::read_to_string(path)?;
-    user_session_from_cookie_text(&content)
-}
-
-fn user_session_from_cookie_text(content: &str) -> Result<String, Box<dyn Error>> {
-    for line in content.lines() {
-        let Some(record) = netscape_cookie_record(line) else {
-            continue;
-        };
-        let parts: Vec<&str> = record.split('\t').collect();
-        if parts.len() >= 7 && parts[5] == "user_session" && !parts[6].is_empty() {
-            return Ok(parts[6].to_string());
-        }
-    }
-    Err("niconico cookies file is missing user_session".into())
-}
-
-/// Cookie-Editor / curl mark HttpOnly cookies with a `#HttpOnly_` prefix on
-/// the domain. Those are still records, not comments.
-fn netscape_cookie_record(line: &str) -> Option<&str> {
-    let trimmed = line.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    if let Some(record) = trimmed.strip_prefix("#HttpOnly_") {
-        return (!record.is_empty()).then_some(record);
-    }
-    (!trimmed.starts_with('#')).then_some(trimmed)
+        .map(str::to_string)
+        .ok_or_else(|| "Niconico user_session 未配置，请在系统设置填写".into())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -778,7 +733,6 @@ async fn get_niconico_status_via_streamlink(
 mod tests {
     use super::*;
     use chrono::Timelike;
-    use std::io::Write;
 
     #[test]
     fn normalize_live_id_strips_watch_url() {
@@ -1045,71 +999,16 @@ mod tests {
     }
 
     #[test]
-    fn direct_session_is_the_only_auth_cookie_and_wins_over_legacy_file() {
+    fn user_session_is_the_only_niconico_credential() {
         let cfg = NiconicoConfig {
-            user_session: Some("fake-session-for-test".into()),
-            cookies_file: Some("missing-file-for-test".into()),
+            user_session: Some(" fake-session-for-test ".into()),
             ..Default::default()
         };
         assert_eq!(
             streamlink_auth_args(&cfg).unwrap(),
             vec!["--niconico-user-session", "fake-session-for-test"]
         );
-    }
-
-    #[test]
-    fn user_session_reads_netscape_cookie_file() {
-        let dir = std::env::temp_dir().join(format!(
-            "bilistream-nico-cookie-test-{}",
-            std::process::id()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("cookies.txt");
-        let mut file = std::fs::File::create(&path).unwrap();
-        writeln!(
-            file,
-            "# Netscape HTTP Cookie File\n.nicovideo.jp\tTRUE\t/\tTRUE\t0\tuser_session\tsession-value"
-        )
-        .unwrap();
-
-        let session = user_session_from_cookies_file(&path).unwrap();
-        assert_eq!(session, "session-value");
-
-        std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
-    fn user_session_missing_cookie_returns_error() {
-        let dir = std::env::temp_dir().join(format!(
-            "bilistream-nico-cookie-missing-{}",
-            std::process::id()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("cookies.txt");
-        std::fs::write(&path, "# empty\n").unwrap();
-
-        assert!(user_session_from_cookies_file(&path).is_err());
-        std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
-    fn user_session_reads_httponly_netscape_line() {
-        let dir = std::env::temp_dir().join(format!(
-            "bilistream-nico-cookie-httponly-{}",
-            std::process::id()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("cookies.txt");
-        std::fs::write(
-            &path,
-            "# Netscape HTTP Cookie File\n#HttpOnly_.nicovideo.jp\tTRUE\t/\tTRUE\t0\tuser_session\thttponly-session\n.nicovideo.jp\tTRUE\t/\tTRUE\t0\tnicosid\tsid\n",
-        )
-        .unwrap();
-
-        let session = user_session_from_cookies_file(&path).unwrap();
-        assert_eq!(session, "httponly-session");
-
-        std::fs::remove_dir_all(dir).unwrap();
+        assert!(configured_user_session(&NiconicoConfig::default()).is_err());
     }
 
     fn escaped_embedded_data(huge: &str) -> String {

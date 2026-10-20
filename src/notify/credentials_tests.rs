@@ -1866,17 +1866,16 @@ fn the_generation_check_reads_the_top_level_base_generation_only() {
     ));
 }
 
-/// Rule 1 is on: the switch and its function.
+/// Rule 1 is unconditional: a save without `base_generation` is missing it.
 #[test]
-fn base_generation_required_is_on_and_is_a_separate_switch() {
+fn base_generation_is_always_required_for_a_credential_save() {
     let save = save_req(None, None, Some(SECRET2));
-    const { assert!(REQUIRE_BASE_GENERATION) };
-    assert!(base_generation_missing(&save, REQUIRE_BASE_GENERATION));
-    assert!(base_generation_missing(&save, true));
-    assert!(!base_generation_missing(
-        &save_req(Some(1), None, Some(SECRET2)),
-        true
-    ));
+    assert!(base_generation_missing(&save));
+    assert!(!base_generation_missing(&save_req(
+        Some(1),
+        None,
+        Some(SECRET2)
+    )));
 }
 
 /// 清除 AppSecret: the clear PUT (clear_app_secret, expected_secret_revision
@@ -1904,7 +1903,7 @@ fn clearing_the_app_secret_checks_bumps_and_syncs_the_generation() {
             .unwrap()
             .expect("a clear is a change");
         assert!(save.clear_appsecret);
-        let missing = base_generation_missing(&save, REQUIRE_BASE_GENERATION);
+        let missing = base_generation_missing(&save);
         strip_credentials(&mut update);
         (
             missing,
@@ -1925,10 +1924,7 @@ fn clearing_the_app_secret_checks_bumps_and_syncs_the_generation() {
     ));
     assert_eq!(snapshot(&a.1), before, "stale clear changes nothing");
     let save = credential_part(&a.1, &clear(None)).unwrap().unwrap();
-    assert!(
-        base_generation_missing(&save, true),
-        "the switch covers the clear"
-    );
+    assert!(base_generation_missing(&save), "rule 1 covers the clear");
     let (missing, ok) = run(clear(Some(before.4)));
     assert!(!missing);
     ok.unwrap();
@@ -1947,7 +1943,7 @@ fn clearing_the_app_secret_checks_bumps_and_syncs_the_generation() {
     }))
     .unwrap();
     let save = credential_part(&a2.1, &update).unwrap().unwrap();
-    assert!(base_generation_missing(&save, REQUIRE_BASE_GENERATION));
+    assert!(base_generation_missing(&save));
 }
 
 /// 清除 AppSecret keeps the AppID and the openid (no rebind) on every node;
@@ -2025,7 +2021,7 @@ async fn a_save_or_clear_without_base_generation_gets_400() {
     ] {
         let update: UpdateNotify = serde_json::from_value(body).unwrap();
         let save = credential_part(&a.1, &update).unwrap().unwrap();
-        assert!(base_generation_missing(&save, REQUIRE_BASE_GENERATION));
+        assert!(base_generation_missing(&save));
         let response = base_generation_required();
         assert_eq!(response.status(), axum::http::StatusCode::BAD_REQUEST);
         let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
@@ -2035,4 +2031,58 @@ async fn a_save_or_clear_without_base_generation_gets_400() {
         assert_eq!(json["data"]["code"], "base_generation_required");
     }
     assert_eq!(snapshot(&a.1), before);
+}
+
+/// A 28a20792 member forwards a watch-only save with `base_generation: null`
+/// (rule 1 applies to browser saves only). The holder still takes it, with
+/// the body exactly as that build serializes it.
+#[test]
+fn a_28a20792_watch_only_forward_with_null_base_generation_is_accepted() {
+    let a = holder("a");
+    let before = snapshot(&a.1);
+    let members = vec!["a".to_string(), "b".to_string()];
+    let body = serde_json::to_vec(&serde_json::json!({
+        "base_generation": null,
+        "appid": null,
+        "appsecret": null,
+        "clear_appsecret": false,
+        "watch": {"base_revision": 0, "enabled": false, "channels": []}
+    }))
+    .unwrap();
+    let outcome = serve_forward(&a.1, "b", &members, &body, true, "a", NOW)
+        .expect("a watch-only forward needs no base_generation");
+    assert!(!outcome.changed, "no credential change");
+    assert!(outcome.watch_revision.is_some());
+    assert_eq!(snapshot(&a.1), before, "credentials untouched");
+}
+
+/// `CredentialSave` and `CredentialsCopy` refuse unknown fields, so their
+/// shapes must stay exactly what 28a20792 sends, `holder_seed` included.
+#[test]
+fn bodies_shaped_by_28a20792_still_deserialize() {
+    let save: CredentialSave = serde_json::from_value(serde_json::json!({
+        "base_generation": 3,
+        "appid": APPID2,
+        "appsecret": null,
+        "clear_appsecret": false,
+        "watch": {"base_revision": 2, "enabled": true, "channels": []}
+    }))
+    .unwrap();
+    assert_eq!(save.base_generation, Some(3));
+    assert!(save.watch.is_some());
+    let copy: CredentialsCopy = serde_json::from_value(serde_json::json!({
+        "generation": 1,
+        "appid": APPID,
+        "appsecret": SECRET,
+        "openid_appid": APPID,
+        "updated_by": "b",
+        "updated_at": NOW,
+        "holder_seed": true,
+        "appsecret_cleared": false
+    }))
+    .unwrap();
+    assert!(copy.holder_seed);
+    assert_eq!(copy.generation, 1);
+    let back = serde_json::to_value(&copy).unwrap();
+    assert_eq!(back["holder_seed"], true, "round-trips to a 28a20792 peer");
 }

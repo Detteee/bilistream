@@ -319,13 +319,6 @@ pub enum EventKind {
         reason: String,
         latched: bool,
     },
-    Generic {
-        kind: &'static str,
-        subject: Option<String>,
-        severity: Severity,
-        title: String,
-        detail: String,
-    },
     NotifySent {
         key: String,
         dedup: String,
@@ -371,7 +364,6 @@ impl std::fmt::Debug for EventKind {
             Self::OwnerChanged { .. } => "OwnerChanged",
             Self::QuorumChanged { .. } => "QuorumChanged",
             Self::LocalFault { .. } => "LocalFault",
-            Self::Generic { .. } => "Generic",
             Self::NotifySent { .. } => "NotifySent",
         };
         f.debug_struct(name).finish_non_exhaustive()

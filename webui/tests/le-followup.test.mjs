@@ -118,5 +118,5 @@ test('mock active_push states', () => {
   }
   assert.deepEqual(results, { 'push-ok': 'ok', 'push-no-permission': 'no_permission', 'push-rate-limited': 'rate_limited', 'push-null': null });
   m.setMode('ok');
-  assert.ok(!('active_push' in m.route('GET', '/api/notify/status')[1].data), 'other modes: older backend, no row');
+  assert.ok(!('active_push' in m.route('GET', '/api/notify/status')[1].data), 'modes without active_push render no row');
 });

@@ -728,7 +728,6 @@ fn applying_monitored_config_syncs_channels_and_preserves_runtime_toggles() {
     local.priority_channel.auto_restart = false;
     local.niconico.enable_monitor = true;
     local.niconico.user_session = Some("local-session".into());
-    local.niconico.cookies_file = Some("local-nico-cookie".into());
     local.niconico.proxy = Some("http://user:local-nico@proxy.invalid".into());
     local.youtube.cookies_file = Some("local-cookie-source".into());
     local.youtube.cookies_from_browser = Some("firefox".into());
@@ -757,7 +756,6 @@ fn applying_monitored_config_syncs_channels_and_preserves_runtime_toggles() {
     source.niconico.live_id = "lv351182284".to_string();
     source.niconico.area_v2 = 235;
     source.niconico.user_session = Some("remote-session".into());
-    source.niconico.cookies_file = Some("remote-nico-cookie".into());
     source.niconico.proxy = Some("http://user:remote-nico@proxy.invalid".into());
     source.youtube.cookies_file = Some("remote-cookie-source".into());
     source.youtube.proxy = Some("http://user:remote-secret@proxy.invalid".into());
@@ -796,10 +794,6 @@ fn applying_monitored_config_syncs_channels_and_preserves_runtime_toggles() {
     assert_eq!(
         local.niconico.user_session.as_deref(),
         Some("local-session")
-    );
-    assert_eq!(
-        local.niconico.cookies_file.as_deref(),
-        Some("local-nico-cookie")
     );
     assert!(local
         .niconico
@@ -2655,4 +2649,38 @@ async fn removal_finish_lets_the_replacement_resume_while_the_source_stays_down(
         Some("c")
     );
     server.abort();
+}
+
+/// Neither peer settings route carries the Niconico cookie file: 28a20792 put
+/// no `cookies_file` in `MonitoredConfig` (Niconico travels as scalar
+/// fields) or in `ClusterSettings`, and neither decoder refuses extra keys
+/// (`MonitoredConfig` is not `deny_unknown_fields`). A 28a20792-shaped
+/// payload still decodes and applies, and this build sends no such key.
+#[test]
+fn peer_settings_payloads_never_carry_the_niconico_cookie_file() {
+    let source = config("source", 10);
+    let mut wire = serde_json::to_value(monitored_config_from_config(&source)).unwrap();
+    for (key, value) in wire.as_object().unwrap() {
+        assert!(
+            !(key.starts_with("niconico") && key.contains("cookie")),
+            "{key} on the wire"
+        );
+        if key == "niconico" {
+            panic!("the full Niconico section must not travel: {value}");
+        }
+    }
+    // A 28a20792 peer sends exactly this shape; an unknown extra key from a
+    // future or older peer is tolerated, not an error.
+    wire["niconico_cookies_file"] = serde_json::json!("niconico_cookies.txt");
+    let payload: MonitoredConfig = serde_json::from_value(wire).unwrap();
+    let mut local = config("local", 0);
+    apply_monitored_config_to_config(&mut local, payload);
+    let saved = serde_json::to_value(&local).unwrap();
+    assert!(saved["niconico"].get("cookies_file").is_none());
+
+    let settings = serde_json::to_string(&super::settings_sync::ClusterSettings::from_config(
+        &source.cluster,
+    ))
+    .unwrap();
+    assert!(!settings.contains("niconico"));
 }

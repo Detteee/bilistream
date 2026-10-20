@@ -4,7 +4,6 @@
 // failover alert went out by wakeup; 下播 is still pending), unknown (no budget fields).
 // The ledger (last_admin_msg_id, last_admin_at, passive_replies_used) and the
 // admin openid are never part of any response.
-// legacy: a backend older than §17 — no live_events_enabled and none of the new fields.
 // ny-*: seen from ny, a non-sending node, with jp as the writer (§16.x,
 // Addendum C): bound, pending (jp bound, ny not yet), appsecret (ca lacks
 // its AppSecret), stale (ca heartbeat timed out), old (no readiness fields).

@@ -233,9 +233,9 @@ impl Sessions {
             if snapshot.password.is_none() || snapshot.revision != expected {
                 return Err(conflict());
             }
-            // The password record is the authority. A session record from another
-            // generation (e.g. rewritten by an older binary after a rollback) holds
-            // no valid tokens; start a fresh one rather than refusing every login.
+            // The password record is the authority. A session record bound to
+            // another credential revision holds no valid tokens; start a fresh
+            // one rather than refusing every login.
             if records.credential_revision != expected {
                 records = Records {
                     credential_revision: expected,

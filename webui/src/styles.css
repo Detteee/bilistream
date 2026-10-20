@@ -2069,9 +2069,9 @@ details.setup-platform-card { display: block; }
 .session-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 1rem 2rem; }
 /* Password buttons follow a field grid, not a control group with its own gap. */
 .panel-security-actions { margin: var(--sp-4) 0 var(--sp-2); gap: var(--sp-3); }
-.session-legacy { font-size: .85rem; }
-.session-legacy summary { cursor: pointer; }
-.session-legacy .control-group { margin-top: .75rem; max-width: 36rem; }
+.disclosure { font-size: .85rem; }
+.disclosure summary { cursor: pointer; }
+.disclosure .control-group { margin-top: .75rem; max-width: 36rem; }
 
 @media (min-width: 700px) and (max-width: 1359px) {
   .dashboard-wide-last { grid-column: 1 / -1; }
@@ -2339,7 +2339,7 @@ html:not(.app-ready) #main-page {
   margin-top: var(--sp-3);
 }
 .notify-settings .notify-advanced .control-group {
-  /* .session-legacy caps these at 36rem and adds a top margin. */
+  /* .disclosure caps these at 36rem and adds a top margin. */
   max-width: none;
   margin-top: 0;
 }

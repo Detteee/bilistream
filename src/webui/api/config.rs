@@ -139,7 +139,6 @@ fn config_response(cfg: &Config) -> serde_json::Value {
             "live_id": cfg.niconico.live_id,
             "area_v2": cfg.niconico.area_v2,
             "quality": cfg.niconico.quality,
-            "cookies_file": cfg.niconico.cookies_file,
             "user_session_configured": cfg.niconico.user_session.as_ref().is_some_and(|s| !s.is_empty()),
             "user_session_mask": credential_mask(cfg.niconico.user_session.as_deref().unwrap_or_default()),
             "session_check_enabled": cfg.niconico.session_check_enabled,
@@ -217,7 +216,6 @@ pub struct UpdateConfigRequest {
     twitch_enable_monitor: Option<bool>,
     youtube_cookies_from_browser: Option<String>,
     youtube_cookies_file: Option<String>,
-    niconico_cookies_file: Option<String>,
     niconico_user_session: Option<String>,
     clear_niconico_user_session: Option<bool>,
     niconico_session_check_enabled: Option<bool>,
@@ -365,7 +363,6 @@ fn config_form_values(cfg: &Config) -> serde_json::Value {
         "youtube_cookies_from_browser": cfg.youtube.cookies_from_browser.as_deref().unwrap_or_default().trim(),
         "youtube_cookies_file": cfg.youtube.cookies_file.as_deref().unwrap_or_default().trim(),
         "youtube_deno_path": cfg.youtube.deno_path.as_deref().unwrap_or_default().trim(),
-        "niconico_cookies_file": cfg.niconico.cookies_file.as_deref().unwrap_or_default().trim(),
         "niconico_user_session": "", // write-only: never echo a stored credential
         "clear_niconico_user_session": false,
         "niconico_session_check_enabled": cfg.niconico.session_check_enabled,
@@ -403,7 +400,7 @@ fn cluster_and_niconico_edits_validate_against_the_loaded_configuration() {
     cfg.niconico.proxy = Some(" http://proxy ".into());
     let current = config_form_values(&cfg);
     assert_eq!(current["niconico_proxy"], "");
-    assert_eq!(current["niconico_cookies_file"], "");
+    assert!(current.get("niconico_cookies_file").is_none());
     let expected = HashMap::from([("cluster".into(), current["cluster"].clone())]);
     let patch = json!({"cluster": {"priority": 20}});
     assert!(validate_edit_preconditions(&current, &patch, Some(&expected)).is_ok());
@@ -569,17 +566,7 @@ pub async fn update_config(
         payload.niconico_proxy_keep_password == Some(true),
         payload.expected_secret_revision,
     )?;
-    let legacy_imports = [
-        ("cookies.txt", payload.youtube_cookies_file.clone()),
-        (
-            "niconico_cookies.txt",
-            payload
-                .niconico_cookies_file
-                .clone()
-                .filter(|_| payload.clear_niconico_user_session != Some(true)),
-        ),
-    ];
-    let clear_nico = payload.clear_niconico_user_session == Some(true);
+    let legacy_imports = [("cookies.txt", payload.youtube_cookies_file.clone())];
     let document_edits = tokio::task::spawn_blocking(
         move || -> std::io::Result<Vec<(&'static str, serde_json::Value)>> {
             let mut edits = Vec::new();
@@ -603,12 +590,6 @@ pub async fn update_config(
                     crate::plugins::youtube_cookies::validate_netscape(&text)?;
                     edits.push((name, serde_json::Value::String(text)));
                 }
-            }
-            if clear_nico {
-                edits.push((
-                    "niconico_cookies.txt",
-                    serde_json::Value::String(String::new()),
-                ));
             }
             Ok(edits)
         },
@@ -829,7 +810,6 @@ pub async fn update_config(
     }
     if payload.clear_niconico_user_session == Some(true) {
         cfg.niconico.user_session = None;
-        cfg.niconico.cookies_file = None;
     } else if let Some(session) = payload
         .niconico_user_session
         .as_deref()
@@ -842,16 +822,6 @@ pub async fn update_config(
                 .unwrap_or(session)
                 .to_string(),
         );
-    }
-    if let Some(niconico_cookies_file) = payload
-        .niconico_cookies_file
-        .filter(|_| payload.clear_niconico_user_session != Some(true))
-    {
-        cfg.niconico.cookies_file = if niconico_cookies_file.is_empty() {
-            None
-        } else {
-            Some(niconico_cookies_file)
-        };
     }
 
     if let Some(youtube_deno_path) = payload.youtube_deno_path {
@@ -1206,7 +1176,7 @@ mod tests {
         cfg.bililive.enable_danmaku_command = true;
         let payload = UpdateConfigRequest {
             enable_danmaku_command: Some(true),
-            niconico_cookies_file: Some("niconico_cookies.txt".to_string()),
+            niconico_session_check_enabled: Some(true),
             ..UpdateConfigRequest::default()
         };
 

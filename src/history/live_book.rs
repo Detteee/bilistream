@@ -148,8 +148,8 @@ fn better(a: &SummaryMark, b: &SummaryMark) -> bool {
     }
     // Successful totals are definitive. Within a round terminal failure wins
     // over a claim and the lower claimant wins ties. An abandoned claimant's
-    // delayed failure cannot cancel a newer round, and an older peer's lossy
-    // echo cannot roll a generation back.
+    // delayed failure cannot cancel a newer round, and a stale echo of an
+    // earlier round cannot roll a generation back.
     (
         a.phase == SummaryPhase::Done,
         round(a),
@@ -808,7 +808,7 @@ mod tests {
     }
 
     #[test]
-    fn fresh_legacy_claim_competes_in_first_round_and_expiry_creates_a_later_round() {
+    fn fresh_generation_zero_claim_competes_in_first_round_and_expiry_creates_a_later_round() {
         let mut modern = stopped();
         modern
             .claim(42, "synthetic-broadcast", "b", 100, 60)

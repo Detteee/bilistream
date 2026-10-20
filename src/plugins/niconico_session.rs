@@ -54,11 +54,6 @@ fn configured(cfg: &Config) -> bool {
         .user_session
         .as_deref()
         .is_some_and(|s| !s.trim().is_empty())
-        || cfg
-            .niconico
-            .cookies_file
-            .as_deref()
-            .is_some_and(|s| !s.trim().is_empty())
 }
 fn cached(identity: u64) -> Option<(SessionStatus, Duration)> {
     CHECKED
@@ -76,7 +71,7 @@ pub(crate) fn status(cfg: &Config) -> SessionStatus {
     let Ok(session) = super::niconico::configured_user_session(&cfg.niconico) else {
         return SessionStatus::new(
             SessionState::Unavailable,
-            "无法读取会话，请检查旧 Cookie 文件路径",
+            "无法读取 user_session，请在系统设置重新填写",
         );
     };
     cached(identity(&session, cfg.niconico.proxy.as_deref()))

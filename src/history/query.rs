@@ -1340,7 +1340,7 @@ pub(crate) fn render_stats(parts: &StatsParts) -> serde_json::Value {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub(crate) struct LiveTotals {
     pub watched: Option<i64>,
-    #[serde(default)]
+    /// `summary` or `sample` whenever `watched` is set.
     pub watched_source: Option<String>,
     #[serde(default)]
     pub watched_at: Option<i64>,
@@ -1868,7 +1868,7 @@ fn fill_node_downtime(parts: &mut SummaryParts) {
 }
 
 fn merge_live(into: &mut LiveTotals, incoming: LiveTotals) {
-    // Older peers omit the source field and only send validated summaries.
+    // A validated summary beats a sample; then the newer, then the larger.
     let rank = |l: &LiveTotals| {
         (
             l.watched.is_some() && l.watched_source.as_deref() != Some("sample"),
@@ -1878,9 +1878,7 @@ fn merge_live(into: &mut LiveTotals, incoming: LiveTotals) {
     };
     if rank(&incoming) > rank(into) {
         into.watched = incoming.watched;
-        into.watched_source = incoming
-            .watched_source
-            .or_else(|| incoming.watched.map(|_| "summary".into()));
+        into.watched_source = incoming.watched_source;
         into.watched_at = incoming.watched_at;
     }
     into.danmu = into.danmu.max(incoming.danmu);

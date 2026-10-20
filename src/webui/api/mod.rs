@@ -389,7 +389,7 @@ mod tests {
     }
 
     #[test]
-    fn monitor_toggle_match_requires_legacy_and_platform_flags() {
+    fn monitor_toggle_match_requires_top_level_and_platform_flags() {
         let mut cfg = status_cache_test_config();
         cfg.youtube.enable_monitor = true;
         cfg.enable_youtube_monitor = false;

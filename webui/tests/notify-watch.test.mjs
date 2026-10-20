@@ -121,3 +121,17 @@ test('a stale follow-list base refreshes and is not saved again by itself', () =
     assert.equal(refusal.banner.action.label, '刷新');
   }
 });
+
+test('legacy-tail: watchRows keys every entry by its kind tag, no kind-less fallback', async () => {
+  const { watchRows, watchKey } = await import('../src/js/notify-watch.js');
+  const catalog = [{ name: '主频道', platforms: ['youtube'], targets: [] }];
+  const rows = watchRows([
+    { kind: 'configured', name: '主频道' },
+    { kind: 'manual', name: '旧项', platforms: { twitch: 'abc' } },
+  ], catalog);
+  assert.equal(rows.length, 2);
+  assert.ok(rows.every(r => !r.key.startsWith('legacy:')));
+  assert.equal(rows[0].key, watchKey({ kind: 'configured', name: '主频道' }));
+  assert.equal(rows[1].historical, true);
+  assert.equal(rows[0].historical, false);
+});

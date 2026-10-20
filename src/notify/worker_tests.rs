@@ -24,7 +24,6 @@ fn store() -> (Temp, Arc<Store>) {
         "bilistream-notify-worker-{}",
         bytes.iter().map(|b| format!("{b:02x}")).collect::<String>()
     ));
-    std::fs::create_dir_all(root.join("legacy")).unwrap();
     let store = Store::open(root.join("data"), root.join("keys/master.key")).unwrap();
     (Temp(root), store)
 }
@@ -1588,7 +1587,11 @@ async fn real_sends_reach_the_heartbeat_ledger_without_reasons_and_reasons_are_m
         status["local_last_send"]["reason"],
         "QQ 接口返回 11255：invalid openid=<set>"
     );
-    assert_eq!(status["last_outcome"], status["local_last_send"]);
+    assert!(!status["local_last_send"].is_null());
+    assert!(
+        status.get("last_outcome").is_none(),
+        "the deprecated duplicate of local_last_send is gone"
+    );
     assert!(!status.to_string().contains(OPENID));
     // A gateway close reason echoing the openid is masked as well.
     worker

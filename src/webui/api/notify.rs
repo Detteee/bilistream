@@ -139,8 +139,6 @@ fn settings_view(store: &crate::storage::Store) -> std::io::Result<Value> {
         "configured_channels": catalog.view(),
         "revision": revision.unwrap_or(0),
         "appsecret_set": secret.is_some(),
-        // Deprecated duplicate of `appsecret_set` (panel batch 2 drops it).
-        "app_secret_configured": secret.is_some(),
         "secret_revision": secret_revision.unwrap_or(0),
     });
     if let (Some(view), Value::Object(extra)) = (view.as_object_mut(), openid_view(&openid)) {
@@ -591,7 +589,7 @@ fn credentials_refused(error: notify::credentials::SaveError) -> Response {
     reply(status, Some(data), error.message())
 }
 
-/// Rule 1 (switch `REQUIRE_BASE_GENERATION`): 400 for a save or 清除
+/// Rule 1: 400 for a save or 清除
 /// without a top-level `base_generation`.
 pub(crate) fn base_generation_required() -> Response {
     reply(
@@ -789,10 +787,7 @@ pub(crate) async fn update_notify(
                 update.wipe();
                 return credentials_refused(error);
             }
-            if notify::credentials::base_generation_missing(
-                save,
-                notify::credentials::REQUIRE_BASE_GENERATION,
-            ) {
+            if notify::credentials::base_generation_missing(save) {
                 update.wipe();
                 return base_generation_required();
             }
@@ -1414,7 +1409,6 @@ mod tests {
             "bilistream-notify-api-{}",
             bytes.iter().map(|b| format!("{b:02x}")).collect::<String>()
         ));
-        std::fs::create_dir_all(root.join("legacy")).unwrap();
         let store =
             crate::storage::Store::open(root.join("data"), root.join("keys/master.key")).unwrap();
         (root, store)
@@ -1685,7 +1679,10 @@ mod tests {
         assert_eq!(view["config"]["confirm_secs"], 90);
         assert_eq!(view["config"]["cooldown_secs"], 1800);
         assert_eq!(view["appsecret_set"], true);
-        assert_eq!(view["app_secret_configured"], true);
+        assert!(
+            view.get("app_secret_configured").is_none(),
+            "deprecated duplicate removed"
+        );
         assert_eq!(view["openid_set"], false);
         assert_eq!(view["openid_revision"], 0);
         assert!(view["openid_bound_at"].is_null());
@@ -1753,7 +1750,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(cleared["appsecret_set"], false);
-        assert_eq!(cleared["app_secret_configured"], false);
+        assert!(cleared.get("app_secret_configured").is_none());
         let _ = std::fs::remove_dir_all(root);
     }
 

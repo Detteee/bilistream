@@ -3,7 +3,7 @@
 //! (capture mode writes them to `.trellis/fixtures/`, see `capture.rs`).
 
 use super::enrich::{parse_room_live_key, parse_stop_live_data, StopLiveDataError};
-use super::event::{BiliTotals, EndReason, Event, EventKind, Severity};
+use super::event::{BiliTotals, EndReason, Event, EventKind};
 use super::live_book::{BiliLiveBook, BiliLiveMark, SummaryMark, SummaryPhase};
 use super::query::{self, Query};
 use super::{maintain, schema, writer::Writer};
@@ -900,12 +900,10 @@ fn rtmp_key_never_reaches_db_bytes_or_api_bodies() {
     .unwrap();
     w.apply(&ev(
         T0,
-        EventKind::Generic {
-            kind: "bili.warning",
-            subject: None,
-            severity: Severity::Warn,
-            title: "警告 SYNTHKEY-0123456789".into(),
-            detail: "SYNTHKEY-0123456789".into(),
+        EventKind::BiliWarning {
+            seq: Some(1),
+            room: 1,
+            msg: "警告 SYNTHKEY-0123456789".into(),
         },
     ))
     .unwrap();
@@ -2520,7 +2518,7 @@ async fn shorter_raw_retention_uses_rollups_and_a_nonduplicated_raw_tail() {
 }
 
 #[test]
-fn empty_legacy_stats_parts_never_define_the_merge_grid() {
+fn empty_stats_parts_never_define_the_merge_grid() {
     let (w, _) = writer("empty-stats-order");
     raw(&w, T0, 123.0);
     let part = query::stats(&w.conn, &q(T0, T0 + 60), "raw", None).unwrap();
@@ -2533,7 +2531,7 @@ fn empty_legacy_stats_parts_never_define_the_merge_grid() {
 }
 
 #[tokio::test]
-async fn incompatible_legacy_peer_grid_is_reported_as_missing() {
+async fn a_peer_grid_that_does_not_match_the_query_is_reported_as_missing() {
     let now = T0 + 1000;
     let mut cfg = cluster_cfg();
     cfg.cluster.peers.truncate(1);
@@ -2840,4 +2838,50 @@ fn observations_for_a_cleared_session_are_dropped_not_reinserted() {
     for table in ["sessions", "runs", "sample_frames", "bili_lives", "events"] {
         assert_eq!(count(&w, table), 0, "{table} was resurrected");
     }
+}
+
+#[test]
+fn live_totals_from_a_28a20792_peer_merge_by_their_stated_source() {
+    // 28a20792 always states `watched_source` beside `watched`; the merge keeps
+    // the summary over a sample and carries the source it was given.
+    let part = |node: &str, watched: i64, source: &str, at: i64| {
+        let mut p = query::SummaryParts {
+            source: Some(node.into()),
+            ..Default::default()
+        };
+        p.kpis.lives.insert(
+            "live:synthetic".into(),
+            query::LiveTotals {
+                watched: Some(watched),
+                watched_source: Some(source.into()),
+                watched_at: Some(at),
+                ..Default::default()
+            },
+        );
+        // Over the wire, exactly as a peer serializes it.
+        serde_json::from_value::<query::SummaryParts>(serde_json::to_value(p).unwrap()).unwrap()
+    };
+    for parts in [
+        vec![
+            part("a", 900, "sample", T0 + 50),
+            part("b", 700, "summary", T0),
+        ],
+        vec![
+            part("b", 700, "summary", T0),
+            part("a", 900, "sample", T0 + 50),
+        ],
+    ] {
+        let merged = query::merge_summary(parts);
+        let live = &merged.kpis.lives["live:synthetic"];
+        assert_eq!(live.watched, Some(700));
+        assert_eq!(live.watched_source.as_deref(), Some("summary"));
+        assert_eq!(live.watched_at, Some(T0));
+    }
+    let merged = query::merge_summary(vec![
+        part("a", 500, "sample", T0),
+        part("b", 650, "sample", T0 + 30),
+    ]);
+    let live = &merged.kpis.lives["live:synthetic"];
+    assert_eq!(live.watched, Some(650), "the newer sample wins");
+    assert_eq!(live.watched_source.as_deref(), Some("sample"));
 }

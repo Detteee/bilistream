@@ -46,12 +46,9 @@ async fn queued_shutdown_facts_are_committed_before_flush_ack_and_reopen() {
     for n in 0..500 {
         bus.emit_at(
             (T0 + n) as u64,
-            EventKind::Generic {
-                kind: "queued",
-                subject: None,
-                severity: Severity::Info,
-                title: "queued".into(),
-                detail: String::new(),
+            EventKind::LocalFault {
+                reason: "queued".into(),
+                latched: false,
             },
         );
     }
@@ -164,12 +161,9 @@ async fn failed_or_closed_writer_never_acknowledges_a_successful_flush() {
     bus.seal();
     bus.emit_at(
         T0 as u64,
-        EventKind::Generic {
-            kind: "queued",
-            subject: None,
-            severity: Severity::Info,
-            title: "queued".into(),
-            detail: String::new(),
+        EventKind::LocalFault {
+            reason: "queued".into(),
+            latched: false,
         },
     );
     let (flush, controls) = tokio::sync::mpsc::channel(1);
@@ -370,7 +364,7 @@ fn newer_schema_is_refused_without_replacing_existing_history() {
 #[test]
 fn failed_batch_rolls_back_rows_and_writer_identity_maps() {
     let (mut w, _) = writer("atomic-batch");
-    w.conn.execute_batch("CREATE TRIGGER fail_event BEFORE INSERT ON events WHEN NEW.kind='injected' BEGIN SELECT RAISE(ABORT,'injected write failure'); END;").unwrap();
+    w.conn.execute_batch("CREATE TRIGGER fail_event BEFORE INSERT ON events WHEN NEW.kind='cluster.quorum' BEGIN SELECT RAISE(ABORT,'injected write failure'); END;").unwrap();
     let start = ev(
         T0,
         EventKind::SessionStarted {
@@ -386,16 +380,7 @@ fn failed_batch_rolls_back_rows_and_writer_identity_maps() {
         },
     );
     let run = ev(T0, EventKind::FfmpegStarted { seq: 1, run: 10 });
-    let rejected = ev(
-        T0,
-        EventKind::Generic {
-            kind: "injected",
-            subject: None,
-            severity: Severity::Info,
-            title: "failure".into(),
-            detail: String::new(),
-        },
-    );
+    let rejected = ev(T0, EventKind::QuorumChanged { has_quorum: false });
     assert!(w.commit(&[start.clone(), run.clone(), rejected]).is_err());
     assert_eq!(count(&w, "sessions"), 0);
     assert_eq!(count(&w, "runs"), 0);
@@ -616,12 +601,9 @@ fn pinned_reader_pauses_writes_and_checkpoint_resumes_within_file_budget() {
             .map(|offset| {
                 ev(
                     T0 + batch * 200 + offset,
-                    EventKind::Generic {
-                        kind: "cap-test",
-                        subject: None,
-                        severity: Severity::Info,
-                        title: "t".repeat(240),
-                        detail: "d".repeat(240),
+                    EventKind::LocalFault {
+                        reason: "d".repeat(480),
+                        latched: true,
                     },
                 )
             })
@@ -659,12 +641,9 @@ fn pinned_reader_bounds_wal_across_a_complete_maintenance_tick() {
             .map(|offset| {
                 ev(
                     T0 - 200 * DAY + batch * 200 + offset,
-                    EventKind::Generic {
-                        kind: "cap-test",
-                        subject: None,
-                        severity: Severity::Info,
-                        title: "t".repeat(240),
-                        detail: "d".repeat(240),
+                    EventKind::LocalFault {
+                        reason: "d".repeat(480),
+                        latched: true,
                     },
                 )
             })

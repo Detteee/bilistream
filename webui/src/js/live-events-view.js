@@ -32,13 +32,13 @@ function fillSegments(doc, el, segments) {
 }
 
 // els: { group, line, main, next, passive, error, owner, input, help }.
-// state: { status, settings, statusAt, now, error, supported, disabled }.
+// state: { status, settings, statusAt, now, error, disabled }.
 // `disabled` is the panel-wide lock (loading/busy); the writer gate adds to it,
 // so a redraw both disables and re-enables the switch (Clerk L2).
-// rev 4: `supported` false (older backend) hides the whole 通知类型 group.
-export function renderLiveEventsInto(doc, els, { status, settings, statusAt, now, error = '', supported = true, disabled = false }) {
-  setHidden(els.group, !supported);
-  if (!supported || !els.line) return null;
+// #notify-types starts hidden in the markup; the first render reveals it.
+export function renderLiveEventsInto(doc, els, { status, settings, statusAt, now, error = '', disabled = false }) {
+  setHidden(els.group, false);
+  if (!els.line) return null;
   const available = Boolean(status) && now - statusAt < STATUS_STALE_MS;
   const push = status && 'active_push' in status ? status.active_push : undefined;
   const view = wakeupBudgetView(pickBudget(status, settings), { available, push });

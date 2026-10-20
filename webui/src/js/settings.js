@@ -25,7 +25,7 @@ const secretControls = [
   { field: 'youtube_proxy', input: 'config-yt-proxy', button: 'config-clear-yt-proxy', label: 'YouTube 代理', configured: c => c.youtube?.proxy_configured },
   { field: 'twitch_proxy', input: 'config-tw-proxy', button: 'config-clear-tw-proxy', label: 'Twitch 代理', configured: c => c.twitch?.proxy_configured },
   { field: 'niconico_proxy', input: 'config-nc-proxy', button: 'config-clear-nc-proxy', label: 'Niconico 代理', configured: c => c.niconico?.proxy_configured },
-  { field: 'niconico_user_session', input: 'config-nc-user-session', button: 'config-nc-clear-session', label: 'Niconico 登录信息', configured: c => c.niconico?.user_session_configured || c.niconico?.cookies_file },
+  { field: 'niconico_user_session', input: 'config-nc-user-session', button: 'config-nc-clear-session', label: 'Niconico 登录信息', configured: c => c.niconico?.user_session_configured },
 ];
 function renderSecretControls(config = savedSecretConfig) {
   if (!config) return;
@@ -737,32 +737,6 @@ function readBannedKeywordLines(elementId) {
     .map(keyword => keyword.trim())
     .filter(Boolean);
 }
-function toggleLolMonitorInputs() {
-  const areaId = document.getElementById('area-select').value;
-  const lolMonitorGroup = document.getElementById('lol-monitor-group');
-  const riotApiKeyGroup = document.getElementById('riot-api-key-group');
-  const enableCheckbox = document.getElementById('enable-lol-monitor-inline');
-  if (!lolMonitorGroup || !riotApiKeyGroup || !enableCheckbox) return;
-
-  const isLolArea = areaId === '86';
-  setElementDisplay(lolMonitorGroup, isLolArea);
-
-  if (isLolArea) {
-    // Load current enable_lol_monitor state
-    if (window.configData) {
-      enableCheckbox.checked = window.configData.enable_lol_monitor || false;
-    }
-  }
-
-  setElementDisplay(riotApiKeyGroup, isLolArea && enableCheckbox.checked);
-}
-function toggleRiotApiKeyInputInline() {
-  const enableCheckbox = document.getElementById('enable-lol-monitor-inline');
-  const riotApiKeyGroup = document.getElementById('riot-api-key-group');
-  if (!enableCheckbox || !riotApiKeyGroup) return;
-
-  setElementDisplay(riotApiKeyGroup, enableCheckbox.checked);
-}
 // Check for updates function
 let CURRENT_VERSION = null;
 // Will be fetched from API
@@ -1008,8 +982,6 @@ export {
   saveSystemConfig,
   saveBannedKeywords,
   readBannedKeywordLines,
-  toggleLolMonitorInputs,
-  toggleRiotApiKeyInputInline,
   getUpdateInfo,
   loadVersion,
   checkForUpdates,

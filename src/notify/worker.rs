@@ -2181,8 +2181,6 @@ impl Worker {
             "queued": self.tracker.queued(),
             "next_retry_at": (self.next_send_at > now).then_some(self.next_send_at),
             "local_last_send": self.last_outcome,
-            // Deprecated duplicate of `local_last_send` (panel batch 2 drops it).
-            "last_outcome": self.last_outcome,
             "quota": {
                 "active_day": ledger.active_today(now),
                 "active_day_limit": super::ledger::ACTIVE_PER_DAY,

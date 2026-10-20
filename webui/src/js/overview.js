@@ -1486,28 +1486,9 @@ async function loadChannelData() {
     state.channelsData = channelsResult;
     state.areasData = normalizeAreaData(areasResult);
 
-    // Populate the removed legacy channel-management area select if present.
-    const areaSelect = document.getElementById('area-select');
-    if (areaSelect) {
-      areaSelect.replaceChildren(createAreaOption('', '不修改分区'));
-    }
-
-    const areasList = getAreaList();
-
-    if (areasList.length > 0) {
-      if (areaSelect) {
-        // Populate channel management area select
-        appendAreaOptions(areaSelect, areasList, true);
-      }
-
-    } else {
+    if (getAreaList().length === 0) {
       console.error('No areas data found:', state.areasData);
       showNotification('未找到分区数据', 'error');
-    }
-
-    // Update the removed legacy channel list if the controls still exist.
-    if (document.getElementById('platform-select') && document.getElementById('channel-select')) {
-      updateChannelList();
     }
   } catch (error) {
     console.error('Failed to load channel data:', error);
@@ -1517,67 +1498,6 @@ async function loadChannelData() {
     setButtonLoading(null, icon, false);
   }
 }
-function updateChannelList() {
-  const platformSelect = document.getElementById('platform-select');
-  const channelSelect = document.getElementById('channel-select');
-  if (!platformSelect || !channelSelect) return;
-
-  const platform = platformSelect.value;
-
-  channelSelect.replaceChildren(createSelectOption('', '从 channels.json 选择或手动输入...'));
-  appendPlatformChannelOptions(channelSelect, platform);
-
-  // Don't clear inputs - allow manual entry to persist
-  // Update quality options based on platform
-  updateQualityOptions();
-}
-function updateQualityOptions() {
-  const platformSelect = document.getElementById('platform-select');
-  const qualitySelect = document.getElementById('quality-select');
-  if (!platformSelect || !qualitySelect) return;
-
-  const platform = platformSelect.value;
-
-  // Store current value
-  const currentValue = qualitySelect.value;
-
-  // Clear all options except the first "不修改画质" option
-  const firstOption = qualitySelect.querySelector('option[value=""]');
-  if (firstOption) {
-    qualitySelect.replaceChildren(firstOption);
-  } else {
-    qualitySelect.replaceChildren();
-  }
-
-  // Add platform-specific quality options if platform is selected
-  if (platform) {
-    populateQualityOptions(qualitySelect, platform, false); // false = don't add empty option
-  }
-
-  // Try to restore previous value if it's still valid
-  if (currentValue && qualitySelect.querySelector(`option[value="${currentValue}"]`)) {
-    qualitySelect.value = currentValue;
-  }
-}
-function updateChannelInfo() {
-  const channelSelect = document.getElementById('channel-select');
-  const selectedValue = channelSelect.value;
-
-  if (!selectedValue) {
-    document.getElementById('channel-id-input').value = '';
-    document.getElementById('channel-name-input').value = '';
-    return;
-  }
-
-  try {
-    const channelInfo = JSON.parse(selectedValue);
-    document.getElementById('channel-id-input').value = channelInfo.id;
-    document.getElementById('channel-name-input').value = channelInfo.name;
-  } catch (error) {
-    console.error('Failed to parse channel info:', error);
-  }
-}
-// Quality mapping functions for display vs technical values
 function getTechnicalQualityValue(displayText, platform = 'youtube') {
   const reverseMappings = {
     youtube: {
@@ -1629,83 +1549,6 @@ function populateQualityOptions(selectElement, platform, includeEmpty = true) {
       option.textContent = text;
       selectElement.appendChild(option);
     });
-  }
-}
-async function applyChannelChange() {
-  const platform = document.getElementById('platform-select').value;
-  const channelId = document.getElementById('channel-id-input').value.trim();
-  const channelName = document.getElementById('channel-name-input').value.trim();
-  const areaId = document.getElementById('area-select').value;
-  const quality = document.getElementById('quality-select').value;
-  const riotApiKey = document.getElementById('riot-api-key-input').value.trim();
-  const enableLolMonitor = document.getElementById('enable-lol-monitor-inline').checked;
-
-  if (!channelId || !channelName) {
-    showNotification('请输入频道ID和频道名称', 'error');
-    return;
-  }
-
-  try {
-    // First, update channel info
-    const channelPayload = {
-      platform: platform,
-      channel_id: channelId,
-      channel_name: channelName
-    };
-
-    if (areaId) {
-      channelPayload.area_id = parseInteger(areaId, 0);
-
-      // Include Riot API Key if area is 86 and key is provided
-      if (areaId === '86' && riotApiKey) {
-        channelPayload.riot_api_key = riotApiKey;
-      }
-    }
-
-    if (quality) {
-      channelPayload.quality = quality;
-    }
-
-    const channelData = await postJsonApi('/api/channel', channelPayload);
-    if (!channelData.success) {
-      showNotification(channelData.message || '频道更新失败', 'error');
-      return;
-    }
-
-    // If area is 86, also update enable_lol_monitor setting
-    if (areaId === '86') {
-      const configPayload = {
-        enable_lol_monitor: enableLolMonitor
-      };
-
-      // Include Riot API Key in config update if provided
-      if (riotApiKey) {
-        configPayload.riot_api_key = riotApiKey;
-      }
-
-      const configData = await postJsonApi('/api/config', configPayload);
-      if (!configData.success) {
-        showNotification(configData.message || 'LoL 监控配置更新失败', 'error');
-        return;
-      }
-
-      // Update global config
-      window.configData.enable_lol_monitor = enableLolMonitor;
-      if (riotApiKey) {
-        window.configData.riot_api_key = riotApiKey;
-      }
-    }
-
-    showNotification(channelData.message || '频道已更新', 'success');
-
-    // Clear Riot API Key input after successful update
-    if (riotApiKey) {
-      document.getElementById('riot-api-key-input').value = '';
-    }
-
-    setTimeout(refreshStatus, 2000);
-  } catch (error) {
-    showNotification('更新失败: ' + error.message, 'error');
   }
 }
 // Add event listener for switch buttons using data attributes
@@ -1916,12 +1759,8 @@ export {
   saveAreaEdit,
   saveTitleEdit,
   loadChannelData,
-  updateChannelList,
-  updateQualityOptions,
-  updateChannelInfo,
   getTechnicalQualityValue,
   populateQualityOptions,
-  applyChannelChange,
   toggleYtCookiesEdit,
   cancelYtCookiesEdit,
   saveYtCookiesEdit,

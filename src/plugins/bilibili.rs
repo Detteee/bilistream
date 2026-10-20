@@ -985,9 +985,6 @@ pub(crate) async fn bili_change_cover_bytes(
         .await?;
 
     if update_res["code"].as_i64() != Some(0) {
-        println!("Request parameters:");
-        println!("cover: {}", image_url);
-        println!("csrf_token: {}", cfg.bililive.credentials.bili_jct);
         return Err(format!(
             "Failed to update cover: {} (Response: {})",
             update_res["message"],
@@ -1047,6 +1044,16 @@ pub struct ResponseData<T> {
     code: i64,
     message: String,
     data: Option<T>,
+}
+
+/// A failed QR-login poll names only B站's code and message. The response
+/// body can carry login tokens and cookies, so it is never formatted.
+fn login_failed<T>(res: &ResponseData<T>) -> String {
+    format!(
+        "Login failed: code {} ({})",
+        res.code,
+        crate::logging::safe_text(&res.message, 120)
+    )
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -1191,7 +1198,7 @@ impl Credential {
                     print!("\rWaiting for QR code scan...");
                 }
                 _ => {
-                    return Err(format!("Login failed: {:#?}", res).into());
+                    return Err(login_failed(&res).into());
                 }
             }
         }
@@ -1305,7 +1312,7 @@ pub async fn poll_login_status(auth_code: &str) -> Result<String, Box<dyn Error>
         }
         ResponseData { code: 86039, .. } => Ok("waiting".to_string()),
         ResponseData { code: 86038, .. } => Ok("expired".to_string()),
-        _ => Err(format!("Login failed: {:#?}", res).into()),
+        _ => Err(login_failed(&res).into()),
     }
 }
 

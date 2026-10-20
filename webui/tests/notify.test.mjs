@@ -25,7 +25,7 @@ test('state selection follows the design table', () => {
   assert.equal(selectState({ settings: full, status: { authority: 'none', authority_node_id: 'a' } }).key, 'standby');
   assert.equal(selectState({ settings: full, status: { authority: 'none' } }).key, 'electing');
   assert.equal(selectState({ settings: full, status: { authority: 'no_quorum_fallback' } }).key, 'fallback');
-  assert.equal(selectState({ settings: full, status: { authority: 'primary', last_outcome: { ok: false, code: 100016 } } }).key, 'failed');
+  assert.equal(selectState({ settings: full, status: { authority: 'primary', local_last_send: { ok: false, code: 100016 } } }).key, 'failed');
 });
 
 test('form maps minutes to seconds and sends only changed keys', () => {
@@ -132,24 +132,25 @@ import {
 const b2settings = { config: { enabled: true, qq: { appid_set: true, app_id_hint: '1' } }, appsecret_set: true, openid_set: true };
 
 test('senderOutcome prefers sender.last_send and maps via to mode', () => {
-  const status = { sender: { node: 'tokyo-1', last_send: { at: 200, ok: true, code: null, via: 'passive' } }, last_outcome: { ok: false, at: 100, code: 22009, node_id: 'osaka-2' } };
+  const status = { sender: { node: 'tokyo-1', last_send: { at: 200, ok: true, code: null, via: 'passive' } }, local_last_send: { ok: false, at: 100, code: 22009, node_id: 'osaka-2' } };
   assert.deepEqual(b2senderOutcome(status), { ok: true, at: 200, mode: 'passive', code: null, reason: null, trace_id: null, node_id: 'tokyo-1' });
   assert.equal(b2senderOutcome({ sender: { node: 'tokyo-1', last_send: null } }), null);
-  assert.equal(b2senderOutcome({ last_outcome: { ok: true, at: 1 } }).at, 1, 'older backends fall back to the local outcome');
+  assert.equal(b2senderOutcome({ local_last_send: { ok: true, at: 1 } }).at, 1, 'no sender block falls back to the local outcome');
   assert.equal(b2localOutcome({ local_last_send: { at: 5 }, last_outcome: { at: 1 } }).at, 5);
+  assert.equal(b2localOutcome({ last_outcome: { at: 1 } }), null, 'the deprecated last_outcome key is not read');
 });
 
 test('a stale local failure on a standby is a detail row, not a red badge', () => {
   const status = {
     authority: 'none', authority_node_id: 'tokyo-1', node_id: 'osaka-2',
     sender: { node: 'tokyo-1', last_send: { at: 200, ok: true, via: 'active' } },
-    last_outcome: { ok: false, at: 100, code: 22009, node_id: 'osaka-2', trace_id: 't' },
+    local_last_send: { ok: false, at: 100, code: 22009, node_id: 'osaka-2', trace_id: 't' },
   };
   assert.equal(b2selectState({ settings: b2settings, status }).key, 'standby');
   assert.equal(b2staleLocalFailure(status).code, 22009);
   const failing = { ...status, sender: { node: 'tokyo-1', last_send: { at: 300, ok: false, code: 40034105 } } };
   assert.equal(b2selectState({ settings: b2settings, status: failing }).key, 'failed');
-  assert.equal(b2staleLocalFailure({ last_outcome: { ok: false, at: 1 } }), null, 'no duplicate row when the local outcome is the one shown');
+  assert.equal(b2staleLocalFailure({ local_last_send: { ok: false, at: 1 } }), null, 'no duplicate row when the local outcome is the one shown');
 });
 
 test('middleTruncate keeps both ends of long ids', () => {
@@ -186,7 +187,7 @@ test('2n and 2z only with 1b data; 2z wins; a QQ failure still wins', () => {
   assert.equal(selectState({ settings: full, status: { ...standby, nodes: [{ node_id: 'b', is_local: true, notify_capable: false }] } }).key, 'standby', '1a: no 2n');
   const none = { ...standby, nodes: [n('a', false, true), n('b', true, false, { is_local: true })] };
   assert.equal(selectState({ settings: full, status: none }).key, 'no-sender');
-  assert.equal(selectState({ settings: full, status: { ...none, last_outcome: { ok: false, code: 100016 } } }).key, 'failed');
+  assert.equal(selectState({ settings: full, status: { ...none, local_last_send: { ok: false, code: 100016 } } }).key, 'failed');
 });
 
 test('credentialRows shows booleans only and the unbind progress', () => {

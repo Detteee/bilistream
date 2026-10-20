@@ -484,13 +484,34 @@ pub struct BiliLive {
 }
 
 /// Struct to hold credential information extracted from cookies.json.
-#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+#[derive(Serialize, Deserialize, Clone, Default)]
 pub struct Credentials {
     pub sessdata: String,
     pub bili_jct: String,
     pub dede_user_id: String,
     pub dede_user_id_ckmd5: String,
     pub buvid3: String,
+}
+
+/// Cookie values never reach `Debug` output (and so never a log line or a
+/// panic message): only whether each one is set.
+impl std::fmt::Debug for Credentials {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let set = |value: &str| {
+            if value.is_empty() {
+                "[empty]"
+            } else {
+                "[redacted]"
+            }
+        };
+        f.debug_struct("Credentials")
+            .field("sessdata", &set(&self.sessdata))
+            .field("bili_jct", &set(&self.bili_jct))
+            .field("dede_user_id", &set(&self.dede_user_id))
+            .field("dede_user_id_ckmd5", &set(&self.dede_user_id_ckmd5))
+            .field("buvid3", &set(&self.buvid3))
+            .finish()
+    }
 }
 
 /// Struct representing Twitch configuration.
@@ -563,9 +584,9 @@ pub struct Niconico {
     pub area_v2: u64,
     #[serde(default = "default_quality")]
     pub quality: String,
-    #[serde(default)]
-    pub cookies_file: Option<String>,
-    /// Niconico login cookie value; write-only through the admin API.
+    /// Niconico login cookie value; write-only through the admin API. The
+    /// only Niconico credential: a `cookies_file` key or a stored
+    /// `niconico_cookies.txt` left by 28a20792 is ignored, never read.
     #[serde(default)]
     pub user_session: Option<String>,
     #[serde(default = "default_true")]
@@ -587,7 +608,6 @@ impl Default for Niconico {
             live_id: String::new(),
             area_v2: 235,
             quality: default_quality(),
-            cookies_file: None,
             user_session: None,
             session_check_enabled: true,
             proxy: None,
@@ -1184,6 +1204,39 @@ fn apply_priority_channel_lookup(priority: &mut PriorityChannel, channel: Option
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn credentials_debug_never_contains_cookie_values() {
+        let credentials = super::Credentials {
+            sessdata: "synthetic-sessdata-7f3a".into(),
+            bili_jct: "synthetic-csrf-91c2".into(),
+            dede_user_id: "synthetic-uid-55".into(),
+            dede_user_id_ckmd5: "synthetic-ckmd5-0b".into(),
+            buvid3: String::new(),
+        };
+        let config = super::BiliLive {
+            enable_danmaku_command: false,
+            room: 1,
+            bili_rtmp_url: String::new(),
+            bili_rtmp_key: String::new(),
+            credentials: credentials.clone(),
+        };
+        for text in [
+            format!("{credentials:?}"),
+            format!("{credentials:#?}"),
+            format!("{config:?}"),
+        ] {
+            for value in [
+                "synthetic-sessdata-7f3a",
+                "synthetic-csrf-91c2",
+                "synthetic-uid-55",
+                "synthetic-ckmd5-0b",
+            ] {
+                assert!(!text.contains(value), "{value} leaked into Debug output");
+            }
+            assert!(text.contains("[redacted]") && text.contains("[empty]"));
+        }
+    }
+
     #[test]
     fn missing_priority_channel_clears_previous_ids() {
         let mut priority = super::PriorityChannel {

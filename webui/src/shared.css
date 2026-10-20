@@ -671,13 +671,8 @@ button:disabled {
   --tone: var(--brand-2);
 }
 
-/* Compatibility aliases for markup generated in app.js. */
-.cluster-action-btn.cluster-refresh-btn {
-  --tone: var(--brand);
-}
-
-.cluster-action-btn.cluster-enable-btn,
-.cluster-action-btn.cluster-sync-btn {
+/* Tones for the cluster node action buttons built in cluster.js. */
+.cluster-action-btn.cluster-enable-btn {
   --tone: var(--teal);
 }
 
@@ -685,8 +680,7 @@ button:disabled {
   --tone: var(--danger);
 }
 
-.cluster-action-btn.cluster-restart-btn,
-.cluster-action-btn.cluster-stream-restart-btn {
+.cluster-action-btn.cluster-restart-btn {
   --tone: var(--warn);
 }
 

@@ -476,8 +476,9 @@ pub(crate) fn associate_binding_tx(tx: &mut Transaction<'_>, appid: &str) -> io:
 #[derive(Default, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CredentialSave {
-    /// The `credentials_generation` the page loaded. `None` only from an
-    /// older panel (no check; see changelog question Q1).
+    /// The `credentials_generation` the page loaded. A browser save or 清除
+    /// without it is refused (rule 1). `None` now comes only from a peer
+    /// forwarding a watch-only save, which carries no credential change.
     #[serde(default)]
     pub base_generation: Option<u64>,
     #[serde(default)]
@@ -640,14 +641,10 @@ pub fn validate_save(save: &CredentialSave) -> Result<(), SaveError> {
     Ok(())
 }
 
-/// F rev 2 item 10 / rule 1: a save or 清除 without a top-level
-/// `base_generation` is 400 `base_generation_required`.
-pub const REQUIRE_BASE_GENERATION: bool = true;
-
-/// True when a credential save must be refused with 400
-/// `base_generation_required`. Always false while the switch is off.
-pub fn base_generation_missing(save: &CredentialSave, required: bool) -> bool {
-    required && save.base_generation.is_none()
+/// F rev 2 item 10 / rule 1: a browser save or 清除 without a top-level
+/// `base_generation` is refused with 400 `base_generation_required`.
+pub fn base_generation_missing(save: &CredentialSave) -> bool {
+    save.base_generation.is_none()
 }
 
 /// Inside the caller's transaction: check `base_generation`, write the

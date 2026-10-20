@@ -419,3 +419,85 @@ fn authenticated_envelopes_reject_tamper_and_record_swap() {
     *data.last_mut().unwrap() ^= 1;
     assert!(crypto::open(&key, b"record-a", &data).is_err());
 }
+
+/// 28a20792 still knew the Niconico cookie file: its config may carry
+/// `niconico.cookies_file` and its store or backups a `niconico_cookies.txt`
+/// document. This build ignores both: the config loads, the document is
+/// never read or exported, and a 28a20792 backup restores without it.
+fn config_with_niconico_cookie_file() -> Value {
+    let mut config = serde_json::to_value(crate::test_support::config("local", 0)).unwrap();
+    config["niconico"]["cookies_file"] = json!("niconico_cookies.txt");
+    config
+}
+
+const SYNTHETIC_NETSCAPE: &str =
+    "# Netscape HTTP Cookie File\n.nicovideo.jp\tTRUE\t/\tTRUE\t0\tuser_session\tsynthetic-nico-session\n";
+
+#[test]
+fn a_28a20792_config_with_a_niconico_cookie_file_key_still_loads() {
+    let config = config_with_niconico_cookie_file();
+    documents::validate("config.json", &config).unwrap();
+    let loaded: crate::config::Config = serde_json::from_value(config).unwrap();
+    let saved = serde_json::to_value(&loaded).unwrap();
+    assert!(
+        saved["niconico"].get("cookies_file").is_none(),
+        "the key is dropped on the next save"
+    );
+    assert!(loaded.niconico.user_session.is_none());
+}
+
+#[test]
+fn a_leftover_niconico_cookie_document_is_never_exported() {
+    let dir = Directory::new();
+    let store = dir.open().unwrap();
+    store
+        .write("config.json", config_with_niconico_cookie_file())
+        .unwrap();
+    store
+        .write("niconico_cookies.txt", json!(SYNTHETIC_NETSCAPE))
+        .unwrap();
+    let backup = store.export_backup("synthetic-backup-password").unwrap();
+    let plain = crypto::restore("synthetic-backup-password", &backup).unwrap();
+    let docs: HashMap<String, Document> = serde_json::from_slice(&plain).unwrap();
+    assert!(!docs.contains_key("niconico_cookies.txt"));
+    assert!(docs.contains_key("config.json"));
+    assert!(!String::from_utf8_lossy(&plain).contains("synthetic-nico-session"));
+    assert!(
+        store.read("niconico_cookies.txt").unwrap().is_some(),
+        "the stored copy is left untouched"
+    );
+}
+
+#[test]
+fn a_28a20792_backup_with_a_niconico_cookie_document_restores_without_it() {
+    let docs = HashMap::from([
+        (
+            "config.json".to_string(),
+            Document {
+                value: config_with_niconico_cookie_file(),
+                revision: 3,
+                updated_at: 1_791_702_240,
+            },
+        ),
+        (
+            "niconico_cookies.txt".to_string(),
+            Document {
+                value: json!(SYNTHETIC_NETSCAPE),
+                revision: 1,
+                updated_at: 1_791_702_240,
+            },
+        ),
+    ]);
+    let backup = crypto::export(
+        "synthetic-backup-password",
+        &serde_json::to_vec(&docs).unwrap(),
+    )
+    .unwrap();
+    let dir = Directory::new();
+    let store = dir.open().unwrap();
+    store
+        .restore_backup("synthetic-backup-password", &backup)
+        .unwrap();
+    assert!(store.read("config.json").unwrap().is_some());
+    assert!(store.read("niconico_cookies.txt").unwrap().is_none());
+}

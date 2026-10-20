@@ -45,7 +45,7 @@ pub(crate) fn validate(name: &str, value: &Value) -> io::Result<()> {
                 return Err(bad());
             }
         }
-        "cookies.txt" | "niconico_cookies.txt" => {
+        "cookies.txt" => {
             let text = value.as_str().ok_or_else(bad)?;
             if !text.is_empty() {
                 crate::plugins::youtube_cookies::validate_netscape(text).map_err(|_| bad())?;

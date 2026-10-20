@@ -561,6 +561,57 @@ pub(crate) fn exit_status(status: &ExitStatus) -> String {
 
 #[cfg(test)]
 mod tests {
+    /// Console prints bypass the tracing redactor, so none of them may format
+    /// a B站 cookie or CSRF value (R11). Scans every `print!`-family call in
+    /// `src/` up to its terminating `;`.
+    #[test]
+    fn no_console_print_formats_a_cookie_or_csrf_value() {
+        fn files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    files(&path, out);
+                } else if path.extension().is_some_and(|ext| ext == "rs") {
+                    out.push(path);
+                }
+            }
+        }
+        let macros = [
+            concat!("print", "ln!("),
+            concat!("eprint", "ln!("),
+            concat!("print", "!("),
+            concat!("eprint", "!("),
+        ];
+        let forbidden = ["bili_jct", "sessdata", "csrf"];
+        let mut paths = Vec::new();
+        files(
+            &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
+            &mut paths,
+        );
+        assert!(paths.len() > 100, "scanned {} files", paths.len());
+        let mut offenders = Vec::new();
+        for path in paths {
+            let text = std::fs::read_to_string(&path).unwrap();
+            for name in macros {
+                let mut rest = text.as_str();
+                while let Some(at) = rest.find(name) {
+                    let call = &rest[at..];
+                    let call = &call[..call.find(';').unwrap_or(call.len())];
+                    let lower = call.to_ascii_lowercase();
+                    if forbidden.iter().any(|word| lower.contains(word)) {
+                        offenders.push(format!(
+                            "{}: {}",
+                            path.display(),
+                            call.lines().next().unwrap_or("")
+                        ));
+                    }
+                    rest = &rest[at + name.len()..];
+                }
+            }
+        }
+        assert!(offenders.is_empty(), "{offenders:#?}");
+    }
+
     use super::*;
 
     #[test]

@@ -38,11 +38,15 @@ pub const NAMES: &[&str] = &[
     "channels.json",
     "areas.json",
     "cookies.txt",
-    "niconico_cookies.txt",
     "invalid_words.txt",
     "youtube_quota.json",
     "youtube_golive_hours.json",
 ];
+
+/// Document ids an older build may still hold or put in a backup, which this
+/// build never reads. A restore accepts and drops them; a leftover stored copy
+/// is left untouched and never exported (only [`NAMES`] are).
+pub(crate) const RETIRED_NAMES: &[&str] = &["niconico_cookies.txt"];
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Document {
@@ -468,6 +472,7 @@ impl Store {
         let plain = crypto::restore(password, bytes)?;
         let mut docs: HashMap<String, Document> =
             serde_json::from_slice(&plain).map_err(|_| invalid("备份内容无效"))?;
+        docs.retain(|name, _| !RETIRED_NAMES.contains(&name.as_str()));
         for (name, doc) in &docs {
             documents::validate(name, &doc.value)?;
         }

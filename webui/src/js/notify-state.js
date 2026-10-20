@@ -34,10 +34,9 @@ export function isBadCredentials(status) {
   return Boolean(status?.bad_credentials) || BAD_CREDENTIALS.includes(Number(localOutcome(status)?.code));
 }
 
-// This node's own last attempt. `local_last_send` is the new name; older
-// backends send it as `last_outcome`.
+// This node's own last attempt (`local_last_send`).
 export function localOutcome(status) {
-  return status?.local_last_send ?? status?.last_outcome ?? null;
+  return status?.local_last_send ?? null;
 }
 
 // The outcome the badge and 上次发送 row use: the sender node's last send
@@ -323,7 +322,7 @@ export function credentialRows(status, { pending = new Set(), localUnbound = fal
 }
 
 // Single writer (§16.11): only the sender-authority node changes the openid.
-// `openid_writer` absent (sparse /status, older backend) means unknown: keep
+// `openid_writer` absent (optional; sparse /status) means unknown: keep
 // the controls enabled and let the server's 409 answer. Null means no writer.
 export function openidGate(status) {
   if (!status || !('openid_writer' in status)) return { enabled: true, hint: '' };
@@ -355,7 +354,7 @@ const SENDER_BLOCKS = {
   execution_blocked: { badge: '等待发送节点', reason: '发送条件尚未满足' },
 };
 // These are explicit backend diagnostics, not an inference from authority or
-// peer count. Older backends and unknown future codes keep generic copy.
+// peer count. An absent or unknown code keeps generic copy.
 export function senderBlockView(status) {
   const code = status?.cluster_quorum === false ? 'no_quorum' : status?.sender_block_reason;
   return Object.hasOwn(SENDER_BLOCKS, code) ? SENDER_BLOCKS[code] : null;
@@ -427,7 +426,7 @@ export function secretLostRefusal(refusal, secretTyped) {
   return { ...refusal, banner: { ...refusal.banner, note: SECRET_NOT_SAVED }, focus: 'notify-app-secret' };
 }
 
-// AppSecret flag: `appsecret_set`, with the deprecated name as fallback.
+// AppSecret flag: `appsecret_set` (always sent; missing means not set).
 export function appSecretSet(settings) {
   return settings?.appsecret_set === true;
 }
@@ -556,8 +555,8 @@ export function pickBudget(status, settings) {
 // Returns { main, segments, tone, next|null, passive }. `segments` is the
 // authoritative phrase list the view renders as nowrap spans and `main` is the
 // same phrases joined, so copy cannot desynchronise the two.
-// §17.8: `push` is the top-level `active_push` (undefined on an older
-// backend, which keeps the §17 rules). With it, the budget is the fallback:
+// §17.8: `push` is the top-level `active_push` (optional; when the server
+// leaves it out, the §17 rules apply). With it, the budget is the fallback:
 // 「备用：」 prefix, warn and the passive hint only while push is not `ok`.
 export function wakeupBudgetView(budget, { available = true, push = undefined } = {}) {
   const remaining = budget?.wakeup_remaining;
@@ -598,7 +597,7 @@ export function formatPushTime(value) {
   return Number.isFinite(ms) && ms > 0 ? formatLocalShort(ms / 1000) : '—';
 }
 
-// §17.8 主动推送 row. null = no row (field absent, older backend).
+// §17.8 主动推送 row. null = no row (optional field absent).
 // Returns { segments: [text…] (joined with ' · '), tone: '' | 'warn' }.
 export function activePushView(status, { available = true } = {}) {
   if (!status || !('active_push' in status)) return null;
@@ -870,8 +869,7 @@ export function appIdEmpty(settings, typed, { secretEntered = false, enabled = f
 }
 
 // PUT /api/notify bodies (F rev 2). Every credential write carries a
-// top-level base_generation when the backend reports credentials_generation;
-// on an older backend it is omitted. Values only travel in the request.
+// top-level base_generation. Values only travel in the request.
 export function saveBody(settings, patch, { secret = '', openid = '' } = {}) {
   const body = { config: patch, expected_revision: settings.revision };
   body.base_generation = baseGeneration(settings);
@@ -913,10 +911,7 @@ export async function clearSecretFlow({ setBusy, render, request, onSuccess, onE
   if (ok) secretInput()?.focus();
 }
 export function clearSecretBody(settings) {
-  const body = { clear_app_secret: true, expected_secret_revision: settings.secret_revision };
-  const base = baseGeneration(settings);
-  if (base !== undefined) body.base_generation = base;
-  return body;
+  return { clear_app_secret: true, expected_secret_revision: settings.secret_revision, base_generation: baseGeneration(settings) };
 }
 
 export const LOCAL_SETTINGS_PENDING_TEXT = '机器人凭据已保存，本节点设置暂未保存，请重试。';

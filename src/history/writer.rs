@@ -14,8 +14,8 @@ pub(crate) struct Writer {
     sessions: HashMap<u64, i64>,
     /// (seq, run) → runs.id
     runs: HashMap<(u64, u64), i64>,
-    /// Compatibility association for legacy Generic events only. Samples
-    /// always use their captured boot/sequence identity.
+    /// The most recently started session that is still open. The writer
+    /// heartbeat advances its `last_seen_at` (and its runs') between samples.
     open_session: Option<i64>,
     /// Verbatim secrets (`bili_rtmp_key`, rtmp query) scrubbed from text.
     secrets: Vec<String>,
@@ -380,23 +380,6 @@ impl Writer {
                     "UPDATE bili_lives SET summary_phase='skipped' WHERE live_key=?1 AND summary_phase='pending'",
                     params![live_key],
                 )?;
-            }
-            EventKind::Generic {
-                kind,
-                subject,
-                severity,
-                title,
-                detail,
-            } => {
-                self.record_event(EventRecord {
-                    at,
-                    kind,
-                    subject: subject.as_deref(),
-                    severity: *severity,
-                    title,
-                    detail,
-                    sid: self.open_session,
-                })?;
             }
             EventKind::NotifySent {
                 key,
