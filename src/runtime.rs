@@ -1332,13 +1332,11 @@ async fn skip_stream_if_banned_keyword(
             platform,
             keyword
         );
-        if let Err(e) = send_danmaku(
+        if let Err(e) = crate::plugins::danmaku::send_banned_keyword_notice(
             cfg,
-            &crate::plugins::danmaku::banned_keyword_reply(
-                &stream.channel_name,
-                platform,
-                &keyword,
-            ),
+            &stream.channel_name,
+            platform,
+            &keyword,
         )
         .await
         {

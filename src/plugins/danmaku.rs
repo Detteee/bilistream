@@ -808,13 +808,55 @@ async fn finish_target_update<AfterUpdate, AfterFuture, Reply, ReplyFuture>(
 /// One owner-facing sentence for a banned keyword hit; the command reply and
 /// the auto-monitor alert share it, so the channel comes first and the reader
 /// cannot mistake it for a bad area argument.
-pub(crate) fn banned_keyword_reply(channel_name: &str, platform: &str, keyword: &str) -> String {
+pub(crate) fn banned_keyword_text(channel_name: &str, platform: &str, keyword: &str) -> String {
     format!(
-        "错误：{} 在 {} 的标题/分区含禁播关键词: {}",
+        "不可点播：{} 在 {} 的标题/分区含关键词: {}。",
         safe_text(channel_name, 32),
         safe_text(platform, 8),
         safe_text(keyword, 32)
     )
+}
+
+/// The messages for one banned-keyword hit: the sentence plus `网页详情：<url>`
+/// when both fit the send cap, otherwise the URL as its own send so neither
+/// part is truncated.
+fn banned_keyword_messages(main: String, advert: Option<String>) -> Vec<String> {
+    match advert {
+        Some(advert)
+            if crate::config::danmaku_width(&main) + crate::config::danmaku_width(&advert)
+                <= crate::config::DANMAKU_MAX_WIDTH =>
+        {
+            vec![format!("{main}{advert}")]
+        }
+        Some(advert) => vec![main, advert],
+        None => vec![main],
+    }
+}
+
+/// Send the banned-keyword notice. The detail line rides in the same danmaku
+/// when it fits; otherwise it goes as a second send (Bilibili cooldown) rather
+/// than being cut off.
+pub(crate) async fn send_banned_keyword_notice(
+    cfg: &Config,
+    channel_name: &str,
+    platform: &str,
+    keyword: &str,
+) -> Result<(), String> {
+    let main = banned_keyword_text(channel_name, platform, keyword);
+    let mut last_error = None;
+    for (index, message) in
+        banned_keyword_messages(main, cfg.cluster.public_status.danmaku_advert())
+            .iter()
+            .enumerate()
+    {
+        if index > 0 {
+            tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+        }
+        if let Err(error) = bilibili::send_danmaku(cfg, message).await {
+            last_error = Some(error.to_string());
+        }
+    }
+    last_error.map_or(Ok(()), Err)
 }
 
 /// Processes a single danmaku command.
@@ -1071,11 +1113,7 @@ pub async fn process_danmaku_with_owner(command: &str, is_owner: bool, sender: &
 
         if let Some(keyword) = banned_keyword_hit(&live_topic_title, &danmaku_banned_keywords()) {
             outcome.reject(&format!("直播标题/分区包含不支持的关键词: {}", keyword));
-            let _ = bilibili::send_danmaku(
-                &cfg,
-                &banned_keyword_reply(channel_name, &platform, &keyword),
-            )
-            .await;
+            let _ = send_banned_keyword_notice(&cfg, channel_name, &platform, &keyword).await;
             return;
         }
 
@@ -1934,15 +1972,15 @@ mod tests {
     fn a_configured_url_is_advertised_with_the_prefix() {
         assert_eq!(
             query_advert(&config_with_public_url("s.example.com")),
-            QueryAdvert::Send("详情：s.example.com".to_string())
+            QueryAdvert::Send("网页详情：s.example.com".to_string())
         );
     }
 
-    /// A quick-tunnel hostname is far past what a danmaku carries, and
-    /// send_danmaku does not check, so this must be caught here.
+    /// A URL that pushes the advert past the 80-character cap is reported, as
+    /// send_danmaku does not check length, so this must be caught here.
     #[test]
     fn an_over_length_url_is_reported_rather_than_sent() {
-        let url = "https://mango-tree-quiet-fox.trycloudflare.com";
+        let url = "https://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         assert_eq!(
             query_advert(&config_with_public_url(url)),
             QueryAdvert::TooLong(url.to_string())
@@ -2044,12 +2082,30 @@ mod tests {
     }
 
     #[test]
-    fn a_banned_keyword_reply_names_the_channel_before_the_platform() {
+    fn a_banned_keyword_notice_names_the_channel_and_splits_a_long_detail() {
+        let main = banned_keyword_text("英リサ", "YT", "apex");
+        assert_eq!(main, "不可点播：英リサ 在 YT 的标题/分区含关键词: apex。");
+        let advert = Some("网页详情：status.detteee.xyz".to_string());
         assert_eq!(
-            banned_keyword_reply("英リサ", "YT", "apex"),
-            "错误：英リサ 在 YT 的标题/分区含禁播关键词: apex"
+            banned_keyword_messages(main.clone(), advert.clone()),
+            vec![
+                "不可点播：英リサ 在 YT 的标题/分区含关键词: apex。网页详情：status.detteee.xyz"
+                    .to_string()
+            ]
         );
-        let dirty = banned_keyword_reply("频\n道", "YT", "k\u{1b}[31m");
+        // A long sentence pushes the combined line past the cap, so the
+        // detail goes as its own send instead of being truncated.
+        let long = format!(
+            "不可点播：{} 在 YT 的标题/分区含关键词: apex。",
+            "频".repeat(20)
+        );
+        assert_eq!(
+            banned_keyword_messages(long.clone(), advert),
+            vec![long, "网页详情：status.detteee.xyz".to_string()]
+        );
+        assert_eq!(banned_keyword_messages(main, None).len(), 1);
+
+        let dirty = banned_keyword_text("频\n道", "YT", "k\u{1b}[31m");
         assert!(!dirty.contains('\n'), "{dirty}");
         assert!(!dirty.contains('\u{1b}'), "{dirty}");
     }

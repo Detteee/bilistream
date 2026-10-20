@@ -1037,10 +1037,35 @@ async function pushClusterConfig() {
 // One node serves it, picked for bandwidth rather than for holding the stream,
 // so the choice is cluster-wide config rather than a local flag.
 
-// %查询 answers the page as 「详情：<url>」, and Bilibili caps a live danmaku at
-// 30 characters, so the prefix comes out of the same budget.
-const DANMAKU_ADVERT_PREFIX = '详情：';
-const PUBLIC_URL_MAX_CHARS = 30 - [...DANMAKU_ADVERT_PREFIX].length;
+// %查询 answers the page as 「网页详情：<url>」. A live danmaku may use 80
+// display columns here (wide/CJK characters count 2, ASCII 1), so the prefix
+// comes out of the same budget.
+const DANMAKU_MAX_WIDTH = 80;
+const DANMAKU_ADVERT_PREFIX = '网页详情：';
+
+function isWideChar(code) {
+  return (code >= 0x1100 && code <= 0x115f)
+    || (code >= 0x2e80 && code <= 0xa4cf)
+    || (code >= 0xac00 && code <= 0xd7a3)
+    || (code >= 0xf900 && code <= 0xfaff)
+    || (code >= 0xfe10 && code <= 0xfe19)
+    || (code >= 0xfe30 && code <= 0xfe6f)
+    || (code >= 0xff00 && code <= 0xff60)
+    || (code >= 0xffe0 && code <= 0xffe6)
+    || (code >= 0x1f300 && code <= 0x1f64f)
+    || (code >= 0x1f900 && code <= 0x1f9ff)
+    || (code >= 0x20000 && code <= 0x3fffd);
+}
+
+function danmakuWidth(text) {
+  let width = 0;
+  for (const char of String(text ?? '')) {
+    width += isWideChar(char.codePointAt(0)) ? 2 : 1;
+  }
+  return width;
+}
+
+const PUBLIC_URL_MAX_WIDTH = DANMAKU_MAX_WIDTH - danmakuWidth(DANMAKU_ADVERT_PREFIX);
 const PUBLIC_URL_HINT = `收到 %查询 弹幕时播报「${DANMAKU_ADVERT_PREFIX}地址」，留空则不播报。`;
 
 function publicStatusFromForm() {
@@ -1090,11 +1115,11 @@ function updatePublicStatusUrlHint() {
   const hint = document.getElementById('public-status-url-hint');
   if (!input || !hint) return;
 
-  const length = [...input.value.trim()].length;
-  const tooLong = length > PUBLIC_URL_MAX_CHARS;
+  const width = danmakuWidth(input.value.trim());
+  const tooLong = width > PUBLIC_URL_MAX_WIDTH;
   hint.classList.toggle('is-invalid', tooLong);
   hint.textContent = tooLong
-    ? `公开地址 ${length} 字，超过 ${PUBLIC_URL_MAX_CHARS} 字，%查询 不会播报；请用更短的域名。`
+    ? `公开地址 ${width} 个字符宽度，超过 ${PUBLIC_URL_MAX_WIDTH}，%查询 不会播报；请用更短的域名。`
     : PUBLIC_URL_HINT;
 }
 

@@ -401,13 +401,22 @@ impl Default for PublicStatusConfig {
     }
 }
 
-/// Bilibili drops a live danmaku longer than this, so an advertised URL that
-/// does not fit is never worth sending.
-pub const DANMAKU_MAX_CHARS: usize = 30;
+/// One live danmaku may use up to 80 display columns for this account: a
+/// wide (mostly CJK) character counts 2, ASCII 1 — i.e. 40 Chinese or 80
+/// Latin/digit characters. The warning copy and `%查询` advert share it.
+pub const DANMAKU_MAX_WIDTH: usize = 80;
 
-/// `%查询` answers carry the page as `详情：<url>`; the prefix eats into the
-/// same 30-character budget.
-pub const DANMAKU_ADVERT_PREFIX: &str = "详情：";
+/// `%查询` answers carry the page as `网页详情：<url>`; the prefix eats into
+/// the same 80-column budget.
+pub const DANMAKU_ADVERT_PREFIX: &str = "网页详情：";
+
+/// Display columns a live danmaku text occupies. Wide characters (CJK,
+/// fullwidth forms, emoji) count 2, everything else counts as 1.
+pub fn danmaku_width(text: &str) -> usize {
+    use unicode_width::UnicodeWidthChar;
+
+    text.chars().map(|ch| ch.width().unwrap_or(0)).sum()
+}
 
 impl PublicStatusConfig {
     /// Whether this node is the one that should serve the page.
@@ -419,7 +428,7 @@ impl PublicStatusConfig {
         !self.node_id.trim().is_empty()
     }
 
-    /// The `详情：<url>` line sent in reply to `%查询`, or `None` when unset or
+    /// The `网页详情：<url>` line sent in reply to `%查询`, or `None` when unset or
     /// too long to survive as a danmaku.
     pub fn danmaku_advert(&self) -> Option<String> {
         let url = self.public_url.trim();
@@ -427,12 +436,13 @@ impl PublicStatusConfig {
             return None;
         }
         let advert = format!("{DANMAKU_ADVERT_PREFIX}{url}");
-        (advert.chars().count() <= DANMAKU_MAX_CHARS).then_some(advert)
+        (danmaku_width(&advert) <= DANMAKU_MAX_WIDTH).then_some(advert)
     }
 
-    /// How many characters the URL itself may use once the prefix is counted.
-    pub fn max_public_url_chars() -> usize {
-        DANMAKU_MAX_CHARS - DANMAKU_ADVERT_PREFIX.chars().count()
+    /// How many display columns the URL itself may use once the prefix is
+    /// counted.
+    pub fn max_public_url_width() -> usize {
+        DANMAKU_MAX_WIDTH - danmaku_width(DANMAKU_ADVERT_PREFIX)
     }
 
     /// Rejects settings that would make the listener unusable or expose more
@@ -446,10 +456,10 @@ impl PublicStatusConfig {
         }
         crate::webui::parse_bind(&self.bind)?;
         let url = self.public_url.trim();
-        if !url.is_empty() && url.chars().count() > Self::max_public_url_chars() {
+        if !url.is_empty() && danmaku_width(url) > Self::max_public_url_width() {
             return Err(format!(
-                "公开地址超过 {} 字，加上「{}」会超出弹幕上限；请用更短的域名",
-                Self::max_public_url_chars(),
+                "公开地址超过 {} 个字符宽度，加上「{}」会超出弹幕上限；请用更短的域名",
+                Self::max_public_url_width(),
                 DANMAKU_ADVERT_PREFIX
             ));
         }
@@ -1806,32 +1816,56 @@ mod tests {
         assert_eq!(cfg.danmaku_advert(), None);
 
         cfg.public_url = "s.example.com".to_string();
-        assert_eq!(cfg.danmaku_advert().as_deref(), Some("详情：s.example.com"));
+        assert_eq!(
+            cfg.danmaku_advert().as_deref(),
+            Some("网页详情：s.example.com")
+        );
+        cfg.public_url = "status.detteee.xyz".to_string();
+        assert_eq!(
+            cfg.danmaku_advert().as_deref(),
+            Some("网页详情：status.detteee.xyz")
+        );
 
-        // A quick-tunnel hostname is far past what a danmaku carries.
+        // A quick-tunnel hostname still fits this account's 80-column cap.
         cfg.public_url = "https://mango-tree-quiet-fox.trycloudflare.com".to_string();
+        assert_eq!(
+            cfg.danmaku_advert().as_deref(),
+            Some("网页详情：https://mango-tree-quiet-fox.trycloudflare.com")
+        );
+
+        // Only a URL that pushes the line past the cap is rejected.
+        cfg.public_url = format!("https://{}", "a".repeat(70));
         assert_eq!(cfg.danmaku_advert(), None);
     }
 
     #[test]
     fn danmaku_advert_budget_counts_the_prefix() {
         let mut cfg = public_status("ny");
-        cfg.public_url = "a".repeat(PublicStatusConfig::max_public_url_chars());
+        cfg.public_url = "a".repeat(PublicStatusConfig::max_public_url_width());
         let advert = cfg.danmaku_advert().expect("longest fitting url");
-        assert_eq!(advert.chars().count(), DANMAKU_MAX_CHARS);
+        assert_eq!(danmaku_width(&advert), DANMAKU_MAX_WIDTH);
         assert!(cfg.validate().is_ok());
 
-        cfg.public_url = "a".repeat(PublicStatusConfig::max_public_url_chars() + 1);
+        cfg.public_url = "a".repeat(PublicStatusConfig::max_public_url_width() + 1);
         assert_eq!(cfg.danmaku_advert(), None);
         assert!(cfg.validate().is_err());
     }
 
     #[test]
-    fn danmaku_advert_counts_characters_not_bytes() {
+    fn the_danmaku_budget_counts_wide_characters_as_two_columns() {
+        assert_eq!(danmaku_width("一"), 2);
+        assert_eq!(danmaku_width("a"), 1);
+        assert!(danmaku_width(&"一".repeat(40)) <= DANMAKU_MAX_WIDTH);
+        assert!(danmaku_width(&"一".repeat(41)) > DANMAKU_MAX_WIDTH);
+        assert!(danmaku_width(&"1".repeat(80)) <= DANMAKU_MAX_WIDTH);
+        assert!(danmaku_width(&"a".repeat(81)) > DANMAKU_MAX_WIDTH);
+
+        // The URL budget is measured the same way: the prefix is 10 columns,
+        // so 35 CJK or 70 ASCII characters fit.
         let mut cfg = public_status("ny");
-        cfg.public_url = "转".repeat(PublicStatusConfig::max_public_url_chars());
+        cfg.public_url = "转".repeat(35);
         assert!(cfg.danmaku_advert().is_some());
-        cfg.public_url = "转".repeat(PublicStatusConfig::max_public_url_chars() + 1);
+        cfg.public_url = "转".repeat(36);
         assert_eq!(cfg.danmaku_advert(), None);
     }
 
@@ -1851,7 +1885,7 @@ mod tests {
         assert!(cfg.validate().is_ok());
 
         let mut cfg = public_status("ny");
-        cfg.public_url = "https://mango-tree-quiet-fox.trycloudflare.com".to_string();
+        cfg.public_url = format!("https://{}", "a".repeat(70));
         assert!(cfg.validate().is_err());
     }
 
