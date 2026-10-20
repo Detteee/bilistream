@@ -193,6 +193,15 @@ pub struct Config {
     pub enable_youtube_monitor: bool,
     #[serde(default = "default_true")]
     pub enable_twitch_monitor: bool,
+    /// PRD 10-20-warn-hold-exempt: resolved monitored-channel identities whose
+    /// post-warning/cut hold is skipped when the matched reason is ticked.
+    #[serde(default)]
+    pub warning_hold_exempt: Vec<crate::plugins::warning_exempt::ExemptChannel>,
+    /// Built-in reason ids allowed to release an exempt channel; low tier by
+    /// default. Unknown ids are refused by the settings API and ignored on a
+    /// peer push.
+    #[serde(default = "default_warning_hold_exempt_reasons")]
+    pub warning_hold_exempt_reasons: Vec<String>,
     #[serde(default)]
     pub niconico: Niconico,
     #[serde(default)]
@@ -838,6 +847,13 @@ impl Default for HistoryRetention {
 
 fn default_true() -> bool {
     true
+}
+
+/// Default exemption reasons: the low-risk 挂机/录播 class only.
+pub fn default_warning_hold_exempt_reasons() -> Vec<String> {
+    vec![crate::plugins::warning_exempt::ReasonId::IdleRecording
+        .as_str()
+        .to_owned()]
 }
 
 /// Keys in a `youtube_api_key` value: one per line or comma separated,

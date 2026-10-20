@@ -214,6 +214,8 @@ pub struct UpdateConfigRequest {
     enable_danmaku_command: Option<bool>,
     youtube_enable_monitor: Option<bool>,
     twitch_enable_monitor: Option<bool>,
+    warning_hold_exempt: Option<Vec<crate::plugins::warning_exempt::ExemptChannel>>,
+    warning_hold_exempt_reasons: Option<Vec<String>>,
     youtube_cookies_from_browser: Option<String>,
     youtube_cookies_file: Option<String>,
     niconico_user_session: Option<String>,
@@ -370,6 +372,8 @@ fn config_form_values(cfg: &Config) -> serde_json::Value {
         "clear_niconico_proxy": false,
         "cluster": cfg.cluster,
         "history": cfg.history,
+        "warning_hold_exempt": cfg.warning_hold_exempt,
+        "warning_hold_exempt_reasons": cfg.warning_hold_exempt_reasons,
     })
 }
 
@@ -416,6 +420,90 @@ fn cluster_and_niconico_edits_validate_against_the_loaded_configuration() {
         Some(&HashMap::from([("interval".into(), json!(cfg.interval))]))
     )
     .is_ok());
+}
+
+/// The settings route reports a rejected edit as `success: false` + message
+/// (its established shape; it has no coded-error envelope).
+fn edit_refusal(message: String) -> ApiResponse<()> {
+    ApiResponse {
+        success: false,
+        data: None,
+        message: Some(message),
+    }
+}
+
+/// Validate and canonicalize the reason ids a save carries: only built-in ids
+/// are accepted (a peer push ignores unknown ids instead), duplicates collapse
+/// and the order is preserved. The settings route reports refusals as an
+/// ApiResponse message (the route has no coded-error shape yet).
+pub(crate) fn validated_exempt_reasons(reasons: Vec<String>) -> Result<Vec<String>, String> {
+    let (known, unknown) = crate::plugins::warning_exempt::split_reason_ids(reasons);
+    match unknown.first() {
+        Some(reason) => Err(format!("违规类型无效：{reason}")),
+        None => Ok(known),
+    }
+}
+
+/// Validate and canonicalize the exemption channel identities a save carries:
+/// each must be one of the monitored roster's platform identities. The stored
+/// entry takes the roster's display name, never the client's; duplicates
+/// collapse.
+pub(crate) fn validated_exempt_channels(
+    entries: Vec<crate::plugins::warning_exempt::ExemptChannel>,
+    roster: &crate::config::ChannelsData,
+) -> Result<Vec<crate::plugins::warning_exempt::ExemptChannel>, String> {
+    let mut known = Vec::new();
+    for channel in &roster.channels {
+        let identities = [
+            ("YT", channel.platforms.youtube.as_deref()),
+            ("TW", channel.platforms.twitch.as_deref()),
+            ("NC", channel.platforms.niconico.as_deref()),
+        ];
+        for (platform, id) in identities {
+            if let Some(id) = id {
+                if let Some(entry) =
+                    crate::plugins::warning_exempt::ExemptChannel::new(platform, id, &channel.name)
+                {
+                    known.push(entry);
+                }
+            }
+        }
+    }
+    let mut canonical: Vec<crate::plugins::warning_exempt::ExemptChannel> = Vec::new();
+    for entry in entries {
+        let Some(entry) = crate::plugins::warning_exempt::ExemptChannel::new(
+            &entry.platform,
+            &entry.channel_id,
+            &entry.name,
+        ) else {
+            return Err("频道身份无效".into());
+        };
+        let Some(known) = known
+            .iter()
+            .find(|known| known.platform == entry.platform && known.channel_id == entry.channel_id)
+        else {
+            return Err(format!(
+                "频道不在监控列表：{}",
+                if entry.name.is_empty() {
+                    &entry.channel_id
+                } else {
+                    &entry.name
+                }
+            ));
+        };
+        let stored = crate::plugins::warning_exempt::ExemptChannel {
+            platform: known.platform.clone(),
+            channel_id: known.channel_id.clone(),
+            name: known.name.clone(),
+        };
+        if !canonical
+            .iter()
+            .any(|other| other.platform == stored.platform && other.channel_id == stored.channel_id)
+        {
+            canonical.push(stored);
+        }
+    }
+    Ok(canonical)
 }
 
 pub(crate) fn config_payload_enables_a_monitor_toggle(
@@ -790,6 +878,22 @@ pub async fn update_config(
     if let Some(twitch_enable_monitor) = payload.twitch_enable_monitor {
         cfg.twitch.enable_monitor = twitch_enable_monitor;
         cfg.enable_twitch_monitor = twitch_enable_monitor;
+    }
+    if payload.warning_hold_exempt.is_some() || payload.warning_hold_exempt_reasons.is_some() {
+        if let Some(entries) = payload.warning_hold_exempt.take() {
+            let roster =
+                crate::config::load_channels().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            match validated_exempt_channels(entries, &roster) {
+                Ok(entries) => cfg.warning_hold_exempt = entries,
+                Err(message) => return Ok(edit_refusal(message)),
+            }
+        }
+        if let Some(reasons) = payload.warning_hold_exempt_reasons.take() {
+            match validated_exempt_reasons(reasons) {
+                Ok(reasons) => cfg.warning_hold_exempt_reasons = reasons,
+                Err(message) => return Ok(edit_refusal(message)),
+            }
+        }
     }
     if let Some(youtube_cookies_from_browser) = payload.youtube_cookies_from_browser {
         cfg.youtube.cookies_from_browser = if youtube_cookies_from_browser.is_empty() {
@@ -1184,5 +1288,81 @@ mod tests {
 
         cfg.bililive.enable_danmaku_command = false;
         assert!(config_payload_enables_a_monitor_toggle(&payload, &cfg));
+    }
+
+    #[test]
+    fn exemption_settings_are_validated_against_the_monitored_roster() {
+        use crate::config::{Channel, ChannelPlatforms, ChannelsData};
+        use crate::plugins::warning_exempt::ExemptChannel;
+
+        let roster = ChannelsData {
+            channels: vec![Channel {
+                name: "星海频道".into(),
+                niconico_name: None,
+                aliases: vec![],
+                platforms: ChannelPlatforms {
+                    youtube: Some("UC1".into()),
+                    twitch: Some("StarSea".into()),
+                    niconico: None,
+                },
+                riot_puuid: None,
+            }],
+        };
+        let entries = validated_exempt_channels(
+            vec![
+                ExemptChannel {
+                    platform: "yt".into(),
+                    channel_id: "UC1".into(),
+                    name: "客户端名字".into(),
+                },
+                ExemptChannel {
+                    platform: "TW".into(),
+                    channel_id: "STARSEA".into(),
+                    name: String::new(),
+                },
+                ExemptChannel {
+                    platform: "TW".into(),
+                    channel_id: "starsea".into(),
+                    name: "重复".into(),
+                },
+            ],
+            &roster,
+        )
+        .unwrap();
+        assert_eq!(entries.len(), 2, "duplicate identities collapse");
+        assert_eq!(entries[0].platform, "YT");
+        assert_eq!(entries[0].name, "星海频道", "the roster name wins");
+        assert_eq!(entries[1].channel_id, "starsea", "TW ids canonicalize");
+        assert_eq!(
+            validated_exempt_reasons(vec!["idle_recording".into(), "idle_recording".into()]),
+            Ok(vec!["idle_recording".to_string()])
+        );
+        assert!(validated_exempt_reasons(vec!["not_a_reason".into()]).is_err());
+        let unknown_channel = vec![ExemptChannel {
+            platform: "NC".into(),
+            channel_id: "ch1".into(),
+            name: String::new(),
+        }];
+        let error = validated_exempt_channels(unknown_channel, &roster).unwrap_err();
+        assert!(error.contains("不在监控列表"), "{error}");
+    }
+
+    #[test]
+    fn config_form_values_carries_the_exemption_settings() {
+        let mut cfg = crate::test_support::config("local", 0);
+        cfg.warning_hold_exempt = vec![crate::plugins::warning_exempt::ExemptChannel {
+            platform: "YT".into(),
+            channel_id: "UC1".into(),
+            name: "星海频道".into(),
+        }];
+        cfg.warning_hold_exempt_reasons = vec!["game_mode_off".into()];
+        let values = config_form_values(&cfg);
+        assert_eq!(values["warning_hold_exempt"][0]["platform"], "YT");
+        assert_eq!(values["warning_hold_exempt"][0]["channel_id"], "UC1");
+        assert_eq!(values["warning_hold_exempt"][0]["name"], "星海频道");
+        assert_eq!(
+            values["warning_hold_exempt_reasons"],
+            json!(["game_mode_off"])
+        );
     }
 }

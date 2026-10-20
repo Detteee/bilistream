@@ -79,6 +79,94 @@ impl RiskTier {
     }
 }
 
+/// A monitored channel identity exempted from the warning/cut hold. Stored as
+/// the resolved (platform, channel id) pairs the hold matches, so a release
+/// check stays a plain list scan; `name` is display-only.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExemptChannel {
+    pub platform: String,
+    pub channel_id: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub name: String,
+}
+
+impl ExemptChannel {
+    /// Canonical platform code and channel id, or `None` when the platform is
+    /// not relayed or the id is blank. The platform codes are the same YT/TW/NC
+    /// the hold records, and TW ids are lowercased like the hold's.
+    pub fn new(platform: &str, channel_id: &str, name: &str) -> Option<Self> {
+        let platform = match platform.trim().to_ascii_uppercase().as_str() {
+            "YT" => "YT",
+            "TW" => "TW",
+            "NC" => "NC",
+            _ => return None,
+        };
+        let channel_id = super::danmaku::warning::canonical_channel_id(platform, channel_id);
+        if channel_id.is_empty() {
+            return None;
+        }
+        Some(Self {
+            platform: platform.to_owned(),
+            channel_id,
+            name: name.trim().to_owned(),
+        })
+    }
+
+    /// Whether this entry covers the held source identity.
+    pub fn matches(&self, platform: &str, channel_id: &str) -> bool {
+        self.platform == platform
+            && self.channel_id
+                == super::danmaku::warning::canonical_channel_id(platform, channel_id)
+    }
+}
+
+/// Split stored reason ids into built-in ones and unknown ones, deduplicating
+/// and preserving order. A peer push keeps the first list; the settings API
+/// refuses when the second is non-empty.
+pub fn split_reason_ids(ids: impl IntoIterator<Item = String>) -> (Vec<String>, Vec<String>) {
+    let mut known = Vec::new();
+    let mut unknown = Vec::new();
+    for id in ids {
+        if ReasonId::parse(&id).is_none() {
+            if !unknown.contains(&id) {
+                unknown.push(id);
+            }
+        } else if !known.contains(&id) {
+            known.push(id);
+        }
+    }
+    (known, unknown)
+}
+
+/// Drop exempt entries whose identity is absent from a pushed channels
+/// document. `None` (a peer that sent no roster) keeps the list untouched.
+pub fn retain_known_channels(
+    entries: &mut Vec<ExemptChannel>,
+    channels: Option<&serde_json::Value>,
+) {
+    let Some(document) = channels else {
+        return;
+    };
+    let mut known = BTreeSet::new();
+    if let Some(list) = document.get("channels").and_then(|value| value.as_array()) {
+        for channel in list {
+            let platforms = channel.get("platforms");
+            for (platform, key) in [("YT", "youtube"), ("TW", "twitch"), ("NC", "niconico")] {
+                let Some(id) = platforms
+                    .and_then(|value| value.get(key))
+                    .and_then(|value| value.as_str())
+                else {
+                    continue;
+                };
+                if let Some(entry) = ExemptChannel::new(platform, id, "") {
+                    known.insert((entry.platform, entry.channel_id));
+                }
+            }
+        }
+    }
+    entries.retain(|entry| known.contains(&(entry.platform.clone(), entry.channel_id.clone())));
+}
+
 /// Every built-in class the cleaned 违规原因 matches, in one pass. Empty means
 /// unknown (or a missing reason / the mask), which never releases a hold.
 pub fn classify(reason: &str) -> BTreeSet<ReasonId> {
@@ -179,6 +267,63 @@ mod tests {
         for reason in ["挂机", "录播", "消极直播", "未开启直播模式"] {
             assert!(classify(reason).is_empty(), "{reason}");
         }
+    }
+
+    #[test]
+    fn exempt_entries_store_canonical_identity_and_match_the_hold() {
+        let entry = ExemptChannel::new(" tw ", "StarSea", " 星海频道 ").unwrap();
+        assert_eq!(entry.platform, "TW");
+        assert_eq!(entry.channel_id, "starsea");
+        assert_eq!(entry.name, "星海频道");
+        assert!(entry.matches("TW", "STARSEA"));
+        assert!(!entry.matches("YT", "starsea"));
+        assert!(!entry.matches("TW", "other"));
+        // Unknown platforms and blank ids are not identities.
+        assert!(ExemptChannel::new("BILI", "x", "").is_none());
+        assert!(ExemptChannel::new("YT", "  ", "").is_none());
+    }
+
+    #[test]
+    fn pushed_reasons_keep_known_ids_once_and_report_unknown_ones() {
+        assert_eq!(
+            split_reason_ids([
+                "idle_recording".to_string(),
+                "not_a_reason".to_string(),
+                "game_mode_off".to_string(),
+                "idle_recording".to_string(),
+            ]),
+            (
+                vec!["idle_recording".to_string(), "game_mode_off".to_string()],
+                vec!["not_a_reason".to_string()]
+            )
+        );
+        assert_eq!(split_reason_ids(Vec::new()), (Vec::new(), Vec::new()));
+    }
+
+    #[test]
+    fn a_pushed_roster_drops_identities_it_no_longer_has() {
+        let roster = serde_json::json!({
+            "channels": [
+                { "name": "星海频道", "aliases": [], "platforms": { "youtube": "UC1", "twitch": "StarSea" } }
+            ]
+        });
+        let mut entries = vec![
+            ExemptChannel::new("YT", "UC1", "星海频道").unwrap(),
+            ExemptChannel::new("TW", "starsea", "星海频道").unwrap(),
+            ExemptChannel::new("NC", "ch2648162", "其他").unwrap(),
+        ];
+        retain_known_channels(&mut entries, Some(&roster));
+        assert_eq!(
+            entries
+                .iter()
+                .map(|e| e.platform.as_str())
+                .collect::<Vec<_>>(),
+            vec!["YT", "TW"]
+        );
+        // A peer that sent no roster cannot prove an identity is gone.
+        let mut untouched = entries.clone();
+        retain_known_channels(&mut untouched, None);
+        assert_eq!(untouched, entries);
     }
 
     #[test]

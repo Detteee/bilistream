@@ -285,6 +285,15 @@ pub(crate) fn apply_monitored_config_to_config(cfg: &mut Config, payload: Monito
     cfg.niconico.channel_id = payload.niconico_channel_id;
     cfg.niconico.live_id = payload.niconico_live_id;
     cfg.niconico.area_v2 = payload.niconico_area_v2;
+    cfg.warning_hold_exempt = payload.warning_hold_exempt;
+    // A pushed list never keeps an identity the pushed roster no longer has,
+    // and a peer's unknown reason ids are ignored (only the API rejects them).
+    crate::plugins::warning_exempt::retain_known_channels(
+        &mut cfg.warning_hold_exempt,
+        channels.as_ref(),
+    );
+    cfg.warning_hold_exempt_reasons =
+        crate::plugins::warning_exempt::split_reason_ids(payload.warning_hold_exempt_reasons).0;
 
     cfg.bililive.enable_danmaku_command = local_enable_danmaku_command;
     cfg.enable_youtube_monitor = local_enable_youtube_monitor;

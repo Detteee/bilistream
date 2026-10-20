@@ -669,6 +669,64 @@ fn monitored_config_version_changes_for_managed_document_payloads() {
 }
 
 #[test]
+fn push_applies_the_warning_hold_exemption_and_drops_gone_identities() {
+    use crate::plugins::warning_exempt::ExemptChannel;
+
+    let mut payload = monitored_config_from_config(&config("source", 0));
+    payload.channels_json = Some(serde_json::json!({
+        "channels": [
+            { "name": "星海频道", "aliases": [], "platforms": { "youtube": "UC1" } }
+        ]
+    }));
+    payload.warning_hold_exempt = vec![
+        ExemptChannel::new("YT", "UC1", "星海频道").unwrap(),
+        ExemptChannel::new("TW", "gone-id", "已移除").unwrap(),
+    ];
+    payload.warning_hold_exempt_reasons = vec![
+        "idle_recording".to_string(),
+        "not_a_reason".to_string(),
+        "idle_recording".to_string(),
+    ];
+    let mut local = config("local", 0);
+    apply_monitored_config_to_config(&mut local, payload);
+    assert_eq!(local.warning_hold_exempt.len(), 1);
+    assert_eq!(local.warning_hold_exempt[0].platform, "YT");
+    assert_eq!(local.warning_hold_exempt[0].channel_id, "UC1");
+    assert_eq!(
+        local.warning_hold_exempt_reasons,
+        vec!["idle_recording".to_string()]
+    );
+
+    // The integrity hash covers the new fields, so an older peer rejects a
+    // push that carries them instead of silently dropping the list.
+    let base = monitored_config_from_config(&config("a", 0));
+    let mut changed = base.clone();
+    changed.warning_hold_exempt = vec![ExemptChannel::new("YT", "uc1", "").unwrap()];
+    assert_ne!(
+        monitored_config_integrity_version_from_payload(&base),
+        monitored_config_integrity_version_from_payload(&changed)
+    );
+    let mut changed_reasons = base.clone();
+    changed_reasons.warning_hold_exempt_reasons = vec!["game_mode_off".into()];
+    assert_ne!(
+        monitored_config_integrity_version_from_payload(&base),
+        monitored_config_integrity_version_from_payload(&changed_reasons)
+    );
+}
+
+#[test]
+fn an_older_peer_payload_without_the_exemption_fields_reads_as_an_empty_list() {
+    let wire = serde_json::to_value(monitored_config_from_config(&config("a", 0))).unwrap();
+    let mut older = wire.clone();
+    let object = older.as_object_mut().unwrap();
+    object.remove("warning_hold_exempt");
+    object.remove("warning_hold_exempt_reasons");
+    let payload: MonitoredConfig = serde_json::from_value(older).unwrap();
+    assert!(payload.warning_hold_exempt.is_empty());
+    assert!(payload.warning_hold_exempt_reasons.is_empty());
+}
+
+#[test]
 fn monitored_config_version_changes_for_channel_targets() {
     let cfg_a = config("a", 0);
     let mut cfg_b = config("a", 0);

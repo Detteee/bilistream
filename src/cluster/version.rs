@@ -25,6 +25,8 @@ pub fn monitored_config_from_config(cfg: &Config) -> MonitoredConfig {
         niconico_area_v2: cfg.niconico.area_v2,
         channels_json: read_json_file("channels.json"),
         areas_json: read_json_file("areas.json"),
+        warning_hold_exempt: cfg.warning_hold_exempt.clone(),
+        warning_hold_exempt_reasons: cfg.warning_hold_exempt_reasons.clone(),
     };
     sanitize_local_source_settings(&mut payload);
     payload

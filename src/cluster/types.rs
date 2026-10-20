@@ -300,6 +300,12 @@ pub struct MonitoredConfig {
     pub niconico_area_v2: u64,
     pub channels_json: Option<serde_json::Value>,
     pub areas_json: Option<serde_json::Value>,
+    /// Warning-hold exemption list and allowed reason ids (PRD 10-20-warn-hold-exempt).
+    /// Joins the integrity hash, so older peers reject a push carrying them.
+    #[serde(default)]
+    pub warning_hold_exempt: Vec<crate::plugins::warning_exempt::ExemptChannel>,
+    #[serde(default)]
+    pub warning_hold_exempt_reasons: Vec<String>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq, Hash)]

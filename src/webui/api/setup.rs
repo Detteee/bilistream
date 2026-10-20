@@ -387,6 +387,8 @@ pub(crate) async fn save_setup_config(
             priority_channel: crate::config::PriorityChannel::default(),
             enable_youtube_monitor: false,
             enable_twitch_monitor: false,
+            warning_hold_exempt: Vec::new(),
+            warning_hold_exempt_reasons: crate::config::default_warning_hold_exempt_reasons(),
             niconico: crate::config::Niconico::default(),
             cluster: crate::config::ClusterConfig::default(),
             history: Default::default(),
