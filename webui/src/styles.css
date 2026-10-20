@@ -2223,6 +2223,7 @@ html:not(.app-ready) #main-page {
 .notify-settings .notify-alert[data-tone="warn"] { border-left-color: var(--warn); }
 .notify-settings .notify-alert strong { color: var(--text); }
 .notify-settings .notify-alert-note { margin-top: var(--sp-1); }
+.notify-settings .notify-alert-note.is-muted { color: var(--text-mute); }
 
 .notify-settings .notify-section {
   margin-top: var(--sp-4);

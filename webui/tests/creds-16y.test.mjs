@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises';
 import {
   appIdEmpty, appIdSet, baseGeneration, credentialPending, credentialRows, notifyRefusal, onlyPendingCodes,
   openidView, pendingCredentialBadge, readinessRow, rebindHint, selectState,
-  APPID_EMPTY, APPSECRET_HELP_SYNC, APPID_HELP_SYNC,
+  APPID_EMPTY, APPSECRET_HELP_SYNC, APPID_HELP_SYNC, OUTCOME_UNKNOWN_TEXT,
 } from '../src/js/notify-state.js';
 import { createNotifyState, CRED_MODES } from '../mock/notify-fixtures.mjs';
 
@@ -114,19 +114,22 @@ test('409 credentials_conflict and 400 base_generation_required: same copy and �
     assert.deepEqual(r.banner.action, { label: '刷新', target: 'refresh' });
   }
   // Forward-fix copy (spec rev 4): the coded 503 with outcome not_sent names
-  // the node (发送节点 when it isn't in the node list); the uncoded 503 keeps
-  // its one-line copy. Unknown outcomes are covered in notify-forward-codes.
-  for (const [err, lead, text] of [
-    [{ status: 503, body: { success: false, data: { code: 'credentials_holder_unreachable', outcome: 'not_sent' } } }, '发送节点暂时无法连接，未保存任何更改。', '请稍后重试。'],
-    [refusal(503, null), '发送节点暂时无法连接，未保存任何更改，请稍后重试。', ''],
-  ]) {
-    const r = notifyRefusal(err, null, { route: 'config' });
-    assert.equal(r.kind, 'holder_down');
-    assert.equal(r.banner.lead, lead);
-    assert.equal(r.banner.text, text);
-    assert.equal(r.banner.tone, 'warn');
-    assert.ok(!r.banner.action, 'no retry button, no auto retry');
-  }
+  // the node (发送节点 when it isn't in the node list). Rev 9 L1: an uncoded
+  // 503 takes the unknown ending with 刷新 instead of claiming nothing was
+  // saved. Unknown outcomes are covered in notify-forward-codes.
+  const coded = notifyRefusal({ status: 503, body: { success: false, data: { code: 'credentials_holder_unreachable', outcome: 'not_sent' } } }, null, { route: 'config' });
+  assert.equal(coded.kind, 'holder_down');
+  assert.equal(coded.banner.lead, '发送节点暂时无法连接，未保存任何更改。');
+  assert.equal(coded.banner.text, '请稍后重试。');
+  assert.equal(coded.banner.tone, 'warn');
+  assert.ok(!coded.banner.action, 'no retry button, no auto retry');
+  const uncoded = notifyRefusal(refusal(503, null), null, { route: 'config' });
+  assert.equal(uncoded.kind, 'holder_unknown');
+  assert.equal(uncoded.outcome, 'unknown');
+  assert.equal(uncoded.banner.lead, '发送节点暂时无法连接，保存结果未知。');
+  assert.equal(uncoded.banner.text, OUTCOME_UNKNOWN_TEXT);
+  assert.equal(uncoded.banner.tone, 'warn');
+  assert.deepEqual(uncoded.banner.action, { label: '刷新', target: 'refresh' });
 });
 
 test('empty AppID (rev 3): only when no AppID is saved; whitespace = blank when one is', () => {
@@ -375,14 +378,19 @@ test('N2: the AppID is write-only; the set flag is the only state', () => {
 
 test('L1: refused save/清除 with a typed AppSecret adds the second line and focus; none typed leaves banner as is', async () => {
   const m = await import('../src/js/notify-state.js');
-  // Clerk: only outcome === 'not_sent' may claim the AppSecret was lost, for
-  // every kind; without it (or with no body at all) the banner is unchanged.
+  // Rev 9 L2: without the not_sent line the cleared AppSecret gets a muted note
+  // under the refresh hint and focus stays on the banner.
   for (const [code, status] of [['credentials_conflict', 409], ['base_generation_required', 400], ['credentials_holder_unreachable', 503]]) {
     const missing = m.notifyRefusal({ status, body: { data: { code } } }, null, { route: 'config' });
-    assert.equal(m.secretLostRefusal(missing, true), missing, `${code} without outcome`);
+    const typed = m.secretLostRefusal(missing, true);
+    assert.equal(typed.banner.note, m.SECRET_CLEARED_NOTE, `${code} without outcome`);
+    assert.equal(typed.banner.noteTone, 'muted', `${code}: muted`);
+    assert.equal(typed.banner.lead, missing.banner.lead);
+    assert.ok(!typed.focus, `${code}: banner keeps focus`);
+    assert.equal(m.secretLostRefusal(missing, false), missing, `${code}: nothing typed`);
   }
   const uncoded = m.notifyRefusal({ status: 503, body: {} }, null, { route: 'config' });
-  assert.equal(m.secretLostRefusal(uncoded, true), uncoded, 'uncoded 503 carries no outcome');
+  assert.equal(m.secretLostRefusal(uncoded, true).banner.note, m.SECRET_CLEARED_NOTE, 'uncoded 503 carries no outcome');
   for (const [code, status] of [['credentials_conflict', 409], ['base_generation_required', 400], ['credentials_holder_unreachable', 503]]) {
     const error = { status, body: { data: { code, outcome: 'not_sent' } } };
     const base = m.notifyRefusal(error, null, { route: 'config' });
@@ -395,15 +403,18 @@ test('L1: refused save/清除 with a typed AppSecret adds the second line and fo
     assert.equal(none, base);
     assert.ok(!none.banner.note && !none.focus);
   }
+  // 解除绑定 never carries an AppSecret, so its refusals stay unchanged.
   const notOwner = m.notifyRefusal({ status: 409, body: { data: { code: 'not_owner' } } });
-  assert.equal(m.secretLostRefusal(notOwner, true), notOwner);
+  assert.equal(m.secretLostRefusal(notOwner, true, 'openid'), notOwner);
 });
 
-test('L3/N2: an uncoded 503 is holder-down on the settings route only; N1: one copy of each string', async () => {
+test('L3/N2/rev 9 L1: an uncoded 503 is unknown on the settings route only; N1: one copy of each string', async () => {
   const m = await import('../src/js/notify-state.js');
   const r = m.notifyRefusal({ status: 503, body: {} }, null, { route: 'config' });
-  assert.equal(r.kind, 'holder_down');
-  assert.equal(r.banner.lead, `${m.HOLDER_DOWN_TEXT}。`);
+  assert.equal(r.kind, 'holder_unknown');
+  assert.equal(r.banner.lead, '发送节点暂时无法连接，保存结果未知。');
+  assert.equal(r.banner.text, m.OUTCOME_UNKNOWN_TEXT);
+  assert.deepEqual(r.banner.action, { label: '刷新', target: 'refresh' });
   assert.equal(m.notifyRefusal({ status: 503, body: {} }, null, { route: 'openid' }), null);
   // Rev 4: a coded 503 maps on every route; a missing outcome is unknown.
   assert.equal(m.notifyRefusal({ status: 503, body: { data: { code: 'credentials_holder_unreachable' } } }, null, { route: 'openid' }).kind, 'holder_unknown');
@@ -411,7 +422,8 @@ test('L3/N2: an uncoded 503 is holder-down on the settings route only; N1: one c
   const fs = await import('node:fs');
   const src = fs.readFileSync(new URL('../src/js/notify-state.js', import.meta.url), 'utf8');
   assert.equal(src.split('配置已在其他节点更新，请刷新后重试').length - 1, 1);
-  assert.equal(src.split('发送节点暂时无法连接，未保存任何更改，请稍后重试').length - 1, 1);
+  assert.equal(src.split(m.SECRET_CLEARED_NOTE).length - 1, 1);
+  assert.equal(src.split('暂时无法连接').length - 1, 1, 'one copy of the unreachable phrase');
 });
 
 // Minimal focus model: focus() on a disabled element is a no-op, like the browser.

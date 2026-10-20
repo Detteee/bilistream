@@ -428,9 +428,13 @@ function codedRefusal(error, status, { route = 'openid', cluster = null, credent
     case 'bad_credentials':
       return { kind: 'bad_credentials', banner: { lead: '凭据无效。', text: '请检查 AppID 和 AppSecret 后重新填写。', tone: 'danger', action: { label: '重新填写', target: 'notify-app-secret' } } };
     default:
-      // L3 / N2 (spec 9bfa97aa): an uncoded 503 on the settings and 清除 routes is
-      // the holder being down; on the bind route it keeps 「通知服务未启动」 (§16.11).
-      if (route === 'config' && error?.status === 503) return { kind: 'holder_down', banner: { lead: `${HOLDER_DOWN_TEXT}。`, text: '', tone: 'warn' } };
+      // L3 / N2 (spec 9bfa97aa): an uncoded 503 on the settings and 清除 routes
+      // means the holder is unreachable; the bind route keeps 「通知服务未启动」
+      // (§16.11). Rev 9 L1: it can't prove nothing was saved, so it takes the
+      // unknown ending with the refresh hint instead of 未保存任何更改.
+      if (route === 'config' && error?.status === 503) {
+        return { kind: 'holder_unknown', banner: { lead: `${HOLDER_FALLBACK_NAME}${UNABLE_TO_CONNECT}，保存结果未知。`, text: OUTCOME_UNKNOWN_TEXT, tone: 'warn', action: { label: '刷新', target: 'refresh' } } };
+      }
       return null;
   }
 }
@@ -438,6 +442,7 @@ function codedRefusal(error, status, { route = 'openid', cluster = null, credent
 // list for the node id in `data.node` (local node or a peer). An unknown id,
 // a missing or blank name, or no list at all gives 发送节点. Never the id.
 export const HOLDER_FALLBACK_NAME = '发送节点';
+const UNABLE_TO_CONNECT = '暂时无法连接';
 export function refusalNodeName(data, cluster) {
   const id = typeof data?.node === 'string' ? data.node.trim() : '';
   if (!id || !cluster || typeof cluster !== 'object') return '';
@@ -462,7 +467,7 @@ function forwardRefusal(code, data, cluster) {
   const refresh = { label: '刷新', target: 'refresh' };
   // [kind when not_sent, kind when unknown, tone, first clause, not_sent hint, unknown hint]
   const [sentKind, unknownKind, tone, clause, sentHint, unknownHint] = {
-    credentials_holder_unreachable: ['holder_down', 'holder_unknown', 'warn', `${start}暂时无法连接`, '请稍后重试。', ''],
+    credentials_holder_unreachable: ['holder_down', 'holder_unknown', 'warn', `${start}${UNABLE_TO_CONNECT}`, '请稍后重试。', ''],
     credentials_membership_changing: ['membership_changing', 'membership_changing', 'warn', '节点列表正在变更', '请稍后刷新后重试。', ''],
     credentials_holder_refused: ['holder_refused', 'holder_refused', 'danger', `${start}拒绝了这次保存`, refusedHint(data), refusedHint(data)],
     credentials_holder_bad_reply: ['holder_bad_reply', 'holder_bad_reply', 'warn', `${start}的回复无法识别`, null, ''],
@@ -489,19 +494,24 @@ function refusedHint(data) {
 
 // N1: one copy of each string (used by notifyRefusal and exported for tests).
 export const CONFLICT_TEXT = '配置已在其他节点更新，请刷新后重试';
-export const HOLDER_DOWN_TEXT = '发送节点暂时无法连接，未保存任何更改，请稍后重试';
 
 // L1 (§16.y spec 58926f9b): a refused save or 清除 (409, 400, 503) that carried a
 // typed AppSecret gets a second banner line in the same tone; the caller moves
 // focus to the AppSecret field. No typed AppSecret: banner unchanged.
 export const SECRET_NOT_SAVED = 'AppSecret 未保存，请重新填写。';
+// Rev 9 L2: any refused save clears the typed AppSecret, so when the not_sent
+// line does not apply a muted line says so instead (focus stays on the banner).
+export const SECRET_CLEARED_NOTE = '已清空输入的 AppSecret，如需重新保存请重新填写。';
 // Only outcome === 'not_sent' may claim the AppSecret was lost, for every kind
 // (Clerk: a conflict or 503 without an outcome may follow a holder commit).
 // holder_unknown stays out (rev 3).
 const SECRET_LOST_KINDS = new Set(['credentials_conflict', 'holder_down', 'membership_changing', 'holder_refused', 'holder_bad_reply', 'forward_refused', 'holder_store']);
-export function secretLostRefusal(refusal, secretTyped) {
-  if (!refusal || !secretTyped || !SECRET_LOST_KINDS.has(refusal.kind) || refusal.outcome !== 'not_sent') return refusal;
-  return { ...refusal, banner: { ...refusal.banner, note: SECRET_NOT_SAVED }, focus: 'notify-app-secret' };
+export function secretLostRefusal(refusal, secretTyped, route = 'config') {
+  if (!refusal || !secretTyped || route !== 'config') return refusal;
+  if (refusal.outcome === 'not_sent' && SECRET_LOST_KINDS.has(refusal.kind)) {
+    return { ...refusal, banner: { ...refusal.banner, note: SECRET_NOT_SAVED }, focus: 'notify-app-secret' };
+  }
+  return { ...refusal, banner: { ...refusal.banner, note: SECRET_CLEARED_NOTE, noteTone: 'muted' } };
 }
 
 // Designer B1: a refusal banner must be on screen after the save. It is

@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import {
   notifyRefusal, liveRefusal, secretLostRefusal, revealRefusal, refusalNodeName, nodeAtStart, nodeInline, bodyCarriesCredentials, saveBody, clearSecretBody,
-  HOLDER_FALLBACK_NAME, SECRET_NOT_SAVED, HOLDER_DOWN_TEXT, OUTCOME_UNKNOWN_TEXT,
+  HOLDER_FALLBACK_NAME, SECRET_NOT_SAVED, SECRET_CLEARED_NOTE, OUTCOME_UNKNOWN_TEXT,
 } from '../src/js/notify-state.js';
 import { createNotifyState } from '../mock/notify-fixtures.mjs';
 
@@ -47,9 +47,11 @@ function assertUnknown(r, [code, , tone, clause, , unknownKind, , unknownHint], 
   assert.deepEqual(r.banner.action, REFRESH, at);
   assert.ok(!lines(r).includes('未保存任何更改'), `${at}: never claims nothing was saved`);
   if (code === 'credentials_store') assert.ok(!lines(r).includes('请稍后重试'), 'store: retry hint is not-sent only');
+  // Rev 9 L2: no not_sent line, so the cleared AppSecret gets a muted note.
   const typed = secretLostRefusal(r, true);
-  assert.equal(typed, r, `${at}: no AppSecret line`);
-  assert.ok(!typed.banner.note && !typed.focus, at);
+  assert.equal(typed.banner.note, SECRET_CLEARED_NOTE, `${at}: muted cleared note`);
+  assert.equal(typed.banner.noteTone, 'muted', at);
+  assert.ok(!typed.focus, `${at}: banner keeps focus`);
 }
 
 test('rev 6 matrix: every forward code × not_sent / unknown / missing / junk', () => {
@@ -86,8 +88,9 @@ test('rev 5: holder_bad_reply with outcome not_sent still gets the unknown endin
   assert.equal(r.banner.text, UNKNOWN);
   assert.deepEqual(r.banner.action, REFRESH);
   const typed = secretLostRefusal(r, true);
-  assert.equal(typed, r);
-  assert.ok(!typed.banner.note && !typed.focus);
+  assert.equal(typed.banner.note, SECRET_CLEARED_NOTE);
+  assert.equal(typed.banner.noteTone, 'muted');
+  assert.ok(!typed.focus);
 });
 
 test('rev 3 spacing: a real name has a space on each side (none at sentence start); 发送节点 has none', () => {
@@ -201,7 +204,8 @@ test('rev 6 credentials_invalid: 凭据无效 when the save carried AppID/AppSec
     assert.equal(plain.kind, 'invalid_save');
     assert.deepEqual(plain.banner, { lead: '保存内容未通过校验，未保存任何更改。', text: '请刷新后重新编辑。', tone: 'danger' });
     assert.ok(!/AppID|AppSecret/.test(lines(plain)), 'never points at the credentials');
-    assert.equal(secretLostRefusal(plain, true), plain, 'no AppSecret line');
+    assert.equal(secretLostRefusal(plain, true).banner.note, SECRET_CLEARED_NOTE, 'muted cleared note, no AppSecret line');
+    assert.ok(!secretLostRefusal(plain, true).focus);
     // Re-render after a status poll keeps the same choice.
     assert.equal(liveRefusal(e, 'config', null, true, { cluster, credentialsSent: false }).kind, 'invalid_save');
     assert.equal(liveRefusal(e, 'config', null, true, { cluster }).kind, 'bad_credentials');
@@ -223,7 +227,7 @@ test('bodyCarriesCredentials: typed AppSecret, an AppID key or 清除 AppSecret;
   for (const v of [null, undefined, 'x', 1, {}]) assert.equal(bodyCarriesCredentials(v), false);
 });
 
-test('credentials_invalid and unchanged conflict codes; the uncoded 503 keeps its copy', () => {
+test('credentials_invalid and unchanged conflict codes; an uncoded 503 takes the unknown ending', () => {
   for (const [code, status] of [['credentials_conflict', 409], ['watch_conflict', 409], ['credentials_holder_moved', 409], ['base_watch_revision_required', 400]]) {
     const r = notifyRefusal(err(status, { code, current_generation: 9, current_revision: 9, outcome: 'not_sent' }), null, { route: 'config', cluster });
     assert.equal(r.kind, 'credentials_conflict', code);
@@ -231,10 +235,11 @@ test('credentials_invalid and unchanged conflict codes; the uncoded 503 keeps it
     assert.deepEqual(r.banner.action, REFRESH, code);
   }
   const uncoded = notifyRefusal({ status: 503, body: {} }, null, { route: 'config', cluster });
-  assert.equal(uncoded.kind, 'holder_down');
-  assert.equal(uncoded.banner.lead, `${HOLDER_DOWN_TEXT}。`);
-  assert.equal(uncoded.banner.lead, '发送节点暂时无法连接，未保存任何更改，请稍后重试。');
-  assert.equal(uncoded.banner.text, '');
+  assert.equal(uncoded.kind, 'holder_unknown');
+  assert.equal(uncoded.outcome, 'unknown');
+  assert.equal(uncoded.banner.lead, '发送节点暂时无法连接，保存结果未知。');
+  assert.equal(uncoded.banner.text, OUTCOME_UNKNOWN_TEXT);
+  assert.deepEqual(uncoded.banner.action, REFRESH);
   assert.equal(notifyRefusal({ status: 503, body: {} }, null, { route: 'openid', cluster }), null);
   assert.equal(notifyRefusal(err(409, { code: 'credentials_something_new', node: HOLDER_ID }), null, { route: 'config', cluster }), null);
 });
@@ -287,12 +292,13 @@ test('Clerk: the AppSecret line needs outcome === not_sent for every kind, confl
     assert.equal(missing.banner.lead, '配置已在其他节点更新，请刷新后重试。', `${code}: copy unchanged`);
     assert.deepEqual(missing.banner.action, REFRESH, code);
     const typedMissing = secretLostRefusal(missing, true);
-    assert.equal(typedMissing, missing, `${code} without outcome: no AppSecret line`);
-    assert.ok(!typedMissing.banner.note && !typedMissing.focus, code);
+    assert.equal(typedMissing.banner.note, SECRET_CLEARED_NOTE, `${code} without outcome: muted cleared note`);
+    assert.equal(typedMissing.banner.noteTone, 'muted', code);
+    assert.ok(!typedMissing.focus, `${code}: banner keeps focus`);
     for (const junk of ['unknown', 'NOT_SENT', null, true]) {
       const r = notifyRefusal(err(status, { code, outcome: junk }), null, { route: 'config', cluster });
       assert.equal(r.outcome, 'unknown', `${code} ${String(junk)}`);
-      assert.equal(secretLostRefusal(r, true), r, `${code} ${String(junk)}: no AppSecret line`);
+      assert.equal(secretLostRefusal(r, true).banner.note, SECRET_CLEARED_NOTE, `${code} ${String(junk)}: muted cleared note`);
     }
     const sent = notifyRefusal(err(status, { code, outcome: 'not_sent' }), null, { route: 'config', cluster });
     assert.equal(sent.outcome, 'not_sent', code);
@@ -302,10 +308,10 @@ test('Clerk: the AppSecret line needs outcome === not_sent for every kind, confl
     assert.equal(typedSent.focus, 'notify-app-secret', code);
     assert.equal(typedSent.banner.lead, sent.banner.lead, code);
   }
-  // The uncoded 503 keeps its one-line copy but has no outcome, so no AppSecret line.
+  // The uncoded 503 has no outcome, so it gets the muted cleared note.
   const uncoded = notifyRefusal({ status: 503, body: {} }, null, { route: 'config', cluster });
   assert.equal(uncoded.outcome, 'unknown');
-  assert.equal(secretLostRefusal(uncoded, true), uncoded);
+  assert.equal(secretLostRefusal(uncoded, true).banner.note, SECRET_CLEARED_NOTE);
   // Every coded refusal carries an outcome.
   for (const code of ['not_owner', 'revision_conflict', 'no_writer', 'already_bound', 'credentials_missing', 'credentials_invalid', 'bad_credentials']) {
     assert.equal(notifyRefusal(err(409, { code }), null, { route: 'config', cluster }).outcome, 'unknown', code);
@@ -389,7 +395,7 @@ test('B1: every other refusal (not_sent without a typed AppSecret, unknown, conf
   ];
   for (const [at, r] of cases) {
     assert.ok(r, at);
-    assert.ok(!r.banner.note, at);
+    assert.ok(!r.banner.note || r.banner.noteTone === 'muted', `${at}: only the muted cleared note is allowed`);
     const banner = stubEl(), field = stubEl(), remove = stubEl();
     assert.equal(revealRefusal(r, { banner, resolve: resolver({ 'notify-app-secret': field, 'watch-remove': remove }) }), banner, at);
     assert.deepEqual(banner.calls, [

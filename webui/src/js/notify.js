@@ -632,7 +632,7 @@ function render() {
   }
   if (settings?.local_settings_pending === true) alert = { lead: LOCAL_SETTINGS_PENDING_TEXT, text: '', tone: 'warn' };
   if (refusalSrc) {
-    refusal = secretLostRefusal(liveRefusal(refusalSrc.error, refusalSrc.route, status, statusSeq > refusalSrc.seq, { cluster: clusterNodes(), credentialsSent: refusalSrc.credentialsSent }), refusalSrc.secretTyped);
+    refusal = secretLostRefusal(liveRefusal(refusalSrc.error, refusalSrc.route, status, statusSeq > refusalSrc.seq, { cluster: clusterNodes(), credentialsSent: refusalSrc.credentialsSent }), refusalSrc.secretTyped, refusalSrc.route);
     if (!refusal) refusalSrc = null;
   }
   if (refusal) alert = refusal.banner;
@@ -742,7 +742,7 @@ function renderAlert(alert) {
   const parts = [lead, document.createTextNode(alert.text)];
   if (alert.note) {
     const note = document.createElement('div');
-    note.className = 'notify-alert-note';
+    note.className = alert.noteTone === 'muted' ? 'notify-alert-note is-muted' : 'notify-alert-note';
     note.textContent = alert.note;
     parts.push(note);
   }
@@ -960,7 +960,7 @@ function clusterNodes() {
 // loadNotifySettings keeps dirty form edits (force only when clean).
 function handleRefusal(error, route = 'openid', { credentialsSent = true } = {}) {
   const secretTyped = Boolean(($('notify-app-secret')?.value || '').trim());
-  refusal = secretLostRefusal(notifyRefusal(error, status, { route, cluster: clusterNodes(), credentialsSent }), secretTyped);
+  refusal = secretLostRefusal(notifyRefusal(error, status, { route, cluster: clusterNodes(), credentialsSent }), secretTyped, route);
   // R1: statuses from requests started up to now are not fresh for this refusal.
   // L3: snapshot the credentials so a credential hint survives unrelated edits.
   refusalSrc = refusal ? { error, route, seq: statusReq.last, creds: readCreds(), secretTyped, credentialsSent } : null;
