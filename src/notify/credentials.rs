@@ -572,6 +572,22 @@ pub enum SaveError {
     WatchBaseRequired,
     /// 500.
     Store,
+    /// 502 `credentials_holder_refused`: the holder (or its signed-route
+    /// admission) answered with this status and no code this build knows,
+    /// e.g. 401 unsigned refusal or 403 not a member. Nothing was applied.
+    HolderRefused { status: u16 },
+    /// 502 `credentials_holder_bad_reply`: the holder's answer failed the
+    /// response checks or a 2xx did not carry an outcome. Nothing was
+    /// applied here; the holder may have committed (the next sync shows it).
+    HolderBadReply,
+    /// 502 `credentials_forward_refused`: this node refused to send (the
+    /// holder is not in its manifest, the address breaks the transport rule,
+    /// the route cannot be signed, or the request is over the route cap).
+    /// Nothing was sent.
+    ForwardRefused,
+    /// 409 `credentials_membership_changing`: the member list moved or could
+    /// not be read while forwarding. Nothing was sent.
+    MembershipChanging,
 }
 
 impl SaveError {
@@ -584,6 +600,10 @@ impl SaveError {
             SaveError::WatchConflict { .. } => "watch_conflict",
             SaveError::WatchBaseRequired => "base_watch_revision_required",
             SaveError::Store => "credentials_store",
+            SaveError::HolderRefused { .. } => "credentials_holder_refused",
+            SaveError::HolderBadReply => "credentials_holder_bad_reply",
+            SaveError::ForwardRefused => "credentials_forward_refused",
+            SaveError::MembershipChanging => "credentials_membership_changing",
         }
     }
 
@@ -597,6 +617,12 @@ impl SaveError {
             SaveError::WatchConflict { .. } => "关注列表已被其他节点修改，请重新加载后再保存",
             SaveError::WatchBaseRequired => "请重新加载通知设置后再保存关注列表",
             SaveError::Store => "机器人凭据保存失败",
+            SaveError::HolderRefused { .. } => "持有 QQ 连接的节点拒绝了这次保存，未保存任何更改",
+            SaveError::HolderBadReply => "持有 QQ 连接的节点返回了无法识别的结果，请刷新后确认",
+            SaveError::ForwardRefused => {
+                "本节点无法把这次保存发送到持有 QQ 连接的节点，未保存任何更改"
+            }
+            SaveError::MembershipChanging => "集群成员正在变化，未保存任何更改，请稍后重试",
         }
     }
 }
@@ -816,7 +842,10 @@ pub async fn save(
     match holder {
         Holder::Local | Holder::Nobody => apply_save(store, request, local, now),
         Holder::Peer(node) => {
-            let (revision, _) = link.members().map_err(|_| SaveError::HolderUnreachable)?;
+            let Ok((revision, _)) = link.members() else {
+                super::openid_sync::log_forward_failure(node, "members_unavailable", None);
+                return Err(SaveError::MembershipChanging);
+            };
             link.forward(revision, node, request).await
         }
     }

@@ -44,7 +44,7 @@ pub struct AdmittedRequest<'a> {
 }
 
 impl RoutePolicy {
-    fn validate(&self) -> io::Result<()> {
+    pub(crate) fn validate(&self) -> io::Result<()> {
         if !matches!(self.method, "GET" | "POST")
             || !(self.path.starts_with("/api/cluster/")
                 || (self.path == "/api/server/restart" && self.method == "POST"))

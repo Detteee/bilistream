@@ -496,3 +496,156 @@ fn a_notify_watch_with_manual_entries_written_by_28a20792_still_loads() {
         expected
     );
 }
+
+fn put_28a2(store: &Store) {
+    let mut config = serde_json::to_value(crate::notify::NotifyConfig::default()).unwrap();
+    config["watch"] = serde_json::from_str(WATCH_28A2).unwrap();
+    store.write(store::CONFIG_RECORD, config).unwrap();
+    store
+        .write(WATCH_RECORD, serde_json::from_str(WATCH_META_28A2).unwrap())
+        .unwrap();
+}
+
+/// ny/ca bug diagnosis: a watch edit made on a non-holder, built exactly as
+/// the panel sends it (`saveBody`: `config.watch`, `expected_revision`,
+/// `base_generation`, `base_watch_revision`), removes the configured entry and
+/// keeps both manual ones. The forwarded wire body goes into the holder's
+/// `serve_forward`, and the holder's answer is rendered as its HTTP reply and
+/// read back by `forward_reply`. The handler path accepts it: 200 with the
+/// new revision. So the holder's handler is not what refuses ny/ca.
+#[tokio::test]
+async fn a_panel_watch_edit_forwarded_from_a_non_holder_commits_on_the_holder() {
+    use crate::notify::openid_sync::forward_reply;
+    use crate::webui::api::notify::{
+        credential_part, credentials_status, forwarded, strip_watch, watch_part, UpdateNotify,
+    };
+    let (jp, ny) = (temp(), temp());
+    put_28a2(&jp.1);
+    put_28a2(&ny.1);
+    let channels = serde_json::from_str::<serde_json::Value>(WATCH_28A2).unwrap()["channels"]
+        .as_array()
+        .unwrap()[1..]
+        .to_vec();
+    let update: UpdateNotify = serde_json::from_value(serde_json::json!({
+        "config": {"watch": {"enabled": true, "channels": channels}},
+        "expected_revision": store::load_config(&ny.1).unwrap().1,
+        "base_generation": credentials::load_meta(&ny.1).unwrap().generation,
+        "base_watch_revision": load_meta(&ny.1).unwrap().revision,
+    }))
+    .unwrap();
+    assert!(credential_part(&ny.1, &update).unwrap().is_none());
+    let watch = watch_part(&ny.1, &update).unwrap().expect("watch part");
+    let mut rest = update;
+    strip_watch(&mut rest);
+    assert!(forwarded::prepare(&ny.1, &rest, "ny", "jp")
+        .unwrap()
+        .is_none());
+    let mut save = credentials::CredentialSave::default();
+    save.watch = Some(watch);
+    let body = serde_json::to_vec(&save).unwrap();
+    let wire: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    // Watch-only: no base_generation, no credential field, the list's base.
+    assert!(wire["base_generation"].is_null());
+    assert_eq!(wire["watch"]["base_revision"], 3);
+    assert_eq!(wire["watch"]["channels"].as_array().unwrap().len(), 2);
+
+    let members = vec!["jp".to_string(), "ny".to_string()];
+    let (status, reply) =
+        match credentials::serve_forward(&jp.1, "ny", &members, &body, true, "jp", 1_760_000_300) {
+            Ok(outcome) => (200, serde_json::json!({"success": true, "data": outcome})),
+            Err(ForwardRefusal::Save(error)) => (
+                credentials_status(error).as_u16(),
+                serde_json::json!({"success": false, "data": {"code": error.code()}}),
+            ),
+            Err(ForwardRefusal::NotMember) => (403, serde_json::json!({"success": false})),
+        };
+    assert_eq!(status, 200, "holder answered {reply}");
+    let outcome = forward_reply(status, &serde_json::to_vec(&reply).unwrap()).unwrap();
+    assert!(outcome.watch_changed && !outcome.changed);
+    assert_eq!(outcome.watch_revision, Some(4));
+    assert_eq!(
+        saved(&jp.1),
+        (
+            true,
+            vec!["SyntheticManualOne".into(), "SyntheticManualTwo".into()],
+            4
+        )
+    );
+}
+
+/// The forward route caps request and response at 64 KiB. The largest list a
+/// panel can send (50 entries, every manual field at its limit) and the
+/// holder's answer both stay far below it, so the cap is not what refuses.
+#[test]
+fn the_largest_forwarded_watch_save_and_its_answer_fit_the_route_caps() {
+    use crate::cluster::peer_call::routes::NOTIFY_CREDENTIALS_SAVE;
+    use crate::notify::config::{WatchPlatforms, WATCH_MAX_CHANNELS};
+    let channels: Vec<WatchChannel> = (0..WATCH_MAX_CHANNELS)
+        .map(|i| WatchChannel::Manual {
+            name: format!("{i:02}{}", "名".repeat(38)),
+            platforms: WatchPlatforms {
+                youtube: Some(format!("{i:02}{}", "y".repeat(62))),
+                twitch: Some(format!("{i:02}{}", "t".repeat(62))),
+                niconico: Some(format!("{i:02}{}", "n".repeat(62))),
+            },
+        })
+        .collect();
+    let watch = WatchConfig {
+        enabled: true,
+        channels: channels.clone(),
+    };
+    assert!(crate::notify::config::validate_watch_fields(&watch).is_ok());
+    let mut save = credentials::CredentialSave::default();
+    save.base_generation = Some(u64::MAX);
+    save.watch = Some(WatchSave {
+        base_revision: Some(u64::MAX),
+        enabled: true,
+        channels,
+    });
+    let body = serde_json::to_vec(&save).unwrap();
+    assert!(
+        body.len() < NOTIFY_CREDENTIALS_SAVE.max_request_bytes / 2,
+        "{} bytes",
+        body.len()
+    );
+    let answer = serde_json::to_vec(&serde_json::json!({
+        "success": true,
+        "data": credentials::SaveOutcome {
+            generation: u64::MAX,
+            changed: true,
+            openid_cleared: true,
+            watch_revision: Some(u64::MAX),
+            watch_changed: true,
+        },
+        "message": SaveError::HolderBadReply.message(),
+    }))
+    .unwrap();
+    assert!(answer.len() < 1024, "{} bytes", answer.len());
+}
+
+/// An unreadable watch member logs the record name and a fixed kind only:
+/// serde's error text quotes the offending value, which can be a channel
+/// name or account id.
+#[test]
+fn an_unreadable_watch_record_logs_no_field_content() {
+    const MARKER: &str = "SyntheticLeakMarker7f3";
+    let record = serde_json::json!({
+        "watch": {
+            "enabled": true,
+            "channels": [{"kind": MARKER, "name": MARKER}]
+        }
+    });
+    let (dispatch, logs) = crate::logging::test_capture::subscriber(tracing::Level::DEBUG);
+    let result = tracing::dispatcher::with_default(&dispatch, || watch_of(&record));
+    let error = result.unwrap_err();
+    assert!(!error.to_string().contains(MARKER));
+    let text = logs.text();
+    assert!(text.contains("record=notify-config"), "{text}");
+    assert!(text.contains("kind=invalid_watch"), "{text}");
+    assert!(!text.contains(MARKER), "{text}");
+    // Control: serde's own text would have carried it.
+    let serde_text = serde_json::from_value::<WatchConfig>(record["watch"].clone())
+        .unwrap_err()
+        .to_string();
+    assert!(serde_text.contains(MARKER));
+}

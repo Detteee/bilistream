@@ -166,9 +166,11 @@ pub(crate) fn build_app(state: AppState, auth: std::sync::Arc<super::listen::Aut
         .route("/cluster/v1/membership/forward", post(api::peer_forward))
         .route(
             "/cluster/v1/notify/openid",
-            get(api::peer_openid_pull)
-                .post(api::peer_openid_push)
-                .put(api::peer_credentials_save),
+            get(api::peer_openid_pull).post(api::peer_openid_push),
+        )
+        .route(
+            "/cluster/v1/notify/credentials",
+            post(api::peer_credentials_save),
         )
         .route("/cluster/v1/operation/prepare", post(api::peer_prepare))
         .route("/cluster/v1/operation/decision", post(api::peer_decision))

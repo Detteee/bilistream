@@ -347,6 +347,17 @@ async fn the_value_leaks_nowhere_but_the_peer_copy() {
     assert!(
         crate::cluster::peer_call::peer_route("DELETE", "/api/cluster/v1/notify/openid").is_none()
     );
+    // The forwarded save has its own signable POST path; no PUT anywhere.
+    assert!(crate::cluster::peer_call::browser_forbidden(
+        "/api/cluster/v1/notify/credentials"
+    ));
+    assert!(
+        crate::cluster::peer_call::peer_route("POST", "/api/cluster/v1/notify/credentials")
+            .is_some()
+    );
+    assert!(
+        crate::cluster::peer_call::peer_route("PUT", "/api/cluster/v1/notify/openid").is_none()
+    );
 }
 
 fn mark(revision: u64, writer_local: bool, at: u64) -> crate::notify::worker::PullMark {
@@ -753,4 +764,110 @@ async fn a_panicking_round_does_not_block_later_pushes() {
     // And a normal finish leaves it idle too.
     assert!(coalescer.request());
     assert!(!coalescer.finish_round());
+}
+
+/// Each way a forwarded save can fail to get an answer keeps its own kind
+/// and panel code; only a call that got no answer is "unreachable". The
+/// push/pull paths keep their old coarse `LinkError`.
+#[test]
+fn a_send_failure_keeps_its_kind_and_panel_code() {
+    use crate::cluster::peer_auth::unsigned_error;
+    use crate::notify::credentials::SaveError;
+    let io = |kind| io::Error::new(kind, "x");
+    let cases = [
+        (
+            SendFailure::from_io(&unsigned_error(401)),
+            SendFailure::Unsigned(Some(401)),
+            SaveError::HolderRefused { status: 401 },
+            LinkError::Refused,
+        ),
+        (
+            SendFailure::from_io(&unsigned_error(403)),
+            SendFailure::Unsigned(Some(403)),
+            SaveError::HolderRefused { status: 403 },
+            LinkError::Refused,
+        ),
+        (
+            SendFailure::from_io(&unsigned_error(502)),
+            SendFailure::Unreachable,
+            SaveError::HolderUnreachable,
+            LinkError::Unreachable,
+        ),
+        (
+            SendFailure::from_io(&io(io::ErrorKind::TimedOut)),
+            SendFailure::Unreachable,
+            SaveError::HolderUnreachable,
+            LinkError::Unreachable,
+        ),
+        (
+            SendFailure::from_io(&io(io::ErrorKind::ConnectionRefused)),
+            SendFailure::Unreachable,
+            SaveError::HolderUnreachable,
+            LinkError::Unreachable,
+        ),
+        (
+            SendFailure::from_io(&io(io::ErrorKind::WouldBlock)),
+            SendFailure::MembershipChanged,
+            SaveError::MembershipChanging,
+            LinkError::MembershipChanged,
+        ),
+        (
+            SendFailure::from_io(&io(io::ErrorKind::NotFound)),
+            SendFailure::NotInManifest,
+            SaveError::ForwardRefused,
+            LinkError::Refused,
+        ),
+        (
+            // A failed response signature (no status): not unreachable.
+            SendFailure::from_io(&io(io::ErrorKind::PermissionDenied)),
+            SendFailure::BadReply,
+            SaveError::HolderBadReply,
+            LinkError::Refused,
+        ),
+        (
+            SendFailure::from_io(&io(io::ErrorKind::InvalidData)),
+            SendFailure::BadReply,
+            SaveError::HolderBadReply,
+            LinkError::Refused,
+        ),
+        (
+            SendFailure::Transport,
+            SendFailure::Transport,
+            SaveError::ForwardRefused,
+            LinkError::Refused,
+        ),
+        (
+            SendFailure::TooLarge,
+            SendFailure::TooLarge,
+            SaveError::ForwardRefused,
+            LinkError::Refused,
+        ),
+    ];
+    for (got, kind, save, link) in cases {
+        assert_eq!(got, kind);
+        assert_eq!(got.save_error(), save, "{}", got.kind());
+        assert_eq!(got.link_error(), link, "{}", got.kind());
+    }
+    // The transport rule that yields `Transport`: plain HTTP to a remote host.
+    assert!(!outbound_transport_allowed("http://jp.example.test"));
+    assert!(outbound_transport_allowed("https://jp.example.test"));
+    assert!(outbound_transport_allowed("http://127.0.0.1:3150"));
+}
+
+/// The forward warn line: route, node id, kind and status only.
+#[test]
+fn the_forward_warn_line_carries_only_route_node_kind_and_status() {
+    let (dispatch, logs) = crate::logging::test_capture::subscriber(tracing::Level::DEBUG);
+    tracing::dispatcher::with_default(&dispatch, || {
+        log_forward_failure("jp", SendFailure::Unsigned(Some(401)).kind(), Some(401));
+        log_forward_failure("jp", SendFailure::Unreachable.kind(), None);
+    });
+    let text = logs.text();
+    assert!(
+        text.contains("jp") && text.contains("route=notify_credentials_save"),
+        "{text}"
+    );
+    assert!(text.contains("kind=unsigned_refusal status=401"), "{text}");
+    assert!(text.contains("kind=unreachable"), "{text}");
+    assert!(!text.contains("http"), "{text}");
 }

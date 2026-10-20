@@ -389,23 +389,43 @@ impl SignedLink {
         route: crate::cluster::peer_auth::RoutePolicy,
         body: Vec<u8>,
     ) -> Result<(u16, Vec<u8>), LinkError> {
-        let (now, _) = current_members(&self.store).map_err(|_| LinkError::MembershipChanged)?;
+        self.send(revision, node, route, body)
+            .await
+            .map_err(SendFailure::link_error)
+    }
+
+    /// One signed call, with the reason a call did not get an answer kept
+    /// apart (no text, no address, no body).
+    async fn send(
+        &self,
+        revision: u64,
+        node: &str,
+        route: crate::cluster::peer_auth::RoutePolicy,
+        body: Vec<u8>,
+    ) -> Result<(u16, Vec<u8>), SendFailure> {
+        let (now, _) = current_members(&self.store).map_err(|_| SendFailure::MembershipChanged)?;
         if now != revision {
-            return Err(LinkError::MembershipChanged);
+            return Err(SendFailure::MembershipChanged);
+        }
+        if route.validate().is_err() {
+            // `sign_request` would refuse it: nothing can be sent.
+            return Err(SendFailure::RouteInvalid);
+        }
+        if body.len() > route.max_request_bytes {
+            return Err(SendFailure::TooLarge);
         }
         let membership = crate::cluster::membership::Membership::new(Arc::clone(&self.store));
-        let allowed = membership
+        let member = membership
             .manifest()
             .ok()
             .flatten()
             .and_then(|m| m.members.into_iter().find(|m| m.node_id == node))
-            .is_some_and(|m| outbound_transport_allowed(&m.api_url));
-        if !allowed {
+            .ok_or(SendFailure::NotInManifest)?;
+        if !outbound_transport_allowed(&member.api_url) {
             // Never put the openid on plain HTTP to a remote address.
-            return Err(LinkError::Refused);
+            return Err(SendFailure::Transport);
         }
-        let client =
-            crate::cluster::peer_call::peer_client().map_err(|_| LinkError::Unreachable)?;
+        let client = crate::cluster::peer_call::peer_client().map_err(|_| SendFailure::Client)?;
         let response = crate::cluster::peer_call::send_ordinary_with(
             &membership,
             &client,
@@ -415,16 +435,124 @@ impl SignedLink {
             self.timeout,
         )
         .await
-        .map_err(|error| match crate::cluster::peer_call::classify(error) {
-            crate::cluster::peer_call::PeerCallError::Unreachable(_) => LinkError::Unreachable,
-            crate::cluster::peer_call::PeerCallError::Refused(_) => LinkError::Refused,
-        })?;
+        .map_err(|error| SendFailure::from_io(&error))?;
         Ok((response.status, response.body))
     }
 }
 
-/// A forwarded save's answer: 2xx with the outcome, 409 with a fixed code,
-/// anything else "unreachable" (nothing is applied locally either way).
+/// Why a signed call got no usable answer. Kinds only: the warn line and
+/// the panel code are built from these, never from peer or error text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SendFailure {
+    /// The local member list is unreadable or moved since it was read.
+    MembershipChanged,
+    /// The node is not in this node's committed manifest.
+    NotInManifest,
+    /// Addendum C: the member address is plain HTTP to a remote host.
+    Transport,
+    /// The body is over the route's request cap.
+    TooLarge,
+    /// The route itself cannot be signed (method or path outside the
+    /// signed-route rules).
+    RouteInvalid,
+    /// The peer client could not be built.
+    Client,
+    /// Timeout, connect failure, or an upstream gateway error (502-504, 52x).
+    Unreachable,
+    /// An unsigned refusal before any handler ran (bad signature, stale
+    /// revision, unknown member, replay): the HTTP status when known.
+    Unsigned(Option<u16>),
+    /// An answer that failed the response signature, size or type checks.
+    BadReply,
+}
+
+impl SendFailure {
+    fn from_io(error: &io::Error) -> Self {
+        let status = crate::cluster::peer_auth::unsigned_status(error);
+        match error.kind() {
+            io::ErrorKind::WouldBlock => SendFailure::MembershipChanged,
+            io::ErrorKind::NotFound => SendFailure::NotInManifest,
+            io::ErrorKind::TimedOut
+            | io::ErrorKind::ConnectionRefused
+            | io::ErrorKind::ConnectionAborted
+            | io::ErrorKind::Other => SendFailure::Unreachable,
+            io::ErrorKind::PermissionDenied if status.is_some() => SendFailure::Unsigned(status),
+            _ => SendFailure::BadReply,
+        }
+    }
+
+    /// The coarse kind the push and pull paths have always used.
+    fn link_error(self) -> LinkError {
+        match self {
+            SendFailure::MembershipChanged => LinkError::MembershipChanged,
+            SendFailure::Unreachable | SendFailure::Client => LinkError::Unreachable,
+            _ => LinkError::Refused,
+        }
+    }
+
+    pub(crate) fn kind(self) -> &'static str {
+        match self {
+            SendFailure::MembershipChanged => "membership_changed",
+            SendFailure::NotInManifest => "holder_not_in_manifest",
+            SendFailure::Transport => "transport_refused",
+            SendFailure::TooLarge => "request_too_large",
+            SendFailure::RouteInvalid => "route_invalid",
+            SendFailure::Client => "client_unavailable",
+            SendFailure::Unreachable => "unreachable",
+            SendFailure::Unsigned(_) => "unsigned_refusal",
+            SendFailure::BadReply => "bad_reply",
+        }
+    }
+
+    fn status(self) -> Option<u16> {
+        match self {
+            SendFailure::Unsigned(status) => status,
+            _ => None,
+        }
+    }
+
+    /// The panel-facing error for a forwarded save that got no answer.
+    pub(crate) fn save_error(self) -> super::credentials::SaveError {
+        use super::credentials::SaveError;
+        match self {
+            SendFailure::MembershipChanged => SaveError::MembershipChanging,
+            SendFailure::NotInManifest
+            | SendFailure::Transport
+            | SendFailure::TooLarge
+            | SendFailure::RouteInvalid
+            | SendFailure::Client => SaveError::ForwardRefused,
+            SendFailure::Unreachable => SaveError::HolderUnreachable,
+            SendFailure::Unsigned(status) => SaveError::HolderRefused {
+                status: status.unwrap_or(0),
+            },
+            SendFailure::BadReply => SaveError::HolderBadReply,
+        }
+    }
+}
+
+/// Route name for the forward warn lines (never the URL).
+const FORWARD_ROUTE: &str = "notify_credentials_save";
+
+/// One value-free line per forwarded save that did not commit: the holder's
+/// node id, the route name, the error kind and the HTTP status if any.
+pub(crate) fn log_forward_failure(node: &str, kind: &str, status: Option<u16>) {
+    match status {
+        Some(status) => tracing::warn!(
+            "QQ 通知设置转发到节点 {node} 未保存: route={FORWARD_ROUTE} kind={kind} status={status}"
+        ),
+        None => {
+            tracing::warn!("QQ 通知设置转发到节点 {node} 未保存: route={FORWARD_ROUTE} kind={kind}")
+        }
+    }
+}
+
+/// A forwarded save's answer. 2xx carries the outcome. Any other status
+/// passes the holder's own fixed code through (`credentials_conflict`,
+/// `watch_conflict`, `credentials_holder_moved`, `base_watch_revision_required`,
+/// `credentials_invalid`, `credentials_store`). A 409 or 400 without a known
+/// code keeps its old meaning; anything else is `credentials_holder_refused`
+/// with the status. A 2xx that does not parse is `credentials_holder_bad_reply`.
+/// Nothing is applied locally either way.
 pub(crate) fn forward_reply(
     status: u16,
     body: &[u8],
@@ -437,47 +565,37 @@ pub(crate) fn forward_reply(
     let data = serde_json::from_slice::<Reply>(body)
         .ok()
         .and_then(|reply| reply.data);
-    match status {
-        200..=299 => data
+    if (200..300).contains(&status) {
+        return data
             .and_then(|data| serde_json::from_value(data).ok())
-            .ok_or(SaveError::HolderUnreachable),
-        409 => {
-            let code = data
-                .as_ref()
-                .and_then(|d| d.get("code"))
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or_default();
-            let current = data
-                .as_ref()
-                .and_then(|d| d.get("current_generation"))
-                .and_then(serde_json::Value::as_u64)
-                .unwrap_or(0);
-            let watch_revision = data
-                .as_ref()
-                .and_then(|d| d.get("current_revision"))
-                .and_then(serde_json::Value::as_u64)
-                .unwrap_or(0);
-            Err(match code {
-                "credentials_conflict" => SaveError::Conflict { current },
-                "watch_conflict" => SaveError::WatchConflict {
-                    current: watch_revision,
-                },
-                _ => SaveError::HolderMoved,
-            })
-        }
-        400 => {
-            let code = data
-                .as_ref()
-                .and_then(|d| d.get("code"))
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or_default();
-            Err(match code {
-                "base_watch_revision_required" => SaveError::WatchBaseRequired,
-                _ => SaveError::Invalid,
-            })
-        }
-        _ => Err(SaveError::HolderUnreachable),
+            .ok_or(SaveError::HolderBadReply);
     }
+    let field = |name: &str| {
+        data.as_ref()
+            .and_then(|d| d.get(name))
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0)
+    };
+    let code = data
+        .as_ref()
+        .and_then(|d| d.get("code"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    Err(match (code, status) {
+        ("credentials_conflict", _) => SaveError::Conflict {
+            current: field("current_generation"),
+        },
+        ("watch_conflict", _) => SaveError::WatchConflict {
+            current: field("current_revision"),
+        },
+        ("credentials_holder_moved", _) => SaveError::HolderMoved,
+        ("base_watch_revision_required", _) => SaveError::WatchBaseRequired,
+        ("credentials_invalid", _) => SaveError::Invalid,
+        ("credentials_store", _) => SaveError::Store,
+        (_, 409) => SaveError::HolderMoved,
+        (_, 400) => SaveError::Invalid,
+        (_, status) => SaveError::HolderRefused { status },
+    })
 }
 
 #[derive(Deserialize)]
@@ -555,16 +673,26 @@ impl PeerLink for SignedLink {
         use super::credentials::SaveError;
         let body =
             zeroize::Zeroizing::new(serde_json::to_vec(save).map_err(|_| SaveError::Invalid)?);
-        let (status, reply) = self
-            .call_status(
+        let (status, reply) = match self
+            .send(
                 revision,
                 node,
                 crate::cluster::peer_call::routes::NOTIFY_CREDENTIALS_SAVE,
                 body.to_vec(),
             )
             .await
-            .map_err(|_| SaveError::HolderUnreachable)?;
-        forward_reply(status, &reply)
+        {
+            Ok(answer) => answer,
+            Err(failure) => {
+                log_forward_failure(node, failure.kind(), failure.status());
+                return Err(failure.save_error());
+            }
+        };
+        let result = forward_reply(status, &reply);
+        if let Err(error) = &result {
+            log_forward_failure(node, error.code(), Some(status));
+        }
+        result
     }
 
     async fn pull(&self, revision: u64, node: &str) -> Result<OpenidCopy, LinkError> {
@@ -777,7 +905,7 @@ pub fn spawn_pull(store: Arc<Store>, local: String) {
             // The error is local (membership read, store, changing revision):
             // peers render as `Ok(false)`. Without this the pull silently
             // waits for the next 10-minute pass.
-            Err(error) => tracing::warn!("QQ 通知管理员 openid 拉取失败: {error}"),
+            Err(error) => tracing::warn!("QQ 通知管理员 openid 拉取失败 ({:?})", error.kind()),
         }
     });
 }

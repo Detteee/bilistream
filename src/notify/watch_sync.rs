@@ -161,8 +161,13 @@ fn watch_of(config: &Value) -> io::Result<Option<WatchConfig>> {
         None => Ok(None),
         Some(value) => serde_json::from_value(value.clone())
             .map(Some)
-            .map_err(|error| {
-                tracing::warn!("QQ 关注列表记录无法解析，本轮不导出: {error}");
+            .map_err(|_| {
+                // Record name and a fixed kind only: serde's text can quote
+                // field content (channel names, account ids).
+                tracing::warn!(
+                    "QQ 关注列表记录无法解析，本轮不导出: record={} kind=invalid_watch",
+                    store::CONFIG_RECORD
+                );
                 io::Error::other("关注列表记录无法解析")
             }),
     }

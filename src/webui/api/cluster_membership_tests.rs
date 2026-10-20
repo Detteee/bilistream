@@ -1757,3 +1757,216 @@ async fn tampered_or_unsigned_absence_answer_does_not_leave() {
         );
     }
 }
+
+/// ny/ca bug, end to end over real signed transport. `b` (non-holder)
+/// forwards the panel's watch-only save (two manual entries) to `a`:
+/// `SignedLink::forward` signs it, the real router admits and verifies it on
+/// `a`, and `b` verifies the signed answer.
+///
+/// Root cause pinned first: the old route (`PUT` on the openid path) cannot
+/// be signed at all, so `sign_request` refused every forward on the sender
+/// before anything was sent, and the panel saw "unreachable".
+///
+/// Then: (1) the real `build_app` router routes the POST into
+/// `peer_credentials_save` (its answer is signed; in this test process the
+/// handler's store is the unit global store, not a member, so it answers
+/// 403, which must surface as `credentials_holder_refused` 403); (2) the same
+/// admission middleware in front of `serve_forward` on `a`'s own store
+/// commits the list with both manual entries; (3) every failure kind (stale
+/// revision, unknown holder, oversize body, unsigned and tampered answers,
+/// stopped holder) keeps its code and writes one value-free warn line.
+#[tokio::test]
+async fn a_forwarded_watch_save_is_signed_admitted_and_committed_end_to_end() {
+    use crate::notify::credentials::{CredentialSave, SaveError};
+    use crate::notify::openid_sync::{PeerLink, SignedLink};
+    let mut a = Node::new("nf-a", Some("pw-a")).await;
+    let b = Node::new("nf-b", Some("pw-b")).await;
+    let (ca, cb) = (login(&a, "pw-a").await, login(&b, "pw-b").await);
+    setup(&a, &ca, true, "a", 10).await;
+    setup(&b, &cb, false, "b", 7).await;
+    let (status, body, id) = add(&a, &ca, &b, "pw-b", 1).await;
+    assert_eq!(status, 200, "{body}");
+    wait_completed(&a, &ca, &id).await;
+    wait_released(&[&a, &b]).await;
+    let revision = manifest(&b).revision;
+    let link = SignedLink::new(b.store.clone(), "b".into());
+    let save: CredentialSave = serde_json::from_value(json!({
+        "watch": {"base_revision": 0, "enabled": true, "channels": [
+            {"kind": "manual", "name": "SyntheticManualOne",
+             "platforms": {"youtube": "UCsyntheticManualOne000001"}},
+            {"kind": "manual", "name": "SyntheticManualTwo",
+             "platforms": {"twitch": "synthetic_manual_two", "niconico": "user-synthetic-2"}}
+        ]}
+    }))
+    .unwrap();
+    let body = serde_json::to_vec(&save).unwrap();
+
+    // Root cause: the deployed route could not be signed.
+    let old_put = crate::cluster::peer_auth::RoutePolicy {
+        method: "PUT",
+        path: crate::cluster::peer_auth::NOTIFY_OPENID_PATH,
+        max_request_bytes: 64 * 1024,
+        max_response_bytes: 64 * 1024,
+    };
+    let identity = b.membership().identity().unwrap();
+    let a_member = manifest(&b)
+        .members
+        .into_iter()
+        .find(|m| m.node_id == "a")
+        .unwrap();
+    let endpoint = PeerEndpoint::parse(&a.url(), true).unwrap();
+    let hello = peer_client()
+        .unwrap()
+        .hello(&endpoint, &a_member.identity())
+        .await
+        .unwrap();
+    let cluster_id = manifest(&b).cluster_id;
+    assert!(sign_request(
+        &identity,
+        &hello,
+        &cluster_id,
+        revision,
+        PeerScope::Ordinary,
+        old_put,
+        &body
+    )
+    .is_err());
+    sign_request(
+        &identity,
+        &hello,
+        &cluster_id,
+        revision,
+        PeerScope::Ordinary,
+        routes::NOTIFY_CREDENTIALS_SAVE,
+        &body,
+    )
+    .expect("the forward route signs");
+
+    let (dispatch, logs) = crate::logging::test_capture::subscriber(tracing::Level::DEBUG);
+    let _guard = tracing::dispatcher::set_default(&dispatch);
+
+    // (1) Real router into the real handler: a signed 403 from peer_context.
+    assert_eq!(
+        link.forward(revision, "a", &save).await,
+        Err(SaveError::HolderRefused { status: 403 })
+    );
+
+    // (3) Failure kinds that need no handler change.
+    assert_eq!(
+        link.forward(revision + 1, "a", &save).await,
+        Err(SaveError::MembershipChanging)
+    );
+    assert_eq!(
+        link.forward(revision, "zz", &save).await,
+        Err(SaveError::ForwardRefused)
+    );
+    let mut oversize = CredentialSave::default();
+    oversize.appsecret = Some("S".repeat(70 * 1024));
+    assert_eq!(
+        link.forward(revision, "a", &oversize).await,
+        Err(SaveError::ForwardRefused)
+    );
+    {
+        let url = a.url();
+        let _fault = FaultGuard(url.clone());
+        set_response_fault(&url, Some(ResponseFault::Unsigned));
+        assert_eq!(
+            link.forward(revision, "a", &save).await,
+            Err(SaveError::HolderRefused { status: 403 })
+        );
+        set_response_fault(&url, Some(ResponseFault::TamperBody));
+        assert_eq!(
+            link.forward(revision, "a", &save).await,
+            Err(SaveError::HolderBadReply)
+        );
+    }
+
+    // (2) Same admission middleware, `serve_forward` on a's own store.
+    a.server.abort();
+    let _ = (&mut a.server).await;
+    let holder_store = a.store.clone();
+    let handler = move |axum::Extension(peer): axum::Extension<
+        crate::cluster::peer_call::AuthenticatedNode,
+    >,
+                        bytes: axum::body::Bytes| {
+        let store = holder_store.clone();
+        async move {
+            let (_, members) = crate::notify::openid_sync::current_members(&store).unwrap();
+            match crate::notify::credentials::serve_forward(
+                &store,
+                &peer.node_id,
+                &members,
+                &bytes,
+                true,
+                "a",
+                crate::storage::now(),
+            ) {
+                Ok(outcome) => {
+                    axum::Json(json!({"success": true, "data": outcome})).into_response()
+                }
+                Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+            }
+        }
+    };
+    let app = axum::Router::new()
+        .route(
+            routes::NOTIFY_CREDENTIALS_SAVE.path,
+            axum::routing::post(handler),
+        )
+        .layer(axum::middleware::from_fn(
+            crate::webui::listen::require_webui_auth,
+        ))
+        .layer(axum::Extension(a.auth.clone()));
+    let listener = tokio::net::TcpListener::bind(a.addr).await.unwrap();
+    a.server = tokio::spawn(async move {
+        let _ = axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .await;
+    });
+    let outcome = link.forward(revision, "a", &save).await.unwrap();
+    assert!(outcome.watch_changed && !outcome.changed);
+    assert_eq!(outcome.watch_revision, Some(1));
+    let stored = crate::notify::store::load_config(&a.store).unwrap().0.watch;
+    assert_eq!(stored.channels.len(), 2);
+    assert!(stored
+        .channels
+        .iter()
+        .all(|c| matches!(c, crate::notify::config::WatchChannel::Manual { .. })));
+
+    a.server.abort();
+    let _ = (&mut a.server).await;
+    assert_eq!(
+        link.forward(revision, "a", &save).await,
+        Err(SaveError::HolderUnreachable)
+    );
+
+    // Only the forward lines: membership drivers may log on this thread too.
+    let text: String = logs
+        .text()
+        .lines()
+        .filter(|line| line.contains("route=notify_credentials_save"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    for kind in [
+        "kind=credentials_holder_refused status=403",
+        "kind=membership_changed",
+        "kind=holder_not_in_manifest",
+        "kind=request_too_large",
+        "kind=unsigned_refusal status=403",
+        "kind=bad_reply",
+        "kind=unreachable",
+    ] {
+        assert!(text.contains(kind), "{kind}: {text}");
+    }
+    for leak in [
+        "SyntheticManual",
+        "UCsynthetic",
+        "127.0.0.1",
+        "http",
+        "SSSS",
+    ] {
+        assert!(!text.contains(leak), "{leak}: {text}");
+    }
+}

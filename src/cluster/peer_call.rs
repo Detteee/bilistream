@@ -5,7 +5,8 @@
 use super::membership::{member_endpoint, trust_snapshot, Descriptor, Membership};
 use super::peer_auth::{
     PeerClient, PeerResponse, PeerScope, RoutePolicy, HELLO_REQUEST_BYTES, HELLO_RESPONSE_BYTES,
-    MAX_BODY_BYTES, NOTIFY_OPENID_PATH, OPERATION_BODY_BYTES, PAIRING_BODY_BYTES,
+    MAX_BODY_BYTES, NOTIFY_CREDENTIALS_PATH, NOTIFY_OPENID_PATH, OPERATION_BODY_BYTES,
+    PAIRING_BODY_BYTES,
 };
 // Only `unsigned_test_send` marks the watch-sync pull, so the import exists in
 // test builds alone.
@@ -150,10 +151,11 @@ pub(crate) mod routes {
     pub(crate) const NOTIFY_OPENID_PULL: RoutePolicy =
         route("GET", NOTIFY_OPENID_PATH, 0, 64 * 1024);
     /// Addendum F: a member forwards an AppID/AppSecret save to the gateway
-    /// holder (same path as the openid route, `PUT`). The body may also
-    /// carry a follow list of up to 50 entries.
+    /// holder. The body may also carry a follow list of up to 50 entries.
+    /// `POST` on its own path: a `PUT` route can never be signed
+    /// (`RoutePolicy::validate`), which refused every forward before sending.
     pub(crate) const NOTIFY_CREDENTIALS_SAVE: RoutePolicy =
-        route("PUT", NOTIFY_OPENID_PATH, 64 * 1024, 64 * 1024);
+        route("POST", NOTIFY_CREDENTIALS_PATH, 64 * 1024, 64 * 1024);
     /// Unauthenticated bootstrap: identity proof and password-gated pairing.
     pub(crate) const HELLO: RoutePolicy = route(
         "POST",
@@ -464,4 +466,38 @@ async fn unsigned_test_send(
         content_type,
         body,
     })
+}
+
+#[cfg(test)]
+mod route_table_tests {
+    use super::*;
+
+    /// Regression (ny/ca watch-list saves): a route in this table that
+    /// `RoutePolicy::validate` refuses can never be signed, so every call
+    /// on it fails before leaving the sender. The forwarded save was a `PUT`.
+    #[test]
+    fn every_peer_route_in_the_table_can_be_signed() {
+        for (route, class) in TABLE {
+            assert!(
+                route.validate().is_ok(),
+                "{} {} ({class:?}) cannot be signed",
+                route.method,
+                route.path
+            );
+        }
+        assert_eq!(routes::NOTIFY_CREDENTIALS_SAVE.method, "POST");
+        assert_eq!(
+            routes::NOTIFY_CREDENTIALS_SAVE.path,
+            "/api/cluster/v1/notify/credentials"
+        );
+        assert_eq!(routes::NOTIFY_CREDENTIALS_SAVE.max_request_bytes, 64 * 1024);
+        assert_eq!(
+            routes::NOTIFY_CREDENTIALS_SAVE.max_response_bytes,
+            64 * 1024
+        );
+        assert!(matches!(
+            peer_route("POST", routes::NOTIFY_CREDENTIALS_SAVE.path),
+            Some((_, RouteClass::PeerOnly))
+        ));
+    }
 }

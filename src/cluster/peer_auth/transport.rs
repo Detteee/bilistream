@@ -18,6 +18,10 @@ pub const PAIRING_ROUTE: &str = "/api/cluster/v1/pairing/reserve";
 /// Older peers do not send this header, so they are not given the field.
 pub const NOTIFY_WATCH_SYNC_HEADER: &str = "x-bilistream-watch-sync";
 pub const NOTIFY_OPENID_PATH: &str = "/api/cluster/v1/notify/openid";
+/// Addendum F: a member forwards a credential / follow-list save to the
+/// gateway holder. Its own POST path: signed routes are GET or POST only
+/// (`RoutePolicy::validate`), so a PUT on the openid path could never be signed.
+pub const NOTIFY_CREDENTIALS_PATH: &str = "/api/cluster/v1/notify/credentials";
 /// Signed membership probe. The caller's stored revision is not required to be current.
 pub const RECOGNITION_ROUTE: &str = "/api/cluster/v1/membership/recognition";
 
@@ -351,14 +355,45 @@ pub(crate) fn unsigned_error(status: u16) -> io::Error {
     if matches!(status, 502..=504 | 520..=530) {
         io::Error::new(
             io::ErrorKind::ConnectionAborted,
-            format!("节点上游暂不可用（HTTP {status}）"),
+            UnsignedStatus {
+                status,
+                message: format!("节点上游暂不可用（HTTP {status}）"),
+            },
         )
     } else {
         io::Error::new(
             io::ErrorKind::PermissionDenied,
-            format!("节点拒绝请求或响应未签名（HTTP {status}）"),
+            UnsignedStatus {
+                status,
+                message: format!("节点拒绝请求或响应未签名（HTTP {status}）"),
+            },
         )
     }
+}
+
+/// The HTTP status of an unsigned answer (a refusal before any handler ran,
+/// or a gateway error), kept typed so callers can log the status without
+/// parsing text. The text is the same fixed message as before.
+#[derive(Debug)]
+pub(crate) struct UnsignedStatus {
+    status: u16,
+    message: String,
+}
+
+impl std::fmt::Display for UnsignedStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for UnsignedStatus {}
+
+/// The status carried by an `unsigned_error`, if this is one.
+pub(crate) fn unsigned_status(error: &io::Error) -> Option<u16> {
+    error
+        .get_ref()
+        .and_then(|inner| inner.downcast_ref::<UnsignedStatus>())
+        .map(|unsigned| unsigned.status)
 }
 
 fn content_type(headers: &HeaderMap) -> io::Result<String> {

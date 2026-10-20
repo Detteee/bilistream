@@ -573,6 +573,10 @@ pub(crate) fn credentials_status(error: notify::credentials::SaveError) -> Statu
         SaveError::Invalid | SaveError::WatchBaseRequired => StatusCode::BAD_REQUEST,
         SaveError::HolderUnreachable => StatusCode::SERVICE_UNAVAILABLE,
         SaveError::Store => StatusCode::INTERNAL_SERVER_ERROR,
+        SaveError::HolderRefused { .. } | SaveError::HolderBadReply | SaveError::ForwardRefused => {
+            StatusCode::BAD_GATEWAY
+        }
+        SaveError::MembershipChanging => StatusCode::CONFLICT,
     }
 }
 
@@ -586,7 +590,37 @@ fn credentials_refused(error: notify::credentials::SaveError) -> Response {
     if let SaveError::WatchConflict { current } = error {
         data["current_revision"] = json!(current);
     }
+    if let SaveError::HolderRefused { status } = error {
+        data["holder_status"] = json!(status);
+    }
     reply(status, Some(data), error.message())
+}
+
+/// A forwarded save that did not commit. The forwarding errors also name
+/// the holder node (its id, never its address) so the panel can say which
+/// node refused; the holder's own codes keep their usual body.
+pub(crate) fn forward_refused(holder: &str, error: notify::credentials::SaveError) -> Response {
+    use notify::credentials::SaveError;
+    let named = matches!(
+        error,
+        SaveError::HolderUnreachable
+            | SaveError::HolderRefused { .. }
+            | SaveError::HolderBadReply
+            | SaveError::ForwardRefused
+            | SaveError::MembershipChanging
+    );
+    if !named {
+        return credentials_refused(error);
+    }
+    let mut data = json!({ "code": error.code(), "node": holder });
+    if let SaveError::HolderRefused { status } = error {
+        data["holder_status"] = json!(status);
+    }
+    reply(
+        credentials_status(error),
+        Some(data),
+        format!("{}（节点 {holder}）", error.message()),
+    )
 }
 
 /// Rule 1: 400 for a save or 清除
@@ -841,7 +875,7 @@ pub(crate) async fn update_notify(
                 drop(save);
                 let outcome = match outcome {
                     Ok(outcome) => outcome,
-                    Err(error) => return credentials_refused(error),
+                    Err(error) => return forward_refused(peer, error),
                 };
                 if outcome.changed {
                     tracing::info!(
@@ -1140,7 +1174,7 @@ pub(crate) async fn peer_openid_pull(
     }
 }
 
-/// `PUT /api/cluster/v1/notify/openid` (peer-only, signed, Addendum F): a
+/// `POST /api/cluster/v1/notify/credentials` (peer-only, signed, Addendum F): a
 /// member forwards an AppID/AppSecret save to this node, the gateway
 /// holder. Answers `{generation, changed, openid_cleared}` or a fixed
 /// code; never a value.

@@ -1135,16 +1135,133 @@ fn a_forwarded_reply_maps_to_fixed_codes() {
     let moved = br#"{"success":false,"data":{"code":"credentials_holder_moved"}}"#;
     assert_eq!(forward_reply(409, moved), Err(SaveError::HolderMoved));
     assert_eq!(forward_reply(400, b"{}"), Err(SaveError::Invalid));
-    for status in [403, 500, 502, 503] {
+    // A status without a known code is the holder refusing, with its status;
+    // never "unreachable" (that is only for calls that got no answer).
+    for status in [401, 403, 404, 405, 500, 502, 503] {
         assert_eq!(
             forward_reply(status, b"x"),
-            Err(SaveError::HolderUnreachable)
+            Err(SaveError::HolderRefused { status })
         );
     }
     assert_eq!(
         forward_reply(200, b"not json"),
-        Err(SaveError::HolderUnreachable)
+        Err(SaveError::HolderBadReply)
     );
+    assert_eq!(
+        forward_reply(204, br#"{"success":true,"data":{"unexpected":1}}"#),
+        Err(SaveError::HolderBadReply)
+    );
+}
+
+/// The holder's own fixed code passes through whatever the status, so the
+/// panel shows the real reason (e.g. a 500 `credentials_store`).
+#[test]
+fn a_forwarded_refusal_passes_the_holders_code_through() {
+    use crate::notify::openid_sync::forward_reply;
+    let reply = |code: &str| {
+        serde_json::to_vec(&serde_json::json!({
+            "success": false,
+            "data": {"code": code, "current_generation": 5, "current_revision": 9},
+            "message": "x"
+        }))
+        .unwrap()
+    };
+    for (status, code, expected) in [
+        (500, "credentials_store", SaveError::Store),
+        (400, "credentials_invalid", SaveError::Invalid),
+        (
+            400,
+            "base_watch_revision_required",
+            SaveError::WatchBaseRequired,
+        ),
+        (
+            409,
+            "credentials_conflict",
+            SaveError::Conflict { current: 5 },
+        ),
+        (
+            409,
+            "watch_conflict",
+            SaveError::WatchConflict { current: 9 },
+        ),
+        (409, "credentials_holder_moved", SaveError::HolderMoved),
+        // An unknown code keeps the status, never the code text.
+        (
+            500,
+            "something_new",
+            SaveError::HolderRefused { status: 500 },
+        ),
+        (
+            503,
+            "notify_unavailable",
+            SaveError::HolderRefused { status: 503 },
+        ),
+    ] {
+        let error = forward_reply(status, &reply(code)).unwrap_err();
+        assert_eq!(error, expected, "{status} {code}");
+        let response_status = crate::webui::api::notify::credentials_status(error).as_u16();
+        assert_ne!(response_status, 503, "{status} {code} is not 'unreachable'");
+    }
+}
+
+/// The panel body for each forwarding error: fixed code, the holder's node
+/// id (never an address), the holder's status where known, and a message
+/// that names only the node.
+#[tokio::test]
+async fn forwarding_errors_name_only_the_node_and_kind() {
+    use crate::webui::api::notify::forward_refused;
+    for (error, status, code) in [
+        (
+            SaveError::HolderUnreachable,
+            503,
+            "credentials_holder_unreachable",
+        ),
+        (
+            SaveError::HolderRefused { status: 403 },
+            502,
+            "credentials_holder_refused",
+        ),
+        (
+            SaveError::HolderBadReply,
+            502,
+            "credentials_holder_bad_reply",
+        ),
+        (
+            SaveError::ForwardRefused,
+            502,
+            "credentials_forward_refused",
+        ),
+        (
+            SaveError::MembershipChanging,
+            409,
+            "credentials_membership_changing",
+        ),
+        (SaveError::Store, 500, "credentials_store"),
+    ] {
+        let response = forward_refused("jp", error);
+        assert_eq!(response.status().as_u16(), status, "{code}");
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 16)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["data"]["code"], code);
+        let keys: Vec<&String> = body["data"].as_object().unwrap().keys().collect();
+        for key in keys {
+            assert!(
+                ["code", "node", "holder_status"].contains(&key.as_str()),
+                "{code}: unexpected field {key}"
+            );
+        }
+        if error == SaveError::Store {
+            assert!(body["data"].get("node").is_none());
+        } else {
+            assert_eq!(body["data"]["node"], "jp");
+            assert!(body["message"].as_str().unwrap().contains("节点 jp"));
+        }
+        if let SaveError::HolderRefused { status } = error {
+            assert_eq!(body["data"]["holder_status"], status);
+        }
+    }
 }
 
 #[test]
