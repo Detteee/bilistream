@@ -120,7 +120,9 @@ export async function checkNotifyWatch({ base, context, command, evaluate, waitF
     assert.equal(await evaluate(`${rows}.length`), 3);
     assert.match(await evaluate(`${el('notify-alert')}.textContent`), /频道管理/);
     assert.equal(await evaluate('window.watchRefused'), 1);
-    assert.equal(await evaluate('document.activeElement.id'), 'notify-watch-picker-toggle');
+    // Rev 6: a refusal focuses its recovery target, else the banner; this
+    // code has a 刷新 action on the banner, so the banner gets focus.
+    assert.equal(await evaluate('document.activeElement.id'), 'notify-alert');
     await evaluate('window.fetch=window.watchOriginalFetch; delete window.watchOriginalFetch');
 
     await open('watch-empty');
