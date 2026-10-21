@@ -111,7 +111,7 @@ fn normalized_api_key(key: Option<&str>) -> Option<String> {
 }
 
 fn area_label(area_id: u64) -> String {
-    get_area_name(area_id).unwrap_or_else(|| format!("未知分区(ID: {})", area_id))
+    crate::plugins::danmaku::area_label(area_id)
 }
 
 fn disable_monitors_after_bili_start_temp_ban(cfg: &mut Config) -> bool {
@@ -1803,9 +1803,8 @@ async fn align_bili_room(
                 // `notify::live_source` below), so it carries the same
                 // source the push uses.
                 tracing::info!(
-                    "{stream_log} B站房间已开播；分区={}（ID: {}），等待推流进程",
-                    safe_text(&area_name, 32),
-                    align.area_v2
+                    "{stream_log} B站房间已开播；分区：{}，等待推流进程",
+                    safe_text(&area_name, 48)
                 );
                 recover_mutex_lock(&LAST_BANNED_KEYWORD_WARNING, "last banned keyword warning")
                     .clear();

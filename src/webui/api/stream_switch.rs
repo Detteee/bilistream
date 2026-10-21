@@ -247,7 +247,7 @@ pub async fn switch_stream(
         }
 
         tracing::info!(
-            "{} [NC] {} 监听目标配置已更新；area={}",
+            "{} [NC] {} 监听目标配置已更新；分区：{}",
             crate::logging::node_tag(&log_node),
             safe_text(&cfg.niconico.channel_name, 64),
             crate::plugins::danmaku::area_label(cfg.niconico.area_v2)
@@ -343,7 +343,7 @@ pub async fn switch_stream(
         }
 
         tracing::info!(
-            "{} [TW] {} 监听目标配置已更新；area={}",
+            "{} [TW] {} 监听目标配置已更新；分区：{}",
             crate::logging::node_tag(&log_node),
             safe_text(&cfg.twitch.channel_name, 64),
             crate::plugins::danmaku::area_label(cfg.twitch.area_v2)
@@ -423,7 +423,7 @@ pub async fn switch_stream(
     }
 
     tracing::info!(
-        "{} [YT] {} 监听目标配置已更新；area={}",
+        "{} [YT] {} 监听目标配置已更新；分区：{}",
         crate::logging::node_tag(&log_node),
         safe_text(&cfg.youtube.channel_name, 64),
         crate::plugins::danmaku::area_label(cfg.youtube.area_v2)

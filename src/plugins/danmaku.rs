@@ -710,7 +710,7 @@ impl DanmakuTargetLog {
             )
         };
         let area = self.area.as_ref().map_or_else(String::new, |(id, name)| {
-            format!("；分区={}({id})", safe_text(name, 48))
+            format!("；分区：{} ({id})", safe_text(name, 48))
         });
         let (action, sync) = match outcome {
             DanmakuTargetOutcome::Updated(sync) => ("监听目标已更新", sync),
@@ -1759,7 +1759,7 @@ mod tests {
                 "{output}"
             );
             assert!(output.contains("[ca] [弹幕 转播] #0（未知发送者） [YT] 示例频道001"));
-            assert!(output.contains("分区=其他单机(235)"));
+            assert!(output.contains("分区：其他单机 (235)"));
             assert!(output.contains(expected));
             if expected == "监听目标更新已拒绝" {
                 assert!(output.contains(" WARN [danmaku]"));
