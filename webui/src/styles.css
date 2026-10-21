@@ -1554,7 +1554,9 @@
   .log-row {
     display: block;
     padding: var(--sp-2) var(--sp-3);
-    border-bottom: 1px solid #1b1b26;
+    /* Same separator as the desktop rows, from the theme: a fixed dark value
+       reads as a black rule in the light theme. */
+    border-bottom: 1px solid color-mix(in srgb, var(--line) 55%, transparent);
   }
 
   /* The desktop columns use width:1%; inside a card that would shrink every
