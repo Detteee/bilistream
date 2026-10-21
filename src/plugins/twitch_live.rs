@@ -257,7 +257,7 @@ async fn fetch_live(
             .and_then(|errors| errors.as_array())
             .is_some_and(|errors| !errors.is_empty())
         {
-            return Err("Twitch GraphQL returned errors".into());
+            return Err("Twitch GraphQL 返回错误".into());
         }
         live.extend(parse_live(&body, chunk));
     }

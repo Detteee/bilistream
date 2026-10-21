@@ -374,11 +374,11 @@ pub(crate) fn crop_config_from_update(
     let (Some(width), Some(height), Some(x), Some(y)) =
         (payload.width, payload.height, payload.x, payload.y)
     else {
-        return Err("Crop dimensions required when enabled".to_string());
+        return Err("启用裁剪时需要填写宽高与坐标".to_string());
     };
 
     if width == 0 || height == 0 {
-        return Err("Crop width and height must be greater than 0".to_string());
+        return Err("裁剪宽高需大于 0".to_string());
     }
 
     Ok(Some(crate::config::CropConfig {

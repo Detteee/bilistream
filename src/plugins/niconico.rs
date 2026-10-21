@@ -194,7 +194,7 @@ pub fn streamlink_ingest(
 ) -> Result<PipedIngest, Box<dyn Error>> {
     let live_id = normalize_live_id(live_id);
     if live_id.is_empty() {
-        return Err("Niconico live ID is empty".into());
+        return Err("Niconico 直播 ID 为空".into());
     }
 
     let quality = if cfg.quality.trim().is_empty() {
@@ -348,7 +348,7 @@ fn channel_listing_page_recognized(html: &str) -> bool {
 fn parse_channel_live_listing_strict(html: &str) -> Result<ChannelLiveListing, Box<dyn Error>> {
     match parse_channel_live_listing(html) {
         ChannelLiveListing::Idle if !channel_listing_page_recognized(html) => {
-            Err("Niconico channel page did not parse".into())
+            Err("Niconico 频道页解析失败".into())
         }
         listing => Ok(listing),
     }
@@ -697,7 +697,7 @@ async fn get_niconico_status_via_streamlink(
 
     if parsed.streams.is_empty() {
         if strict {
-            return Err("streamlink returned no streams for the program".into());
+            return Err("streamlink 未返回可用的流".into());
         }
         return Ok(SourceStatus {
             is_live: false,

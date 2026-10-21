@@ -344,7 +344,7 @@ mod tests {
         };
         assert_eq!(
             crop_config_from_update(&missing).unwrap_err(),
-            "Crop dimensions required when enabled"
+            "启用裁剪时需要填写宽高与坐标"
         );
 
         let zero_width = UpdateCropRequest {
@@ -357,7 +357,7 @@ mod tests {
         };
         assert_eq!(
             crop_config_from_update(&zero_width).unwrap_err(),
-            "Crop width and height must be greater than 0"
+            "裁剪宽高需大于 0"
         );
 
         let valid = UpdateCropRequest {

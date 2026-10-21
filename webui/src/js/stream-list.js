@@ -122,7 +122,7 @@ function getHolodexChannelPhotoUrl(model) {
 async function refreshChannelsData() {
   const result = await managementRequest('/api/manage/channels');
   if (!result.success || !result.data) {
-    throw new Error(result.message || 'Failed to load channels');
+    throw new Error(result.message || '加载频道列表失败');
   }
   state.channelsData = result.data;
   return state.channelsData;
@@ -493,7 +493,7 @@ async function confirmHolodexAddChannel(button) {
         loadChannels();
       }
     } else {
-      showNotification('添加失败：' + (result.message || 'Unknown error'), 'error');
+      showNotification('添加失败：' + (result.message || '未知错误'), 'error');
       setHolodexAddChannelButtonsDisabled(control, false);
     }
   } catch (error) {

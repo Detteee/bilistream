@@ -237,19 +237,19 @@ async fn holodex_items(
         ListKind::Channels => {
             let roster = crate::plugins::youtube_discovery::roster_channel_ids(cfg).await;
             if roster.is_empty() {
-                return Err("No YouTube channels configured".to_string());
+                return Err("尚未配置 YouTube 频道".to_string());
             }
             if holodex_key(cfg).is_none() && !has_yt {
-                return Err("Holodex API key not configured".to_string());
+                return Err("尚未配置 Holodex API Key".to_string());
             }
             roster
         }
         ListKind::Favorites => {
             if holodex_key(cfg).is_none() {
-                return Err("Holodex API key not configured".to_string());
+                return Err("尚未配置 Holodex API Key".to_string());
             }
             if holodex_jwt(cfg).is_none() {
-                return Err("Holodex JWT required for favorites mode".to_string());
+                return Err("收藏模式需要先登录 Holodex".to_string());
             }
             Vec::new()
         }
@@ -266,7 +266,7 @@ async fn holodex_items(
                             items,
                             favorites: HashSet::new(),
                         })
-                        .map_err(|e| format!("Failed to fetch from Holodex: {e}"))
+                        .map_err(|e| format!("从 Holodex 获取失败：{e}"))
                 }
                 ListKind::Favorites => fetch_favorites(cfg).await,
             };
@@ -286,7 +286,7 @@ async fn holodex_items(
         return Err(state
             .last_error
             .clone()
-            .unwrap_or_else(|| "Holodex API key not configured".to_string()));
+            .unwrap_or_else(|| "尚未配置 Holodex API Key".to_string()));
     }
     let (items, favorites) = state
         .holodex

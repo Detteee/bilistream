@@ -169,7 +169,7 @@ impl Twitch {
             "all" => Ok("--twitch-proxy-playlist=https://lb-na.cdn-perfprod.com,https://lb-eu3.cdn-perfprod.com,https://lb-eu.cdn-perfprod.com,https://lb-eu2.cdn-perfprod.com,https://lb-eu4.cdn-perfprod.com,https://lb-eu5.cdn-perfprod.com,https://eu.luminous.dev,https://eu2.luminous.dev,https://as.luminous.dev".to_string()),
             "perf" => Ok("--twitch-proxy-playlist=https://lb-na.cdn-perfprod.com,https://lb-eu3.cdn-perfprod.com,https://lb-eu.cdn-perfprod.com,https://lb-eu2.cdn-perfprod.com,https://lb-eu4.cdn-perfprod.com,https://lb-eu5.cdn-perfprod.com".to_string()),
             "" => Ok(String::new()),
-            _ => Err("Invalid proxy region specified"),
+            _ => Err("代理区域无效"),
         }
     }
 }
@@ -356,7 +356,7 @@ fn parse_twitch_stream_status(
                         .get("type")
                         .and_then(|kind| kind.as_str())
                         .is_some_and(|kind| !kind.trim().is_empty()) => {}
-            _ => return Err("Twitch GraphQL reply has no stream field".into()),
+            _ => return Err("Twitch GraphQL 返回缺少 stream 字段".into()),
         }
     }
     let is_live = json_response["data"]["user"]["stream"]["type"] == "live";
@@ -434,7 +434,7 @@ async fn get_twitch_status_mode(
         .get("errors")
         .is_some_and(|errors| errors.as_array().is_some_and(|errors| !errors.is_empty()))
     {
-        return Err("Twitch GraphQL returned errors".into());
+        return Err("Twitch GraphQL 返回错误".into());
     }
     parse_twitch_stream_status(&json_response, strict)
 }

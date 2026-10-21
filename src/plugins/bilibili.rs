@@ -225,7 +225,7 @@ fn parse_bili_live_time_str(live_time_str: &str) -> Option<chrono::DateTime<chro
 pub(crate) fn parse_bili_live_status(res: &Value) -> Result<BiliLiveStatus, Box<dyn Error>> {
     let data = &res["data"];
     if data.is_null() {
-        return Err("Missing data in API response".into());
+        return Err("直播状态接口返回缺少 data".into());
     }
 
     let area_id = data["area_id"]
@@ -263,7 +263,7 @@ pub fn parse_bili_room_lock(res: &Value) -> Result<BiliRoomLock, Box<dyn Error>>
     }
     let data = &res["data"];
     if data.is_null() {
-        return Err("Missing data in room_init response".into());
+        return Err("room_init 接口返回缺少 data".into());
     }
     Ok(BiliRoomLock {
         is_locked: data["is_locked"].as_bool().unwrap_or(false),
@@ -695,7 +695,7 @@ fn safe_fetch_error(error: reqwest::Error) -> String {
 /// Returns the raw reply; `history::enrich` applies the allowlist.
 pub(crate) async fn bili_stop_live_data(cfg: &Config, live_key: &str) -> Result<Value, String> {
     if !history_account_ready(cfg, cfg.bililive.room.max(0) as u64) {
-        return Err("credentials unavailable".into());
+        return Err("未配置可用的B站登录凭据".into());
     }
     let cookie = bili_credential_cookie(&cfg.bililive.credentials);
     let (client, _) = bili_room_clients().map_err(safe_fetch_error)?;
@@ -717,7 +717,7 @@ pub(crate) async fn bili_stop_live_data(cfg: &Config, live_key: &str) -> Result<
 /// of `live_key` when the cluster live book has none (10 s timeout).
 pub(crate) async fn bili_room_info(cfg: &Config) -> Result<Value, String> {
     if !history_account_ready(cfg, cfg.bililive.room.max(0) as u64) {
-        return Err("credentials unavailable".into());
+        return Err("未配置可用的B站登录凭据".into());
     }
     let cookie = bili_credential_cookie(&cfg.bililive.credentials);
     let (client, _) = bili_room_clients().map_err(safe_fetch_error)?;
@@ -1217,8 +1217,8 @@ impl Credential {
         let keypair = match login_info.platform.as_deref() {
             Some("BiliTV") => AppKeyStore::BiliTV,
             Some("Android") => AppKeyStore::Android,
-            Some(_) => return Err("Unknown platform".into()),
-            None => return Err("Unknown platform".into()),
+            Some(_) => return Err("未知的登录平台".into()),
+            None => return Err("登录信息缺少平台字段".into()),
         };
 
         let mut payload = json!({
@@ -1261,7 +1261,7 @@ impl Credential {
                     ..info
                 })
             }
-            _ => Err("Failed to renew tokens".into()),
+            _ => Err("刷新B站令牌失败".into()),
         }
     }
 }
@@ -1639,13 +1639,13 @@ mod tests {
         assert!(!history_account_ready(&cfg, 1));
         assert_eq!(
             bili_room_info(&cfg).await.unwrap_err(),
-            "credentials unavailable"
+            "未配置可用的B站登录凭据"
         );
         assert_eq!(
             bili_stop_live_data(&cfg, "synthetic-key")
                 .await
                 .unwrap_err(),
-            "credentials unavailable"
+            "未配置可用的B站登录凭据"
         );
         cfg.bililive.credentials.sessdata = "synthetic-cookie".into();
         assert!(history_account_ready(&cfg, 1));

@@ -24,11 +24,11 @@ pub async fn get_holodex_streams(
     let cfg = load_config().await?;
     let api_key = match cfg.holodex_api_key {
         Some(key) if !key.is_empty() => key,
-        _ => return Err("Holodex API key not configured".into()),
+        _ => return Err("尚未配置 Holodex API Key".into()),
     };
 
     if channel_ids.is_empty() {
-        return Err("No channel IDs provided".into());
+        return Err("未提供频道 ID".into());
     }
 
     let channels_param = channel_ids.join(",");
@@ -298,7 +298,7 @@ pub async fn sync_holodex_jwt_if_needed(
                 refreshed_at: Some(holodex_unix_now()),
             })
         }
-        None if holodex_jwt_is_expired(jwt) => Err("Holodex JWT expired and refresh failed".into()),
+        None if holodex_jwt_is_expired(jwt) => Err("Holodex JWT 已过期且刷新失败".into()),
         None => Ok(HolodexJwtSyncResult {
             jwt: jwt.to_string(),
             token_rotated: false,

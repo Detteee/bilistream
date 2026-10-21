@@ -52,7 +52,7 @@ pub(crate) async fn apply_holodex_jwt_sync(
         .holodex_api_key
         .as_ref()
         .filter(|key| !key.is_empty())
-        .ok_or_else(|| "Holodex API key not configured".to_string())?
+        .ok_or_else(|| "尚未配置 Holodex API Key".to_string())?
         .clone();
 
     let sync = crate::plugins::holodex::sync_holodex_jwt_if_needed(

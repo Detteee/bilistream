@@ -69,7 +69,7 @@ struct ListenConfig {
 pub fn parse_bind(input: &str) -> Result<IpAddr, String> {
     let input = input.trim();
     if input.is_empty() {
-        return Err("bind address is empty".to_string());
+        return Err("监听地址为空".to_string());
     }
     if input.eq_ignore_ascii_case("localhost") {
         return Ok(IpAddr::V4(Ipv4Addr::LOCALHOST));

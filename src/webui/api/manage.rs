@@ -223,10 +223,7 @@ pub async fn add_channel(Json(mut payload): Json<AddChannelRequest>) -> Json<Api
     let result = mutate_managed_document("channels.json", move |data: &mut ChannelsData| {
         let platforms = normalize_managed_platforms(payload.platforms);
         if platforms.is_empty() {
-            return Err(
-                "At least one platform (YouTube, Twitch, or Niconico) must be specified"
-                    .to_string(),
-            );
+            return Err("至少需选择一个平台（YouTube、Twitch 或 Niconico）".to_string());
         }
         if data
             .channels
@@ -268,10 +265,7 @@ pub async fn update_channel_manage(
     let result = mutate_managed_document("channels.json", move |data: &mut ChannelsData| {
         let platforms = normalize_managed_platforms(payload.platforms);
         if platforms.is_empty() {
-            return Err(
-                "At least one platform (YouTube, Twitch, or Niconico) must be specified"
-                    .to_string(),
-            );
+            return Err("至少需选择一个平台（YouTube、Twitch 或 Niconico）".to_string());
         }
         let channel = data
             .channels

@@ -1103,7 +1103,7 @@ async fn get_status_with_yt_dlp(
         });
     }
 
-    Err("Unexpected output from yt-dlp".into())
+    Err("yt-dlp 返回无法识别的输出".into())
 }
 
 pub async fn get_youtube_live_title(channel_id: &str) -> Result<Option<String>, Box<dyn Error>> {
