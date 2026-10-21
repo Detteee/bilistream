@@ -581,7 +581,7 @@ pub async fn poll_login(
         Ok(status) => {
             let (status_str, message) = match status.as_str() {
                 "success" => ("success", "登录成功"),
-                "waiting" => ("waiting", "等待扫码..."),
+                "waiting" => ("waiting", "等待扫码…"),
                 "expired" => ("expired", "二维码已过期"),
                 _ => ("error", "未知状态"),
             };
@@ -651,10 +651,10 @@ pub async fn download_update(
         match updater::download_and_install_update(&download_url, None).await {
             Ok(_) => {
                 updater::set_update_status("restarting", "安装完成，正在重启");
-                tracing::info!("更新安装成功！程序将在 3 秒后重启...");
+                tracing::info!("更新安装成功！程序将在 3 秒后重启…");
 
                 // Perform graceful shutdown before restarting
-                tracing::info!("执行优雅关闭...");
+                tracing::info!("执行优雅关闭…");
                 crate::cluster::clear_local_stream();
                 crate::plugins::stop_ffmpeg().await;
 

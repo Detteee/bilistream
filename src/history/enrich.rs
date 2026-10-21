@@ -186,7 +186,7 @@ where
                 match parse_stop_live_data(&reply) {
                     Ok(totals) => return FetchResult::Finished(Some(totals)),
                     Err(error) => {
-                        tracing::warn!("B站直播汇总无效（第 {} 次）: {error:?}", attempt + 1)
+                        tracing::warn!("B站直播汇总无效（第 {} 次）：{error:?}", attempt + 1)
                     }
                 }
             }

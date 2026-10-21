@@ -205,7 +205,7 @@ pub async fn download_and_install_update(
     // Download with progress
     use std::io::Write;
 
-    tracing::info!("下载中... (大小：{} MB)", total_size / 1024 / 1024);
+    tracing::info!("下载中…（大小 {} MB）", total_size / 1024 / 1024);
     let bytes = crate::plugins::http::response_bytes_limited(response, 256 * 1024 * 1024).await?;
     file.write_all(&bytes)?;
     let downloaded = bytes.len() as u64;
@@ -215,7 +215,7 @@ pub async fn download_and_install_update(
     file.sync_all()?;
     drop(file);
 
-    tracing::info!("下载完成，开始更新...");
+    tracing::info!("下载完成，开始更新…");
 
     set_update_status("installing", "正在安装更新");
     tokio::task::spawn_blocking(move || install_update(&temp_file, &exe_dir)).await??;

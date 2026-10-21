@@ -465,7 +465,7 @@ async fn run_tray_app(
 ) -> Result<(), Box<dyn std::error::Error>> {
     if is_first_run {
         tracing::info!("欢迎使用 Bilistream！");
-        tracing::info!("   检测到首次运行，启动设置向导...");
+        tracing::info!("   检测到首次运行，启动设置向导…");
     } else {
         tracing::info!("启动 Bilistream 系统托盘模式");
     }
@@ -488,7 +488,7 @@ async fn run_webui_app(
 ) -> Result<(), Box<dyn std::error::Error>> {
     if is_first_run {
         tracing::info!("欢迎使用 Bilistream！");
-        tracing::info!("   检测到首次运行，启动 Web 设置向导...");
+        tracing::info!("   检测到首次运行，启动 Web 设置向导…");
         tracing::info!("");
         tracing::info!("请在浏览器中完成设置：");
         tracing::info!("   1. 打开浏览器访问 http://localhost:{}", port);

@@ -1592,7 +1592,7 @@ fn get_area_id(area_name: &str) -> Result<u64, Box<dyn std::error::Error>> {
         for area in areas_array {
             if let (Some(id), Some(name)) = (area["id"].as_u64(), area["name"].as_str()) {
                 if name.to_lowercase() == area_name_lower {
-                    tracing::debug!("找到分区 '{}' 的ID: {}", area_name_trimmed, id);
+                    tracing::debug!("找到分区「{}」的 ID：{}", area_name_trimmed, id);
                     return Ok(id);
                 }
             }

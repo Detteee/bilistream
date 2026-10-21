@@ -299,7 +299,7 @@ async function showQrCode() {
     // Show QR code container
     document.getElementById('qr-code-container')?.classList.remove('hidden');
     document.getElementById('show-qr-btn').textContent = '🔄 刷新二维码';
-    setSetupQrStatus('等待扫码...');
+    setSetupQrStatus('等待扫码…');
 
     // Start polling for login status
     startLoginPolling();

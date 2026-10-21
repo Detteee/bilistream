@@ -156,7 +156,7 @@ pub async fn run_tray(port: u16) -> Result<(), Box<dyn std::error::Error>> {
             }
         });
 
-        tracing::info!("进入Windows消息循环...");
+        tracing::info!("进入 Windows 消息循环…");
 
         // Windows message loop - required for tray icon events
         use std::ptr;
