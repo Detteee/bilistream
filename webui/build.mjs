@@ -11,6 +11,9 @@ const sharedPublicModules = new Set([
   'src/js/dom.js', 'src/js/format.js', 'src/js/dialog.js',
   'src/js/cluster-health.js', 'src/js/cluster-network.js', 'src/js/status-cards.js',
   'src/js/stream-model.js', 'src/js/on-air.js', 'src/js/stream-card.js',
+  // The public page shares the tooltip so its chips read like the dashboard's
+  // instead of falling back to native title bubbles.
+  'src/js/tooltip.js',
 ]);
 
 export function validatePublicModules(inputs) {

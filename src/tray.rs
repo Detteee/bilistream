@@ -102,8 +102,10 @@ pub async fn run_tray(port: u16) -> Result<(), Box<dyn std::error::Error>> {
         let (tx, rx) = mpsc::channel::<Events>();
         let tx_clone = tx.clone();
 
-        // Create tray icon with menu (icon is embedded at compile time)
-        let icon_data = include_bytes!("../icon.ico");
+        // Create tray icon with menu (icon is embedded at compile time). The
+        // icon lives in src-tauri/icons so that it is tracked in the repository:
+        // a build input that the checkout does not have cannot compile.
+        let icon_data = include_bytes!("../src-tauri/icons/icon.ico");
         let icon = Icon::from_buffer(icon_data, None, None).map_err(|error| error.to_string())?;
 
         let _tray_icon = TrayIconBuilder::new()

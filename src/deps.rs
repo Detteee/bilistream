@@ -325,7 +325,7 @@ async fn download_file_to_path(url: &str, dest: &PathBuf) -> Result<(), Box<dyn 
 }
 
 #[cfg(target_os = "windows")]
-async fn download_and_extract_ffmpeg(dest_dir: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+async fn download_and_extract_ffmpeg(dest_dir: &Path) -> Result<(), Box<dyn std::error::Error>> {
     // Download the zip file
     let response = reqwest::get(FFMPEG_URL).await?;
     let bytes = response.bytes().await?;

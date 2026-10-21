@@ -364,6 +364,27 @@ body::before {
   border-top: 1px solid var(--line-strong);
 }
 
+/* Sideways placement keeps the arrow on the anchor's centre line; the two
+   border pairs below mirror the top/bottom ones so the corner that points at
+   the anchor is the one that carries the outline. */
+.ui-tooltip[data-side="right"]::after {
+  left: -5px;
+  top: var(--arrow-y, 50%);
+  margin-left: 0;
+  margin-top: -4px;
+  border-left: 1px solid var(--line-strong);
+  border-bottom: 1px solid var(--line-strong);
+}
+
+.ui-tooltip[data-side="left"]::after {
+  left: auto;
+  right: -5px;
+  top: var(--arrow-y, 50%);
+  margin-top: -4px;
+  border-right: 1px solid var(--line-strong);
+  border-top: 1px solid var(--line-strong);
+}
+
 /* The sprite must stay in the render tree — `display: none` here stops
    gradients defined in its <defs> from resolving inside <use> shadow trees,
    which silently blanks the gradient-filled logos. */
@@ -1303,9 +1324,6 @@ input[type="checkbox"] {
    channel the anchor has no href, so it reads as plain text and is skipped by
    the tab order instead of being a link that goes nowhere. */
 .dashboard-card-link {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
   color: inherit;
   text-decoration: none;
   border-radius: var(--r-xs);
@@ -1320,22 +1338,6 @@ input[type="checkbox"] {
 .dashboard-card-link:focus-visible {
   outline: 2px solid var(--brand);
   outline-offset: 2px;
-}
-
-/* Sits on the title's baseline, not on a line of its own, and stays quiet
-   next to the name instead of borrowing the platform accent. */
-.dashboard-card-title .dashboard-card-link-icon {
-  width: 12px;
-  height: 12px;
-  flex: 0 0 12px;
-  color: inherit;
-  fill: none;
-  stroke: currentColor;
-  opacity: 0.55;
-}
-
-.dashboard-card-link:not([href]) .dashboard-card-link-icon {
-  display: none;
 }
 
 /* The header is the generous target; its own controls keep their own cursor. */
@@ -2385,8 +2387,10 @@ a.cluster-node-name-link {
    to cost a chip each: a purple ring means this node serves the public status
    page, a green dot means it answers YouTube for the cluster. The badge
    tooltip spells both out. */
+/* Recolouring the border keeps the ring on the pill itself; an outer box-shadow
+   floated a second outline around it, which read as brackets. */
 .cluster-node-tile .cluster-badge.is-public-status {
-  box-shadow: 0 0 0 1px var(--brand-2);
+  border-color: var(--brand-2);
 }
 
 .cluster-node-tile .cluster-badge.has-yt-index::after {

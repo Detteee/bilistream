@@ -701,7 +701,7 @@ fn show_windows_notification(port: u16) -> Result<(), Box<dyn std::error::Error>
     );
 
     StdCommand::new("powershell")
-        .args(&["-NoProfile", "-Command", &script])
+        .args(["-NoProfile", "-Command", &script])
         .spawn()?;
 
     Ok(())

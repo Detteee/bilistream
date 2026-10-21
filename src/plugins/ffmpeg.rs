@@ -787,12 +787,15 @@ async fn kill_child_tree(child: &mut IngestProcess) {
     }
 }
 
+#[cfg(unix)]
 fn configure_ingest_process_group(cmd: &mut Command) {
-    #[cfg(unix)]
-    {
-        cmd.process_group(0);
-    }
+    cmd.process_group(0);
 }
+
+// Windows has no process group to join; the ingest child is stopped through the
+// job object that `configure_tokio_no_window` creates instead.
+#[cfg(not(unix))]
+fn configure_ingest_process_group(_cmd: &mut Command) {}
 
 async fn spawn_piped_ingest(
     ingest: &PipedIngest,

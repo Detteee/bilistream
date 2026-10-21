@@ -10,6 +10,7 @@ import { clusterIsRestreaming, activeRestream, renderNodes } from './nodes.js';
 import { createJsonPoller } from './request.js';
 import { nextStatusFold } from './status-fold.js';
 import { bindDialog, bindListboxKeyboard } from '../../src/js/dialog.js';
+import { initTooltips } from '../../src/js/tooltip.js';
 import {
   closeAreaModal,
   closeCommandModal,
@@ -192,6 +193,7 @@ function initModals() {
 function init() {
   initTheme();
   initModals();
+  initTooltips();
   bindPublicFold(() => {
     statusFold = nextStatusFold(statusFold, { type: 'toggle' });
     applyPublicFold(statusFold);

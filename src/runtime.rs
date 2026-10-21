@@ -4432,10 +4432,14 @@ mod tests {
             ];
             let mut cursor = 0;
             for text in ordered {
-                cursor += output[cursor..]
-                    .find(text)
-                    .unwrap_or_else(|| panic!("missing/out-of-order {text}: {output}"))
-                    + text.len();
+                // The level filter is process-global: name it in the failure so a
+                // capture that lost a line shows why instead of only what.
+                cursor += output[cursor..].find(text).unwrap_or_else(|| {
+                    panic!(
+                        "missing/out-of-order {text} (max_level={:?}): {output}",
+                        tracing::level_filters::LevelFilter::current()
+                    )
+                }) + text.len();
             }
             assert!(!output.contains("https://"));
             println!("{output}");
