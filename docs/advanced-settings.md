@@ -51,6 +51,22 @@ A Bilibili warning, cut or timed room lock temporarily holds the affected channe
 
 You can also clear the hold with **重启流**, a bilistream process restart, or **解除临时跳过** on the YouTube / Twitch / Niconico / priority card that is actually held. A `%转播%` command for the held channel does not clear it; the room reply asks the viewer to switch to another channel. The card action clears the hold without stopping the current stream; an enabled **自动重启流** can then switch back to a playable priority channel. A timed room lock still waits until its unlock time.
 
+## Warning/cut exemption and automatic stop
+
+**违规后可续播** (System Settings → Basic Settings) skips bilistream's temporary hold after a Bilibili warning/cut for the channels and reasons you allow. The stop itself still happens: bilistream closes the room, records the warning, and the next monitor poll may start live again. Defaults keep the old behaviour (no exempt channel).
+
+- **Low risk · 挂机/录播等消极直播** — **应用到全部频道** switches this class on for every monitored channel; no channel list is needed. Off by default.
+- **Medium/high risk** — tick the reason and add channels under **中高风险 · 指定频道**. The class comes from the cleaned 违规原因; a reason matching several classes releases only when every class is ticked.
+- Unknown reasons, a warning without a reason, an unpaired mask and a timed room lock (`ROOM_LOCK`) are never exempt. The immediate stop, banned keywords and the monitor shutdown on a start restriction are unchanged.
+- At most one automatic restart per channel and episode within 30 minutes; a second warning/cut inside that window holds as usual. Since repeated violations can get the room closed, keep the list narrow. This record is shared in the cluster heartbeat, so a failover node makes the same call.
+- The 警告/切断 danmaku says 「稍后自动恢复」 when the hold was released, and 「暂停转播 {channel}，请换台」 when it stays.
+
+**源结束后自动停播** (Basic Settings) closes the Bilibili room when the relayed source ends while the room is still live — a silent room is what Bilibili later flags as 挂机/录播. On by default.
+
+- **满该时长立即停播 (小时)** (default 3, 1–168): a room that has been live at least that long stops immediately after the 结束弹幕.
+- A shorter session waits one monitor interval first, so a brief source hiccup does not cost the room; if no new source appears, the room is then closed.
+- The QQ 下播 notice reads 结束原因：源直播结束后自动停播. Turning the switch off keeps the room live after the source ends (older behaviour); Bilibili may then flag it as 挂机 later.
+
 ## YouTube discovery settings
 
 | Setting/source | Purpose |
