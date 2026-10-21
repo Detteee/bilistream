@@ -495,14 +495,15 @@ async function main() {
         tabStrip: !!document.getElementById('analytics-detail-segments'),
         paging: !!document.getElementById('analytics-detail-prev') || !!document.getElementById('analytics-detail-next'),
       });
-      const pick = text => {
-        const option = [...select.options].find(o => o.textContent.includes(text));
+      const pick = (text, skip = 0) => {
+        const option = [...select.options].filter(o => o.textContent.includes(text))[skip];
         select.value = option.value;
         select.dispatchEvent(new Event('change', { bubbles: true }));
       };
       const open = () => document.getElementById('analytics-aud-detail').click();
       // A 场 that kept one channel but restarted on another node: one 段, still marked.
-      pick('示例频道 003');
+      // The live 003 场 is listed first; the restarted, finished one is second.
+      pick('示例频道 003', 1);
       open();
       await until(() => dialog.open && rows().length > 0, 'single open');
       await until(() => body.querySelectorAll('.analytics-uplot').length === 2, 'single charts');

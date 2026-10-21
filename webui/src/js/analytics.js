@@ -916,7 +916,6 @@ async function showBroadcast(group) {
   destroyChartsIn(body);
   $('analytics-detail-title').textContent = '本场详情';
   const segments = group.segments;
-  const many = segments.length > 1;
   const last = segments[segments.length - 1];
   const end = last.end;
   const nodes = [...new Set(segments.flatMap(seg => seg.nodes))];

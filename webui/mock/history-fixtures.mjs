@@ -108,7 +108,9 @@ function restartedLive(sessions) {
   if (at < 0) return;
   const whole = sessions[at];
   const mid = whole.started_at + Math.floor((whole.ended_at - whole.started_at) * 0.6);
-  const first = { ...whole, ended_at: mid, duration_secs: mid - whole.started_at, end_reason: 'process_restart', broadcast_id: `live:${whole.n}`, gaps: [] };
+  // The first half keeps the relay's own gap (a restart inside the row), so the
+  // 场 carries both kinds of 中断: one gap and one node handover.
+  const first = { ...whole, ended_at: mid, duration_secs: mid - whole.started_at, end_reason: 'process_restart', broadcast_id: `live:${whole.n}` };
   const second = {
     ...whole, id: sid('tokyo-1', 800 + whole.n), n: 800 + whole.n, eid: 'local-800', node: 'tokyo-1',
     started_at: mid, duration_secs: whole.ended_at - mid, broadcast_id: `live:${whole.n}`, gaps: [],
