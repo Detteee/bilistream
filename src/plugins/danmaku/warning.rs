@@ -325,6 +325,9 @@ impl WarningTracker {
         }
     }
 
+    /// Test-only observer of the currently owned source; production code reads
+    /// the ownership state through `own_source` and the hold via `snapshot()`.
+    #[cfg(test)]
     pub fn active_source(&self) -> Option<BroadcastSource> {
         self.lock()
             .active

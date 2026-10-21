@@ -1206,13 +1206,13 @@ fn report_danmaku_selection(
     // of a generic 请求频道, so a tail of decisions reads without cross-referencing.
     let channel = safe_text(&request.source.channel_name, 64);
     let reason = if bilistream::plugins::danmaku::source_is_held(cfg, warning, &request.source) {
-        format!("{channel} 仍因警告/切断临时跳过")
+        Some(format!("{channel} 仍因警告/切断临时跳过"))
     } else if !enabled {
-        format!("{platform} 普通监控未启用")
+        Some(format!("{platform} 普通监控未启用"))
     } else if let Some(probe) = probe {
         match &probe.status {
-            Err(_) => format!("{channel} 状态检查失败"),
-            Ok(status) if !status.is_live => format!("{channel} 未开播"),
+            Err(_) => Some(format!("{channel} 状态检查失败")),
+            Ok(status) if !status.is_live => Some(format!("{channel} 未开播")),
             Ok(status)
                 if bilistream::plugins::banned_keywords::streaming_banned_hit(
                     status.topic.as_deref(),
@@ -1221,25 +1221,23 @@ fn report_danmaku_selection(
                 )
                 .is_some() =>
             {
-                format!("{channel} 标题或分区命中禁用词")
+                Some(format!("{channel} 标题或分区命中禁用词"))
             }
             Ok(status) if status.m3u8_url.as_ref().is_none_or(|url| url.is_empty()) => {
-                format!("{channel} 暂无可播放流地址")
+                Some(format!("{channel} 暂无可播放流地址"))
             }
-            Ok(_) if selected.is_some() => "本轮排序更高".into(),
-            Ok(_) => "本轮没有可转播的频道".into(),
+            // The picker chooses a relay target — that is the runtime's own
+            // selection story (标题=…；选台原因=… records). The danmaku record
+            // must not narrate relay picks, so a healthy pick reports nothing.
+            Ok(_) if selected.is_some() => None,
+            Ok(_) => Some("本轮没有可转播的频道".into()),
         }
     } else {
-        format!("本轮检查未覆盖 {channel}")
+        Some(format!("本轮检查未覆盖 {channel}"))
     };
-    report_target_decision(
-        &request,
-        selected
-            .as_ref()
-            .map(StreamCandidate::source_identity)
-            .as_ref(),
-        &reason,
-    );
+    if let Some(reason) = reason {
+        report_target_decision(&request, &reason);
+    }
 }
 
 /// Marks a candidate offline when its channel was previously stopped due to a
@@ -4557,10 +4555,8 @@ mod tests {
         assert!(output.contains("仍因警告/切断临时跳过"), "{output}");
         assert!(output.contains("跳过频道"), "{output}");
         assert!(!output.contains("临时跳过已解除"), "{output}");
-        // A pick that equals the request logs no tautological decision; the held
-        // request shows the deviation ("暂无可用频道") instead of echoing a pick.
+        // The danmaku record never names a relay pick; only the deviation reason.
         assert!(!output.contains("实际转播"), "{output}");
-        assert!(!output.contains("已选定请求"), "{output}");
         assert!(!output.contains("https://"), "{output}");
     }
 

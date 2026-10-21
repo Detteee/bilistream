@@ -333,7 +333,7 @@ try {
     const clock = i => { const t = 18 * 3600 + i; const pad = n => String(n).padStart(2, '0'); return pad(Math.floor(t / 3600)) + ':' + pad(Math.floor(t / 60) % 60) + ':' + pad(t % 60); };
     const shapes = [
       'INFO [ffmpeg] [jp] [YT] 示例频道001 会话1 推流 已观察到推流输出',
-      'INFO [danmaku] [jp] [弹幕 转播] 切台请求 [YT] 示例频道001；实际转播 [TW] 示例频道002；原因：本轮排序更高',
+      'INFO [danmaku] [jp] [弹幕 转播] 换台请求 [YT] 示例频道001；请求频道未开播',
       'INFO [cluster] [jp] YouTube 索引：使用节点 ca 的索引',
       'INFO [runtime] [jp] 源直播已结束，30 秒后自动停播B站直播间，避免挂机判定',
       'INFO [ffmpeg] [jp] [TW] 示例频道002 会话2 转播；已合并 1 条重复诊断：ERROR new decoder failure',

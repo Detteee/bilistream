@@ -629,29 +629,12 @@ pub(crate) fn pending_target_request(cfg: &Config) -> Option<TargetRequest> {
     Some(request.clone())
 }
 
-pub(crate) fn report_target_decision(
-    request: &TargetRequest,
-    selected: Option<&BroadcastSource>,
-    reason: &str,
-) {
-    // A command only changes a monitored target; the selector decides what really
-    // relays. A pick that is the requested channel needs no second record — the
-    // target-update line already names it — so only a different pick, or no pick,
-    // says something the operator cannot infer.
-    let decision = match selected {
-        Some(source)
-            if source.platform == request.source.platform
-                && source.channel_name == request.source.channel_name =>
-        {
-            return;
-        }
-        Some(source) => format!(
-            "实际转播 [{}] {}；原因：{reason}",
-            safe_text(&source.platform, 8),
-            safe_text(&source.channel_name, 64)
-        ),
-        None => format!("暂无可用频道；原因：{reason}"),
-    };
+pub(crate) fn report_target_decision(request: &TargetRequest, reason: &str) {
+    // A command only changes a monitored target; which channel actually relays is
+    // the runtime selection records' story (标题=…；选台原因=…, 已观察到推流输出).
+    // The record itself states only why the request has not taken effect yet —
+    // never the relay pick.
+    let decision = reason.to_owned();
     {
         let mut pending = PENDING_TARGET
             .lock()
@@ -668,7 +651,7 @@ pub(crate) fn report_target_decision(
         pending.last_decision = Some(decision.clone());
     }
     tracing::info!(
-        "{} [弹幕 转播] 切台请求 [{}] {}；{decision}",
+        "{} [弹幕 转播] 换台请求 [{}] {}；{decision}",
         crate::logging::node_tag(&request.node),
         safe_text(&request.source.platform, 8),
         safe_text(&request.source.channel_name, 64)
@@ -1183,10 +1166,6 @@ pub async fn process_danmaku_with_owner(command: &str, is_owner: bool, sender: &
                     // unchanged target. A matching warning hold stays.
                     accept_target_request(&request)
                 });
-                if let Some(active) = warnings.active_source() {
-                    report_target_decision(&request, Some(&active), "下一轮选台决定是否切换");
-                }
-
                 if changed
                     && old_monitored_config_version != monitored_config_version(&updated_config)
                 {

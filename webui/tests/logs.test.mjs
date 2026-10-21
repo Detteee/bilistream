@@ -52,12 +52,12 @@ test('a record splits into the table columns and keeps the full timestamp', () =
 
 test('a danmaku command tag stays with the identity, not the message body', () => {
   const parsed = parseLogLine(
-    '2026-10-21 07:41:09+0800 INFO [danmaku] [jp] [弹幕 转播] 切台请求 [YT] 紫宮るな；实际转播 [TW] 示例频道002；原因：本轮排序更高',
+    '2026-10-21 07:41:09+0800 INFO [danmaku] [jp] [弹幕 转播] 换台请求 [YT] 紫宮るな；请求频道未开播',
   );
   assert.equal(parsed.node, 'jp');
   assert.equal(parsed.platform, '');
   assert.equal(parsed.label, '弹幕 转播');
-  assert.equal(parsed.message.startsWith('切台请求 [YT]'), true);
+  assert.equal(parsed.message.startsWith('换台请求 [YT]'), true);
 });
 
 test('a platform-first record does not mistake the platform for a node', () => {
