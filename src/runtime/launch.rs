@@ -745,7 +745,7 @@ mod tests {
 
     fn emit_log_fixtures() {
         tracing::info!(target: "bilistream::plugins::ffmpeg", "jp YT/示例频道001 session=2 role=push 进程已启动 pid=1234");
-        tracing::info!(target: "bilistream::runtime", "jp YT/示例频道001 标题=INFO ERROR │示例\nWARN forged\r\t\x1b[31m红色\x1b[0m");
+        tracing::info!(target: "bilistream::runtime", "jp YT/示例频道001  - INFO ERROR │示例\nWARN forged\r\t\x1b[31m红色\x1b[0m");
         tracing::info!(target: "bilistream::runtime::launch", "Web UI 本地访问 http://localhost:3150");
         for diagnostic in [
             "rtmp://push.invalid/live/synthetic-push-key?key=synthetic-query",
@@ -804,7 +804,7 @@ mod tests {
             assert!(text.lines().all(|line| line.starts_with(prefix)));
             assert!(text.contains("INFO [ffmpeg] jp YT/示例频道001 session=2 role=push"));
             assert!(text.contains(
-                "INFO [runtime] jp YT/示例频道001 标题=INFO ERROR │示例\\nWARN forged\\r\\t红色"
+                "INFO [runtime] jp YT/示例频道001  - INFO ERROR │示例\\nWARN forged\\r\\t红色"
             ));
             assert!(text.contains("HTTP 403"));
             assert!(text.contains("HTTP 502"));

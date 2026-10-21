@@ -1149,12 +1149,16 @@ impl Worker {
                     .copied()
                     .unwrap_or(Source::Rss);
                 let since = item.start_actual.as_deref().and_then(seconds_since);
+                let channel = if item.channel.name.trim().is_empty() {
+                    &item.channel.id
+                } else {
+                    &item.channel.name
+                };
                 tracing::info!(
-                    "{} 发现直播 {} channel={} ({}) via {}，开播距今 {}",
+                    "{} 发现直播 {}：{}（由 {} 发现；开播距今 {}）",
                     self.node_tag(),
+                    safe_text(channel, 36),
                     safe_text(&item.id, 64),
-                    safe_text(&item.channel.id, 64),
-                    safe_text(&item.channel.name, 36),
                     source.label(),
                     since.map_or_else(|| "未知".to_string(), human_duration)
                 );

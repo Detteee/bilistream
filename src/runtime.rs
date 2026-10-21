@@ -658,16 +658,17 @@ fn end_danmaku_text(channel_name: &str, commands_enabled: bool) -> String {
     }
 }
 
+/// The pick's story: which live was chosen, and why it beat the others when
+/// the reason is not the standing platform order. A record fires once per start
+/// with an up-to-80-column title, so the constant ordering rule is not repeated
+/// here — the platform column already carries it.
 fn log_selected_stream(identity: &FfmpegStreamIdentity, title: Option<&str>, priority: bool) {
-    tracing::info!(
-        "{identity} 标题={}；选台原因={}",
-        safe_text(title.unwrap_or("无标题"), 80),
-        if priority {
-            "可用优先频道"
-        } else {
-            "普通候选按 Niconico > YouTube > Twitch 排序"
-        }
-    );
+    let title = safe_text(title.unwrap_or("无标题"), 80);
+    if priority {
+        tracing::info!("{identity} - {title}（优先频道）");
+    } else {
+        tracing::info!("{identity} - {title}");
+    }
 }
 
 fn log_ffmpeg_loop_exit(
@@ -1227,7 +1228,7 @@ fn report_danmaku_selection(
                 Some(format!("{channel} 暂无可播放流地址"))
             }
             // The picker chooses a relay target — that is the runtime's own
-            // selection story (标题=…；选台原因=… records). The danmaku record
+            // selection story (identity - 标题 records). The danmaku record
             // must not narrate relay picks, so a healthy pick reports nothing.
             Ok(_) if selected.is_some() => None,
             Ok(_) => Some("本轮没有可转播的频道".into()),
@@ -4424,7 +4425,7 @@ mod tests {
                 "[弹幕 转播]",
                 "监听目标已更新",
                 "跳过频道",
-                "标题=示例直播 002",
+                "示例直播 002",
                 "Connection refused",
                 "已观察到推流输出",
                 "另一频道已确认推流",

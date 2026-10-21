@@ -19,8 +19,11 @@ export const LOG_SHAPES = [
   'INFO [ffmpeg] [jp] [YT] 示例频道001_1 推流 已观察到推流输出',
   'INFO [danmaku] [jp] [弹幕 转播] 切台请求 [YT] 示例频道001；实际转播 [TW] 示例频道002；原因：本轮排序更高',
   'INFO [runtime] [jp] 示例频道001 直播已结束：30 秒后自动停播B站直播间（避免挂机判定）',
-  'INFO [ffmpeg] [jp] [TW] 示例频道002_2 推流 推流停滞（流时间冻结 12 秒）：准备终止进程；已合并 1 条重复诊断：ERROR new decoder failure',
+  'INFO [ffmpeg] [jp] [TW] 示例频道002_2 推流 推流停滞（12秒 流时间未推进；已推流 11分44秒）：准备终止进程；已合并 1 条重复诊断：ERROR new decoder failure',
   'INFO [cluster] [ca] YouTube 索引：使用节点 ca 的索引',
+  'INFO [runtime] [jp] [YT] 龍巻ちせ - ◤ League of Legends ◢ 2v2 練習',
+  'INFO [websub] [jp] WebSub 推送 千燈ゆうひ：AM3xcX-dx94（发布距今 7小时16分；rss 已于 9分26秒前发现）',
+  'INFO [yt-discovery] [jp] 发现直播 狐白うる：Z7rLLVnG96M（由 rss 发现；开播距今 11小时7分）',
 ];
 
 // One capture run drives the whole headless-Firefox harness; importing this
@@ -395,7 +398,7 @@ async function main() {
         })();
         await refresh();
         const retained = first === output.firstElementChild;
-        lines.push('2026-10-11 00:00:00+0800 ERROR [ffmpeg] [jp] [YT] 示例频道001_1 推流 推流停滞（流时间冻结 12 秒）：准备终止进程');
+        lines.push('2026-10-11 00:00:00+0800 ERROR [ffmpeg] [jp] [YT] 示例频道001_1 推流 推流停滞（12秒 流时间未推进；已推流 11分44秒）：准备终止进程');
         await refresh();
         const appended = output.children.length === 500 && output.firstElementChild === next && output.lastElementChild.classList.contains('error');
         const platformChip = [...output.querySelectorAll('.log-cell--message .log-tag')].some(tag => tag.textContent === 'YT');

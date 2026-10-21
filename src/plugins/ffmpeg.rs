@@ -617,7 +617,7 @@ impl ProcessSupervisor {
         // release of either supervisor lock. These snapshots retain ownership.
         for (log, error) in kill_failures {
             tracing::warn!(
-                "{log} 隔离时发送终止信号失败 pid={}；{}",
+                "{log} 隔离时发送终止信号失败（pid {}）：{}",
                 log.pid_label(),
                 safe_diagnostic(&error.to_string())
             );
@@ -2980,7 +2980,7 @@ pub async fn wait_ffmpeg_session(session: FfmpegSession) -> Option<std::process:
                     Ok(None) => {}
                     Err(e) => {
                         tracing::error!(
-                            "{} 检查进程状态失败 pid={}；{}",
+                            "{} 检查进程状态失败（pid {}）：{}",
                             child.log,
                             child.log.pid_label(),
                             safe_diagnostic(&e.to_string())
@@ -3002,34 +3002,52 @@ pub async fn wait_ffmpeg_session(session: FfmpegSession) -> Option<std::process:
     }
 }
 
-fn log_stuck(context: &SessionLogContext, reason: StuckReason) {
+/// How long this push has been running, for the stall record's aside: the
+/// answer an operator needs is "how much was lost", and the stall window alone
+/// does not say whether a five-minute or a five-hour push died.
+/// `None` when no push has started (cache-only session) or the clock is skew.
+fn push_uptime(now: u32) -> Option<String> {
+    let started = FFMPEG_PUSH_STARTED_AT.load(Ordering::Relaxed);
+    (started > 0 && now > started).then(|| human_duration(now.saturating_sub(started) as i64))
+}
+
+/// One stall record: `停滞（{停滞窗口} {cause}；已推流 {uptime}）：准备终止进程`.
+/// The uptime aside is passed in, so this stays a pure function of its
+/// arguments and the record reads the same in tests and in production.
+fn log_stuck(context: &SessionLogContext, reason: StuckReason, uptime: Option<String>) {
+    let uptime = uptime
+        .map(|elapsed| format!("；已推流 {elapsed}"))
+        .unwrap_or_default();
     match reason {
         StuckReason::NoStats {
             elapsed_secs,
             source,
         } => {
             tracing::error!(
-                "{context} {source} 停滞（{} 无 stats 输出）：准备终止进程",
-                human_duration(elapsed_secs as i64)
+                "{context} {source} 停滞（{} 无 stats 输出{}）：准备终止进程",
+                human_duration(elapsed_secs as i64),
+                uptime
             );
         }
         StuckReason::StreamTimeFrozen { elapsed_secs } => {
             tracing::error!(
-                "{context} 推流停滞（流时间冻结 {}）：准备终止进程",
-                human_duration(elapsed_secs as i64)
+                "{context} 推流停滞（{} 流时间未推进{}）：准备终止进程",
+                human_duration(elapsed_secs as i64),
+                uptime
             );
         }
         StuckReason::LowSpeed { elapsed_secs } => {
             tracing::error!(
-                "{context} 推流停滞（速度低于 {}，持续 {}）：准备终止进程",
-                LOW_SPEED_THRESHOLD,
-                human_duration(elapsed_secs as i64)
+                "{context} 推流停滞（{} 速度低于 {LOW_SPEED_THRESHOLD}{}）：准备终止进程",
+                human_duration(elapsed_secs as i64),
+                uptime
             );
         }
         StuckReason::IdleDrain { elapsed_secs } => {
             tracing::info!(
-                "{context} 推流排空（{} 无数据）：准备停止进程",
-                human_duration(elapsed_secs as i64)
+                "{context} 推流排空（{} 无数据{}）：准备停止进程",
+                human_duration(elapsed_secs as i64),
+                uptime
             );
         }
     }
@@ -3053,7 +3071,7 @@ async fn monitor_ffmpeg_timeout(session: FfmpegSession, timeout_secs: u64) {
             {
                 history.record_stuck(crate::storage::now(), code);
             }
-            log_stuck(&context, reason);
+            log_stuck(&context, reason, push_uptime(unix_time_secs()));
             stop_ffmpeg_session(session).await;
             break;
         }
@@ -4125,26 +4143,42 @@ mod tests {
                 run: 54,
                 ordinal: 54,
             });
+            let uptime = || Some("2小时7分".to_string());
             log_stuck(
                 &context,
                 StuckReason::NoStats {
                     elapsed_secs: 31,
                     source: "HLS 缓存写入",
                 },
+                uptime(),
             );
-            log_stuck(&context, StuckReason::StreamTimeFrozen { elapsed_secs: 12 });
-            log_stuck(&context, StuckReason::LowSpeed { elapsed_secs: 65 });
-            log_stuck(&context, StuckReason::IdleDrain { elapsed_secs: 10 });
+            log_stuck(
+                &context,
+                StuckReason::StreamTimeFrozen { elapsed_secs: 12 },
+                uptime(),
+            );
+            log_stuck(
+                &context,
+                StuckReason::LowSpeed { elapsed_secs: 65 },
+                uptime(),
+            );
+            // A cache-only session has no push clock: the aside is dropped
+            // rather than printing a made-up duration.
+            log_stuck(&context, StuckReason::IdleDrain { elapsed_secs: 10 }, None);
         });
         let records: Vec<_> = output.lines().collect();
         assert_eq!(records.len(), 4);
         assert!(records[..3].iter().all(|line| line.starts_with("ERROR")));
         assert!(records[0].contains("_54 HLS 缓存写入 停滞"));
-        assert!(records[0].contains("31秒 无 stats 输出"));
-        assert!(records[1].contains("推流停滞"));
-        assert!(records[2].contains("1分5秒"));
+        assert!(records[0].contains("停滞（31秒 无 stats 输出；已推流 2小时7分）"));
+        assert!(records[1].contains("推流停滞（12秒 流时间未推进；已推流 2小时7分）"));
+        assert!(records[2].contains("推流停滞（1分5秒 速度低于 0.98；已推流 2小时7分）"));
         assert!(records[3].trim_start().starts_with("INFO"));
-        assert!(records[3].contains("推流排空"));
+        assert!(
+            records[3].contains("推流排空（10秒 无数据）：准备停止进程"),
+            "a cache-only stall prints no push uptime: {}",
+            records[3]
+        );
     }
 
     #[cfg(unix)]

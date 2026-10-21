@@ -207,17 +207,17 @@ where
             Ok(url) => {
                 if url.is_empty() {
                     tracing::warn!(
-                        "{} streamlink 执行成功但未返回取流地址；region={}；已尝试=[{}]",
+                        "{} streamlink 执行成功但未返回取流地址（地区 {}）：已尝试 {}",
                         identity,
                         label,
-                        attempted.join(",")
+                        attempted.join(" → ")
                     );
                 } else if attempted.len() > 1 {
                     tracing::info!(
-                        "{} streamlink 取流已恢复；region={}；已尝试=[{}]",
+                        "{} streamlink 取流已恢复（地区 {}）：此前尝试 {}",
                         identity,
                         label,
-                        attempted.join(",")
+                        attempted.join(" → ")
                     );
                 }
                 return Ok(url);
@@ -226,14 +226,14 @@ where
                 let reason = safe_diagnostic(&error.to_string());
                 if attempted.len() == 1 {
                     tracing::warn!(
-                        "{} streamlink 取流失败；region={}；{}；尝试备用地区",
+                        "{} streamlink 取流失败（地区 {}）：{}；尝试备用地区",
                         identity,
                         label,
                         reason
                     );
                 } else {
                     tracing::debug!(
-                        "{} streamlink 取流失败；region={}；{}",
+                        "{} streamlink 取流失败（地区 {}）：{}",
                         identity,
                         label,
                         reason
@@ -574,7 +574,7 @@ mod tests {
             1
         );
         assert!(output.contains("[ca] [TW] example_channel_001"));
-        assert!(output.contains("region=na"));
+        assert!(output.contains("取流失败（地区 na）"));
         assert!(!output.contains("SYNTHETIC-TOKEN"));
     }
 
@@ -598,7 +598,7 @@ mod tests {
         assert_eq!(attempts, ["as", "asl"]);
         let output = bytes.text();
         assert_eq!(output.matches("取流已恢复").count(), 1);
-        assert!(output.contains("已尝试=[as,asl]"));
+        assert!(output.contains("此前尝试 as → asl"));
         assert!(!output.contains("synthetic-url"));
 
         let mut attempts = Vec::new();

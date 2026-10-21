@@ -631,7 +631,7 @@ pub(crate) fn pending_target_request(cfg: &Config) -> Option<TargetRequest> {
 
 pub(crate) fn report_target_decision(request: &TargetRequest, reason: &str) {
     // A command only changes a monitored target; which channel actually relays is
-    // the runtime selection records' story (标题=…；选台原因=…, 已观察到推流输出).
+    // the runtime selection records' story (identity - 标题, 已观察到推流输出).
     // The record itself states only why the request has not taken effect yet —
     // never the relay pick.
     let decision = reason.to_owned();

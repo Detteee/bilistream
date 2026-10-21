@@ -1313,9 +1313,13 @@ pub(crate) async fn adopt_auto_failover_from_peer_view(
         tracing::warn!("无法采纳节点 {} 的自动交接设置：{}", peer_node_id, e);
     } else {
         tracing::info!(
-            "已采纳活跃节点 {} 的自动交接设置：auto_failover={}",
-            peer_auto_failover,
-            peer_node_id
+            "已采纳活跃节点 {} 的自动交接设置：自动交接{}",
+            peer_node_id,
+            if peer_auto_failover {
+                "开启"
+            } else {
+                "关闭"
+            }
         );
     }
 }

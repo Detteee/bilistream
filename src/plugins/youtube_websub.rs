@@ -24,6 +24,7 @@ use futures_util::stream::{self, StreamExt};
 use hmac::{Hmac, KeyInit, Mac};
 use sha1::Sha1;
 use std::collections::{HashMap, HashSet};
+use std::fmt::Write as _;
 use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -141,21 +142,34 @@ fn push_line(
             |published| crate::logging::human_duration((now - published.to_utc()).num_seconds()),
         );
     let mut line = format!(
-        "{} WebSub 推送 {} channel={} ({})，发布距今 {}",
+        "{} WebSub 推送 {}：{}（发布距今 {}",
         crate::logging::node_tag(node),
+        channel_label(entry),
         crate::logging::safe_text(&entry.video_id, 64),
-        crate::logging::safe_text(&entry.channel_id, 64),
-        crate::logging::safe_text(&entry.channel_name, 36),
         age
     );
     if let Some((source, ago)) = found {
-        line.push_str(&format!(
-            "，{} 已于 {}前发现",
+        let _ = write!(
+            line,
+            "；{} 已于 {}前发现",
             crate::logging::safe_text(source, 24),
             crate::logging::human_elapsed(ago)
-        ));
+        );
     }
+    line.push('）');
     line
+}
+
+/// The channel's own name is the identity people recognise; the opaque `UC…`
+/// id only stands in when a feed omits the name (owner decision 2026-10-22:
+/// never print `channel=UC…`).
+fn channel_label(entry: &FeedEntry) -> String {
+    let name = if entry.channel_name.trim().is_empty() {
+        &entry.channel_id
+    } else {
+        &entry.channel_name
+    };
+    crate::logging::safe_text(name, 36)
 }
 
 struct Bucket {
@@ -386,10 +400,10 @@ async fn push_handler(headers: HeaderMap, body: Bytes) -> Response {
                         tracing::info!("{}", push_line(&node, &item.entry, now, found));
                     } else {
                         tracing::debug!(
-                            "{} WebSub 更新推送：{} channel={}",
+                            "{} WebSub 更新推送：{}（{}）",
                             crate::logging::node_tag(&node),
                             crate::logging::safe_text(&item.entry.video_id, 64),
-                            crate::logging::safe_text(&item.entry.channel_id, 64)
+                            channel_label(&item.entry)
                         );
                     }
                 }
@@ -940,7 +954,7 @@ mod tests {
         };
         assert_eq!(
             push_line("ca", &entry(Some("2026-09-28T03:08:30+00:00")), now, None),
-            "[ca] WebSub 推送 example0001 channel=UC_example_001 (示例频道001)，发布距今 1分30秒"
+            "[ca] WebSub 推送 示例频道001：example0001（发布距今 1分30秒）"
         );
         assert_eq!(
             push_line(
@@ -949,10 +963,10 @@ mod tests {
                 now,
                 Some(("playlist", Duration::from_secs(40)))
             ),
-            "[ca] WebSub 推送 example0001 channel=UC_example_001 (示例频道001)，发布距今 1分30秒，playlist 已于 40秒前发现"
+            "[ca] WebSub 推送 示例频道001：example0001（发布距今 1分30秒；playlist 已于 40秒前发现）"
         );
-        assert!(push_line("ca", &entry(None), now, None).ends_with("发布距今 未知"));
-        assert!(push_line("ca", &entry(Some("soon")), now, None).ends_with("发布距今 未知"));
+        assert!(push_line("ca", &entry(None), now, None).ends_with("发布距今 未知）"));
+        assert!(push_line("ca", &entry(Some("soon")), now, None).ends_with("发布距今 未知）"));
         // A long node id is shortened inside its tag, never splitting the tag.
         let full_node_id = "n".repeat(64);
         let long = push_line(&full_node_id, &entry(None), now, None);
@@ -971,7 +985,7 @@ mod tests {
         ] {
             let published = (now - chrono::Duration::seconds(seconds)).to_rfc3339();
             assert!(push_line("ca", &entry(Some(&published)), now, None)
-                .ends_with(&format!("发布距今 {expected}")));
+                .ends_with(&format!("发布距今 {expected}）")));
         }
         assert!(push_line(
             "ca",
@@ -979,7 +993,7 @@ mod tests {
             now,
             Some(("rss", Duration::from_secs(3661)))
         )
-        .ends_with("rss 已于 1小时1分前发现"));
+        .ends_with("rss 已于 1小时1分前发现）"));
     }
 
     #[test]
