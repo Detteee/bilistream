@@ -421,7 +421,7 @@ function updateClusterNodeMetrics(element, node) {
     const display = selfCheckDisplay(node.self_check, node.health?.stale === true);
     label.dataset.state = display.state;
     if (label.textContent !== display.label) label.textContent = display.label;
-    label.title = display.title;
+    label.dataset.tooltip = display.title;
   }
   updateClusterNetwork(element.querySelector('.cluster-node-network'), node);
 }
@@ -566,7 +566,7 @@ function createClusterNodeBadge(node, clusterConfigVersion) {
   badge.appendChild(document.createTextNode(formatClusterNodeStatus(node)));
   if (!clusterNodeUsable(node)) {
     const reason = formatClusterHealthReason(node.health?.reason || '-');
-    badge.title = node.draining && node.health?.reason !== 'draining'
+    badge.dataset.tooltip = node.draining && node.health?.reason !== 'draining'
       ? `${formatClusterHealthReason('draining')}；${reason}` : reason;
   }
   return badge;
@@ -600,7 +600,7 @@ function createClusterSelfCheck(node) {
   label.className = 'cluster-self-check';
   label.dataset.state = display.state;
   label.textContent = display.label;
-  label.title = display.title;
+  label.dataset.tooltip = display.title;
   return label;
 }
 
@@ -643,28 +643,51 @@ function createClusterNodeTile(node, clusterConfigVersion) {
   const tile = document.createElement('div');
   tile.className = 'cluster-node-tile';
 
-  // Identity stays content-bounded (name ellipsises against the badge), so a
-  // node that gains a 状态页 or YT chip cannot shove the row onto a new line;
-  // those chips are metadata and belong on the fixed metrics line below.
   const head = document.createElement('div');
   head.className = 'cluster-node-tile-head';
-  head.append(createClusterNodeName(node), createClusterNodeBadge(node, clusterConfigVersion));
+  const badge = createClusterNodeBadge(node, clusterConfigVersion);
 
-  const metrics = document.createElement('div');
-  metrics.className = 'cluster-node-tile-metrics';
-  const tileChip = createPublicStatusChip(node);
-  if (tileChip) metrics.appendChild(tileChip);
-  const tileIndexChip = createYtIndexChip(node);
-  if (tileIndexChip) metrics.appendChild(tileIndexChip);
+  // A tile is one fixed row, so the two markers that used to take a chip each
+  // ride on the role badge instead: a purple ring for the public status page
+  // and a green dot for the cluster YouTube index. Both are named in the
+  // tooltip, so nothing is lost by dropping the labels.
+  const facts = [];
+  if (publicStatusNodeId && (node?.node_id || '').trim() === publicStatusNodeId) {
+    badge.classList.add('is-public-status');
+    facts.push('状态页');
+  }
+  const index = ytIndexChip(node);
+  if (index) {
+    badge.classList.add('has-yt-index');
+    if (index.warn) badge.classList.add('is-yt-index-warn');
+    facts.push('YT 索引');
+  }
+  head.append(createClusterNodeName(node), badge);
 
-  const seen = createClusterSeenValue(node);
-  seen.classList.add('cluster-node-tile-seen');
-  metrics.appendChild(seen);
-  const selfCheck = createClusterSelfCheck(node);
-  if (selfCheck) metrics.appendChild(selfCheck);
+  // Heartbeat and API self-check latency are telemetry, not identity: on their
+  // own line they made tiles taller than their neighbours whenever the digits
+  // grew. They join the tooltip, which keeps the tile one row and still reaches
+  // screen readers through the hidden text below.
+  const telemetry = clusterTileTelemetry(node, facts);
+  if (telemetry) {
+    badge.dataset.tooltip = telemetry;
+    const hint = document.createElement('span');
+    hint.className = 'sr-only';
+    hint.textContent = `（${telemetry}）`;
+    badge.appendChild(hint);
+  }
 
-  tile.append(head, metrics, createClusterNodeActions(node));
+  tile.append(head, createClusterNodeActions(node));
   return tile;
+}
+
+function clusterTileTelemetry(node, facts) {
+  const parts = [formatClusterSeen(node.last_seen)];
+  if (node.self_check) {
+    const display = selfCheckDisplay(node.self_check, node.health?.stale === true);
+    if (display.label) parts.push(display.label);
+  }
+  return parts.concat(facts || []).filter(Boolean).join(' · ');
 }
 
 function createClusterNodeCard(node, clusterConfigVersion, nodes) {
@@ -694,7 +717,7 @@ function createClusterNodeCard(node, clusterConfigVersion, nodes) {
     const line = document.createElement('small');
     line.className = 'cluster-node-yt-index';
     line.textContent = peerLine;
-    line.title = peerLine;
+    line.dataset.tooltip = peerLine;
     title.appendChild(line);
   }
   title.appendChild(createClusterHeartbeat(node));
@@ -723,7 +746,7 @@ function createPublicStatusChip(node) {
   const chip = document.createElement('span');
   chip.className = 'cluster-badge cluster-badge-public-status';
   chip.textContent = '状态页';
-  chip.title = '此节点提供公开状态页';
+  chip.dataset.tooltip = '此节点提供公开状态页';
   return chip;
 }
 
@@ -744,7 +767,7 @@ function ytIndexBadge(model) {
   const chip = document.createElement('span');
   chip.className = `cluster-badge cluster-badge-yt-index${model.warn ? ' is-warn' : ''}`;
   chip.textContent = model.text;
-  chip.title = model.title;
+  chip.dataset.tooltip = model.title;
   if (model.websub) {
     const dot = document.createElement('span');
     dot.className = `cluster-yt-index-websub is-${model.websub}`;
@@ -830,7 +853,7 @@ function createClusterStreamPlatform(platform) {
   const chip = document.createElement('span');
   chip.className = 'cluster-stream-platform';
   chip.dataset.platform = key;
-  chip.title = known ? known.label : platform;
+  chip.dataset.tooltip = known ? known.label : platform;
 
   if (!known) {
     // Unknown platform: fall back to the code rather than a blank chip.

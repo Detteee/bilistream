@@ -1,6 +1,7 @@
 // main.js — view router, login gate, SSE wakeup, and timers.
 
 import { isDashboardVisible, showNotification } from './dom.js';
+import { initTooltips } from './tooltip.js';
 import { state, isViewActive, invalidateManagedData } from './state.js';
 import { ensureWebUiAccess, getJson, postJson } from './api.js';
 import { formatNetworkRate, formatSpeedRatio, formatFps } from './format.js';
@@ -232,6 +233,7 @@ function boot() {
   initClusterControls();
   initClusterMembership();
   initNotifySettings();
+  initTooltips();
 
   document.addEventListener('visibilitychange', () => {
     if (isDashboardVisible()) {

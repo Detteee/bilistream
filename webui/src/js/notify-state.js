@@ -685,7 +685,7 @@ export function wakeupBudgetView(budget, { available = true, push = undefined } 
   const segments = [
     { text: `${prefix}唤醒额度 ${remaining}/4` },
     { sep: ' · ' },
-    { text: `保留 ${reserve} 用于故障提醒` },
+    { text: `保留 ${reserve} 用于故障通知` },
   ];
   if (low) segments.push({ sep: '，' }, { text: '开播/下播只用被动回复', suffix: true });
   return {

@@ -729,6 +729,13 @@ function removeAntiCollisionEntry(username) {
 }
 function syncAutoStopControls() {
   const enabled = document.getElementById('config-auto-stop-checkbox')?.checked !== false;
+  // The threshold only means something while auto-stop is on, so it rides
+  // along in the same cell and disappears with it instead of sitting below as
+  // a field of its own.
+  const row = document.getElementById('config-auto-stop-hours-row');
+  if (row) row.hidden = !enabled;
+  const help = document.getElementById('config-auto-stop-hours-help');
+  if (help) help.hidden = !enabled;
   const hours = document.getElementById('config-auto-stop-hours');
   if (hours) hours.disabled = !enabled;
 }

@@ -241,7 +241,7 @@
           </div>
 
           <div class="control-group">
-            <label for="setup-interval">检测间隔 (秒)</label>
+            <label for="setup-interval">检测间隔（秒）</label>
             <input type="number" id="setup-interval" value="60" min="10">
           </div>
 
@@ -275,14 +275,14 @@
             <summary class="setup-platform-title">从 Holodex 收藏导入（可选）</summary>
             <p class="setup-help-text">勾选想要导入的频道，也可以跳过。</p>
             <div class="control-group">
-              <label for="setup-holodex">Holodex API Key (可选)</label>
+              <label for="setup-holodex">Holodex API Key（可选）</label>
               <input type="password" autocomplete="off" id="setup-holodex" placeholder="用于 YouTube 直播状态检测">
               <small class="setup-muted-help">获取：<a href="https://holodex.net/login" target="_blank"
                   rel="noopener noreferrer">holodex.net</a></small>
             </div>
 
             <div class="control-group">
-              <label for="setup-holodex-jwt">Holodex JWT (可选)</label>
+              <label for="setup-holodex-jwt">Holodex JWT（可选）</label>
               <input type="password" id="setup-holodex-jwt" placeholder="粘贴 Holodex JWT，留空跳过收藏导入">
               <small class="setup-muted-help setup-block-help">
                 收藏导入需要 API Key 和 JWT。
@@ -340,7 +340,7 @@
             <div class="control-group">
               <label for="setup-yt-quality">画质</label>
               <select id="setup-yt-quality">
-                <option value="best">最佳质量 (推荐)</option>
+                <option value="best">最佳质量（推荐）</option>
                 <option value="best[height&lt;=1080]">超清 (1080p)</option>
                 <option value="best[height&lt;=720]">高清 (720p)</option>
                 <option value="best[height&lt;=480]">标清 (480p)</option>
@@ -349,7 +349,7 @@
               </select>
             </div>
             <div class="control-group">
-              <label for="setup-yt-proxy">YouTube 代理地址 (可选)</label>
+              <label for="setup-yt-proxy">YouTube 代理地址（可选）</label>
               <input type="text" id="setup-yt-proxy" placeholder="http://127.0.0.1:7890">
               <small class="setup-help-text">
                 留空不使用代理。
@@ -373,7 +373,7 @@
               <input type="text" id="setup-tw-name" placeholder="可选，留空使用频道 ID">
             </div>
             <div class="control-group">
-              <label for="setup-tw-id">频道 ID (用户名)</label>
+              <label for="setup-tw-id">频道 ID（用户名）</label>
               <input type="text" id="setup-tw-id" placeholder="Twitch 用户名">
             </div>
             </div>
@@ -387,8 +387,8 @@
             <div class="control-group">
               <label for="setup-tw-region">代理区域</label>
               <select id="setup-tw-region">
-                <option value="asl">asl - 亚洲 (luminous, 推荐)</option>
-                <option value="eul">eul - 欧洲 (luminous, 推荐)</option>
+                <option value="asl">asl - 亚洲（luminous, 推荐）</option>
+                <option value="eul">eul - 欧洲（luminous, 推荐）</option>
                 <option value="eu2l">eu2l - 欧洲 2 (luminous)</option>
                 <option value="as">as - 亚洲 (TTV-LOL-PRO)</option>
                 <option value="eu">eu - 欧洲 (TTV-LOL-PRO)</option>
@@ -405,7 +405,7 @@
             <div class="control-group">
               <label for="setup-tw-quality">画质</label>
               <select id="setup-tw-quality">
-                <option value="best">best - 原画质量 (推荐)</option>
+                <option value="best">best - 原画质量（推荐）</option>
                 <option value="high">high - 高质量 (≤720p30)</option>
                 <option value="medium">medium - 中等质量 (≤540p30)</option>
                 <option value="low">low - 低质量 (≤360p30)</option>
@@ -414,7 +414,7 @@
               </select>
             </div>
             <div class="control-group">
-              <label for="setup-tw-proxy">Twitch 代理地址 (可选)</label>
+              <label for="setup-tw-proxy">Twitch 代理地址（可选）</label>
               <input type="text" id="setup-tw-proxy" placeholder="http://127.0.0.1:7890">
               <small class="setup-help-text">
                 留空不使用代理。
@@ -425,7 +425,7 @@
           </div>
 
           <div class="setup-platform-card">
-            <h4 class="setup-platform-title">Niconico Live (可选)</h4>
+            <h4 class="setup-platform-title">Niconico Live（可选）</h4>
             <div class="control-group"><label for="setup-nc-channel-select">转播目标</label><select id="setup-nc-channel-select"><option value="">不转播（关闭监控）</option><option value="manual">手动添加频道…</option></select></div>
             <div id="setup-nc-fields" class="hidden">
             <div id="setup-nc-identity">
@@ -1438,7 +1438,7 @@
 
               <div class="management-field-group">
                 <label class="management-field-label" for="area-keywords">
-                  标题关键词 (用", "分隔)
+                  标题关键词（用", "分隔）
                   <small class="management-field-note">用于自动检测直播分区，匹配 YouTube 分区 / Twitch 游戏或直播标题中的关键词</small>
                 </label>
                 <input type="text" id="area-keywords" class="management-field-input"
@@ -1447,7 +1447,7 @@
 
               <div class="management-field-group">
                 <label class="management-field-label" for="area-aliases">
-                  别名 (用", "分隔)
+                  别名（用", "分隔）
                   <small class="management-field-note">用于弹幕指令识别，观众可以通过这些别名切换到此分区</small>
                 </label>
                 <input type="text" id="area-aliases" class="management-field-input" placeholder="例: lol, 瓦">
@@ -1494,7 +1494,7 @@
                 </div>
                 <div>
                   <label class="management-field-label" for="channel-aliases">
-                    别名 (用", "分隔)
+                    别名（用", "分隔）
                     <small class="management-field-note">用于弹幕指令识别</small>
                   </label>
                   <input type="text" id="channel-aliases" class="management-field-input" placeholder="例: 昵称1, 昵称2">
@@ -1507,19 +1507,19 @@
                   <div class="input-action-row"><input type="text" id="channel-youtube" class="management-field-input" placeholder="https://www.youtube.com/@channel"><button id="manage-resolve-youtube" class="btn-secondary" type="button">识别</button></div>
                 </div>
                 <div>
-                  <label class="management-field-label" for="channel-twitch">Twitch 频道ID (可选)</label>
+                  <label class="management-field-label" for="channel-twitch">Twitch 频道ID（可选）</label>
                   <input type="text" id="channel-twitch" class="management-field-input" placeholder="ID in Twitch url">
                 </div>
               </div>
 
               <div class="management-form-grid management-channel-grid">
                 <div>
-                  <label class="management-field-label" for="channel-niconico">Niconico 频道ID (可选)</label>
+                  <label class="management-field-label" for="channel-niconico">Niconico 频道ID（可选）</label>
                   <input type="text" id="channel-niconico" class="management-field-input" placeholder="vspo 或 ch.nicovideo.jp/vspo">
                 </div>
                 <div>
                   <label class="management-field-label" for="channel-niconico-name">
-                    Niconico 转播标题 (可选)
+                    Niconico 转播标题（可选）
                     <small class="management-field-note">不填则使用上方频道名称</small>
                   </label>
                   <input type="text" id="channel-niconico-name" class="management-field-input" placeholder="ぶいすぽ激ロー">
@@ -1528,7 +1528,7 @@
 
               <div class="management-field-group">
                 <div class="hint">至少填写一个平台的频道ID（YouTube、Twitch 或 Niconico）。</div>
-                <label class="management-field-label" for="channel-riot">Riot PUUID (可选)</label>
+                <label class="management-field-label" for="channel-riot">Riot PUUID（可选）</label>
                 <input type="text" id="channel-riot" class="management-field-input" placeholder="英雄联盟PUUID">
               </div>
 
@@ -1597,13 +1597,22 @@
                 </label>
               </div>
               <div class="control-group">
-                <label for="config-interval">检测间隔 （秒）</label>
+                <label class="toggle-label" title="开启后每次监控都直接用 yt-dlp 查询 YouTube（作为最终兜底，忽略 Holodex 与 YouTube API 的结果）；关闭时按 Holodex 和 YouTube API 判断，并每 5 分钟用 yt-dlp 安全探测一次。">
+                  <span class="toggle-switch">
+                    <input type="checkbox" id="holodex-monitor-gate-toggle" aria-label="yt-dlp 兜底">
+                    <span class="toggle-slider"></span>
+                  </span>
+                  <span>yt-dlp 兜底</span>
+                </label>
+              </div>
+              <div class="control-group settings-field-row">
+                <label for="config-interval">检测间隔（秒）</label>
                 <input type="number" id="config-interval" min="10" max="300" placeholder="30">
               </div>
             </div>
-            <h3 class="subsection-title">停播与自动化</h3>
+            <h3 class="subsection-title">自动化</h3>
             <div class="settings-grid">
-              <div class="control-group">
+              <div class="control-group settings-toggle-inline">
                 <label class="toggle-label" for="config-auto-stop-checkbox"
                   title="源直播结束后自动关闭B站直播间，避免房间长时间没有画面被判定为挂机/录播。">
                   <span class="toggle-switch">
@@ -1612,11 +1621,13 @@
                   </span>
                   <span>源结束后自动停播</span>
                 </label>
-              </div>
-              <div class="control-group">
-                <label for="config-auto-stop-hours">满该时长立即停播 （小时）</label>
-                <input type="number" id="config-auto-stop-hours" min="1" max="168" placeholder="3">
-                <small class="settings-help-text">未满该时长时，源结束后等待一个检测间隔再停播。</small>
+                <span class="settings-inline-value" id="config-auto-stop-hours-row" hidden>
+                  <span>满</span>
+                  <input type="number" id="config-auto-stop-hours" min="1" max="168" placeholder="3"
+                    aria-label="满该时长立即停播（小时）">
+                  <span>小时</span>
+                </span>
+                <small class="settings-help-text" id="config-auto-stop-hours-help" hidden>未满该时长时，源结束后等待一个检测间隔再停播。</small>
               </div>
               <div class="control-group">
                 <label class="toggle-label">
@@ -1634,15 +1645,6 @@
                     <span class="toggle-slider"></span>
                   </span>
                   <span>启用弹幕指令</span>
-                </label>
-              </div>
-              <div class="control-group">
-                <label class="toggle-label" title="开启后每次监控都直接用 yt-dlp 查询 YouTube（作为最终兜底，忽略 Holodex 与 YouTube API 的结果）；关闭时按 Holodex 和 YouTube API 判断，并每 5 分钟用 yt-dlp 安全探测一次。">
-                  <span class="toggle-switch">
-                    <input type="checkbox" id="holodex-monitor-gate-toggle" aria-label="yt-dlp 兜底">
-                    <span class="toggle-slider"></span>
-                  </span>
-                  <span>yt-dlp 兜底</span>
                 </label>
               </div>
             </div>
@@ -1683,16 +1685,16 @@
                 <input type="hidden" id="config-yt-cookies-file" value="">
               </div>
               <div class="control-group">
-                <label for="config-yt-deno-path">YouTube Deno 路径 （可选）</label>
+                <label for="config-yt-deno-path">YouTube Deno 路径（可选）</label>
                 <input type="text" id="config-yt-deno-path" placeholder="Windows 默认路径可留空">
                 <small class="settings-help-text">用于解决 YouTube n challenge 验证的 Deno 路径。</small>
               </div>
               <div class="control-group">
-                <div class="credential-heading"><label for="config-yt-proxy">YouTube 代理地址 （可选）</label><div class="credential-state"><span id="config-clear-yt-proxy-status" class="sr-only" role="status">正在读取…</span><button type="button" id="config-clear-yt-proxy" class="btn-ghost compact-btn credential-clear" aria-label="清除已保存的YouTube 代理" disabled>清除</button></div></div>
+                <div class="credential-heading"><label for="config-yt-proxy">YouTube 代理地址（可选）</label><div class="credential-state"><span id="config-clear-yt-proxy-status" class="sr-only" role="status">正在读取…</span><button type="button" id="config-clear-yt-proxy" class="btn-ghost compact-btn credential-clear" aria-label="清除已保存的YouTube 代理" disabled>清除</button></div></div>
                 <input type="text" autocomplete="off" spellcheck="false" id="config-yt-proxy" placeholder="http://127.0.0.1:port">
               </div>
               <div class="control-group settings-half-width">
-                <div class="credential-heading"><label for="config-tw-proxy">Twitch 代理地址 （可选）</label><div class="credential-state"><span id="config-clear-tw-proxy-status" class="sr-only" role="status">正在读取…</span><button type="button" id="config-clear-tw-proxy" class="btn-ghost compact-btn credential-clear" aria-label="清除已保存的Twitch 代理" disabled>清除</button></div></div>
+                <div class="credential-heading"><label for="config-tw-proxy">Twitch 代理地址（可选）</label><div class="credential-state"><span id="config-clear-tw-proxy-status" class="sr-only" role="status">正在读取…</span><button type="button" id="config-clear-tw-proxy" class="btn-ghost compact-btn credential-clear" aria-label="清除已保存的Twitch 代理" disabled>清除</button></div></div>
                 <input type="text" autocomplete="off" spellcheck="false" id="config-tw-proxy" placeholder="http://127.0.0.1:port">
               </div>
 
@@ -1700,8 +1702,8 @@
               <div class="control-group settings-half-width">
                 <label for="config-tw-region">Twitch 代理区域</label>
                 <select id="config-tw-region">
-                  <option value="asl">asl - 亚洲 （luminous, 推荐）</option>
-                  <option value="eul">eul - 欧洲 （luminous, 推荐）</option>
+                  <option value="asl">asl - 亚洲（luminous, 推荐）</option>
+                  <option value="eul">eul - 欧洲（luminous, 推荐）</option>
                   <option value="eu2l">eu2l - 欧洲 2 (luminous)</option>
                   <option value="as">as - 亚洲 (TTV-LOL-PRO)</option>
                   <option value="eu">eu - 欧洲 (TTV-LOL-PRO)</option>
@@ -1725,7 +1727,7 @@
                   <label class="toggle-label" title="仅检测登录是否仍然有效，不会延长登录期限；网络失败不代表登录失效。"><span class="toggle-switch"><input type="checkbox" id="config-nc-session-check"><span class="toggle-slider"></span></span><span>每日检测可用性</span></label>
                 </div>
               <div class="control-group session-proxy">
-                <div class="credential-heading"><label for="config-nc-proxy">Niconico 代理地址 （可选）</label><div class="credential-state"><span id="config-clear-nc-proxy-status" class="sr-only" role="status">正在读取…</span><button type="button" id="config-clear-nc-proxy" class="btn-ghost compact-btn credential-clear" aria-label="清除已保存的Niconico 代理" disabled>清除</button></div></div>
+                <div class="credential-heading"><label for="config-nc-proxy">Niconico 代理地址（可选）</label><div class="credential-state"><span id="config-clear-nc-proxy-status" class="sr-only" role="status">正在读取…</span><button type="button" id="config-clear-nc-proxy" class="btn-ghost compact-btn credential-clear" aria-label="清除已保存的Niconico 代理" disabled>清除</button></div></div>
                 <input type="text" autocomplete="off" spellcheck="false" id="config-nc-proxy" title="使用 HTTP 代理；Clash 可用 mixed 端口" placeholder="http://127.0.0.1:7890">
               </div>
               </section>
@@ -1744,11 +1746,11 @@
           <div class="panel__body">
             <div class="settings-keys">
               <div class="control-group">
-                <div class="credential-heading"><label for="config-holodex-key">Holodex API Key （可选）</label><div class="credential-state"><a href="https://holodex.net/login" target="_blank" rel="noopener noreferrer" class="settings-help-link" aria-label="获取 holodex API Key">获取</a><span id="config-clear-holodex-key-status" class="sr-only" role="status">正在读取…</span><button type="button" id="config-clear-holodex-key" class="btn-ghost compact-btn credential-clear" aria-label="清除已保存的Holodex API Key" disabled>清除</button></div></div>
+                <div class="credential-heading"><label for="config-holodex-key">Holodex API Key（可选）</label><div class="credential-state"><a href="https://holodex.net/login" target="_blank" rel="noopener noreferrer" class="settings-help-link" aria-label="获取 holodex API Key">获取</a><span id="config-clear-holodex-key-status" class="sr-only" role="status">正在读取…</span><button type="button" id="config-clear-holodex-key" class="btn-ghost compact-btn credential-clear" aria-label="清除已保存的Holodex API Key" disabled>清除</button></div></div>
                 <input type="password" autocomplete="new-password" id="config-holodex-key" placeholder="补充 Twitch 等外部直播、游戏分类和其他频道的安排">
               </div>
               <div class="control-group">
-                <div class="credential-heading"><label for="config-youtube-api-key">YouTube Data API Key （可选）</label><div class="credential-state"><a href="https://console.cloud.google.com/apis/library/youtube.googleapis.com" target="_blank" rel="noopener noreferrer" class="settings-help-link" aria-label="获取 youtube API Key">获取</a><span id="config-clear-youtube-key-status" class="sr-only" role="status">正在读取…</span><button type="button" id="config-clear-youtube-key" class="btn-ghost compact-btn credential-clear" aria-label="清除已保存的YouTube Data API Key" disabled>清除</button></div></div>
+                <div class="credential-heading"><label for="config-youtube-api-key">YouTube Data API Key（可选）</label><div class="credential-state"><a href="https://console.cloud.google.com/apis/library/youtube.googleapis.com" target="_blank" rel="noopener noreferrer" class="settings-help-link" aria-label="获取 youtube API Key">获取</a><span id="config-clear-youtube-key-status" class="sr-only" role="status">正在读取…</span><button type="button" id="config-clear-youtube-key" class="btn-ghost compact-btn credential-clear" aria-label="清除已保存的YouTube Data API Key" disabled>清除</button></div></div>
                 <textarea autocomplete="new-password" id="config-youtube-api-key" title="每行填写一个 Key，可使用多个项目的配额" class="settings-mono-textarea" rows="3"
                   placeholder="用 YouTube 官方数据发现直播并校正开播状态（每行一个 key）"></textarea>
               </div>
@@ -1758,7 +1760,7 @@
               <div class="control-group settings-websub">
                 <div class="settings-inline-pair">
                   <div>
-                    <label for="config-websub-callback-url">WebSub 回调地址 （可选）</label>
+                    <label for="config-websub-callback-url">WebSub 回调地址（可选）</label>
                     <input type="text" id="config-websub-callback-url"
                       placeholder="https://yt.example.com/websub/youtube">
                   </div>
@@ -1798,7 +1800,7 @@
                 </details>
               </div>
               <div id="config-lol-interval-group" class="settings-dependent-group settings-dependent-spaced">
-                <label for="config-lol-interval">LoL 监控间隔 （分钟）</label>
+                <label for="config-lol-interval">LoL 监控间隔（分钟）</label>
                 <input type="number" id="config-lol-interval" min="1" max="60" placeholder="1">
               </div>
             </div>
@@ -1886,15 +1888,15 @@
                 </div>
                 <div class="cluster-settings-fields cluster-settings-fields-compact">
                   <div class="control-group">
-                    <label for="config-cluster-heartbeat">心跳间隔 （秒）</label>
+                    <label for="config-cluster-heartbeat">心跳间隔（秒）</label>
                     <input type="number" id="config-cluster-heartbeat" min="1" placeholder="5">
                   </div>
                   <div class="control-group">
-                    <label for="config-cluster-failover-timeout">故障超时 （秒）</label>
+                    <label for="config-cluster-failover-timeout">故障超时（秒）</label>
                     <input type="number" id="config-cluster-failover-timeout" min="1" placeholder="15">
                   </div>
                   <div class="control-group">
-                    <label for="config-cluster-lease-ttl">活跃状态有效期 （秒）</label>
+                    <label for="config-cluster-lease-ttl">活跃状态有效期（秒）</label>
                     <input type="number" id="config-cluster-lease-ttl" min="1" placeholder="20"
                       aria-describedby="cluster-lease-ttl-hint">
                     <small class="settings-help-text" id="cluster-lease-ttl-hint">仅作状态标记，不影响故障切换。</small>
@@ -2418,13 +2420,15 @@
                 <svg aria-hidden="true"><use href="#i-bell" /></svg>
                 规则
               </h2>
-              <span class="panel__sub">哪些事件推给谁。</span>
             </div>
             <div class="panel__body">
               <section class="notify-types" aria-labelledby="notify-types-title" id="notify-types" hidden>
                 <h3 class="subsection-title" id="notify-types-title">通知类型</h3>
-                <label class="checkbox-inline notify-toggle-row">
-                  <input type="checkbox" id="notify-live-events" aria-describedby="notify-live-events-help notify-wakeup-budget" checked disabled>
+                <label class="notify-toggle-row toggle-label">
+                  <span class="toggle-switch">
+                    <input type="checkbox" id="notify-live-events" aria-describedby="notify-live-events-help notify-wakeup-budget" checked disabled>
+                    <span class="toggle-slider"></span>
+                  </span>
                   <span>本直播间开播/下播</span>
                 </label>
                 <small class="settings-help-text" id="notify-live-events-help">占用 QQ 发送额度，故障通知优先</small>
@@ -2441,39 +2445,44 @@
                   <span>开播通知关注列表</span>
                   <span class="cluster-badge" id="notify-watch-count" role="status">已关注 0 / 50</span>
                 </h3>
-                <label class="checkbox-inline notify-toggle-row">
-                  <input type="checkbox" id="notify-watch-enabled" aria-describedby="notify-watch-help" disabled>
+                <label class="notify-toggle-row toggle-label">
+                  <span class="toggle-switch">
+                    <input type="checkbox" id="notify-watch-enabled" aria-describedby="notify-watch-help" disabled>
+                    <span class="toggle-slider"></span>
+                  </span>
                   <span>关注的频道开播时发送 QQ 私信</span>
                 </label>
                 <small class="settings-help-text" id="notify-watch-help">按频道关注，自动涵盖已关联的平台。同一场直播只通知一次，不占用召回额度。保存后同步到所有节点。</small>
-                <ul class="notify-watch-list" id="notify-watch-list" aria-labelledby="notify-watch-title"></ul>
-                <p class="settings-help-text notify-watch-empty" id="notify-watch-empty">还没有关注的频道，点「选择频道」开始添加。</p>
-                <details class="channel-picker notify-watch-picker" id="notify-watch-picker">
-                  <summary class="btn-secondary" id="notify-watch-picker-toggle" aria-controls="notify-watch-picker-content">
-                    <span>选择频道</span>
-                    <span class="channel-picker__chevron" aria-hidden="true">
-                      <svg class="channel-picker__chevron-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                        stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                        <polyline points="6 9 12 15 18 9"></polyline>
-                      </svg>
-                    </span>
-                    <span class="channel-picker__ripples" aria-hidden="true"></span>
-                  </summary>
-                  <div class="channel-picker__content notify-watch-picker-content" id="notify-watch-picker-content">
-                    <div class="control-group">
-                      <label for="notify-watch-search">搜索频道名称</label>
-                      <div class="notify-watch-search-row">
-                        <input type="search" id="notify-watch-search" placeholder="输入名称筛选（可选）" autocomplete="off"
-                          aria-controls="notify-watch-results" aria-describedby="notify-watch-results-count" disabled>
-                        <button type="button" class="btn-ghost" id="notify-watch-search-clear" aria-label="清空频道搜索" hidden>清空</button>
+                <div class="notify-watch-body" id="notify-watch-body">
+                  <ul class="notify-watch-list" id="notify-watch-list" aria-labelledby="notify-watch-title"></ul>
+                  <p class="settings-help-text notify-watch-empty" id="notify-watch-empty">还没有关注的频道，点「选择频道」开始添加。</p>
+                  <details class="channel-picker notify-watch-picker" id="notify-watch-picker">
+                    <summary class="btn-secondary" id="notify-watch-picker-toggle" aria-controls="notify-watch-picker-content">
+                      <span>选择频道</span>
+                      <span class="channel-picker__chevron" aria-hidden="true">
+                        <svg class="channel-picker__chevron-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                          stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                          <polyline points="6 9 12 15 18 9"></polyline>
+                        </svg>
+                      </span>
+                      <span class="channel-picker__ripples" aria-hidden="true"></span>
+                    </summary>
+                    <div class="channel-picker__content notify-watch-picker-content" id="notify-watch-picker-content">
+                      <div class="control-group">
+                        <label for="notify-watch-search">搜索频道名称</label>
+                        <div class="notify-watch-search-row">
+                          <input type="search" id="notify-watch-search" placeholder="输入名称筛选（可选）" autocomplete="off"
+                            aria-controls="notify-watch-results" aria-describedby="notify-watch-results-count" disabled>
+                          <button type="button" class="btn-ghost" id="notify-watch-search-clear" aria-label="清空频道搜索" hidden>清空</button>
+                        </div>
                       </div>
+                      <small class="settings-help-text" id="notify-watch-results-count" role="status"></small>
+                      <ul class="notify-watch-results" id="notify-watch-results" aria-label="频道列表"></ul>
+                      <p class="settings-help-text notify-watch-no-results" id="notify-watch-no-results" hidden></p>
                     </div>
-                    <small class="settings-help-text" id="notify-watch-results-count" role="status"></small>
-                    <ul class="notify-watch-results" id="notify-watch-results" aria-label="频道列表"></ul>
-                    <p class="settings-help-text notify-watch-no-results" id="notify-watch-no-results" hidden></p>
-                  </div>
-                </details>
-                <small class="settings-help-text notify-watch-draft-help">选择或移除后，点「保存通知设置」生效。</small>
+                  </details>
+                  <small class="settings-help-text notify-watch-draft-help">选择或移除后，点「保存通知设置」生效。</small>
+                </div>
                 <small class="settings-help-text is-invalid" id="notify-watch-error" role="alert" hidden></small>
               </section>
 
@@ -2481,25 +2490,25 @@
                 <h3 class="subsection-title" id="notify-noise-title">减少重复通知</h3>
                 <div class="cluster-settings-fields notify-noise-fields">
                   <div class="control-group">
-                    <label for="notify-confirm-secs">故障确认 （秒）</label>
+                    <label for="notify-confirm-secs">故障确认（秒）</label>
                     <input type="number" id="notify-confirm-secs" min="0" max="600" step="1" placeholder="60"
                       aria-describedby="notify-confirm-help">
                     <small class="settings-help-text" id="notify-confirm-help" data-help="异常持续达到该时长后才发送">异常持续达到该时长后才发送</small>
                   </div>
                   <div class="control-group">
-                    <label for="notify-recovery-secs">恢复确认 （秒）</label>
+                    <label for="notify-recovery-secs">恢复确认（秒）</label>
                     <input type="number" id="notify-recovery-secs" min="0" max="1800" step="1" placeholder="30"
                       aria-describedby="notify-recovery-help">
                     <small class="settings-help-text" id="notify-recovery-help" data-help="恢复正常达到该时长后才发送「已恢复」">恢复正常达到该时长后才发送「已恢复」</small>
                   </div>
                   <div class="control-group">
-                    <label for="notify-cooldown-mins">重复通知冷却 （分钟）</label>
+                    <label for="notify-cooldown-mins">重复通知冷却（分钟）</label>
                     <input type="number" id="notify-cooldown-mins" min="1" max="1440" step="1" placeholder="30"
                       aria-describedby="notify-cooldown-help">
                     <small class="settings-help-text" id="notify-cooldown-help" data-help="同一节点同一问题的最短间隔">同一节点同一问题的最短间隔</small>
                   </div>
                   <div class="control-group">
-                    <label for="notify-critical-cooldown-mins">严重事件冷却 （分钟）</label>
+                    <label for="notify-critical-cooldown-mins">严重事件冷却（分钟）</label>
                     <input type="number" id="notify-critical-cooldown-mins" min="1" max="1440" step="1" placeholder="10"
                       aria-describedby="notify-critical-cooldown-help">
                     <small class="settings-help-text" id="notify-critical-cooldown-help" data-help="节点故障、故障转移等">节点故障、故障转移等</small>
@@ -2521,8 +2530,11 @@
             <div class="panel__body">
               <section class="notify-commands-section" aria-labelledby="notify-commands-title">
                 <h3 class="subsection-title" id="notify-commands-title">QQ 指令</h3>
-                <label class="checkbox-inline notify-toggle-row">
-                  <input type="checkbox" id="notify-commands" aria-describedby="notify-commands-help" checked disabled>
+                <label class="notify-toggle-row toggle-label">
+                  <span class="toggle-switch">
+                    <input type="checkbox" id="notify-commands" aria-describedby="notify-commands-help" checked disabled>
+                    <span class="toggle-slider"></span>
+                  </span>
                   <span>回复管理员的只读指令</span>
                 </label>
                 <small class="settings-help-text" id="notify-commands-help">在 QQ 向机器人发送 status、event、quota 或 help 可查询，只回复已绑定的管理员，不会改变任何设置。管理员发来的任何消息都会刷新回复窗口。</small>

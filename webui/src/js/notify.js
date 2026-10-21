@@ -315,9 +315,19 @@ function setWatchError(error) {
   }
 }
 
+// The list, the picker and their hints only describe what happens while the
+// switch is on. Off, they collapse into the switch instead of sitting there as
+// a wall of disabled controls.
+function syncWatchBody() {
+  const body = $('notify-watch-body');
+  if (!body) return;
+  body.hidden = !$('notify-watch-enabled')?.checked;
+}
+
 function renderWatch() {
   const listEl = $('notify-watch-list');
   if (!listEl) return;
+  syncWatchBody();
   const disabled = busy || !settings;
   for (const id of ['notify-watch-search', 'notify-watch-search-clear']) {
     const el = $(id);

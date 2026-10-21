@@ -39,13 +39,13 @@ test('§17.8 主动推送 row: ok / no_permission / rate_limited / null / absent
 
 test('§17.8 budget line: 备用： prefix, warn and passive hint only while push is not ok', () => {
   const ok = wakeupBudgetView(B, { push: { last_result: 'ok' } });
-  assert.equal(ok.main, '备用：唤醒额度 2/4 · 保留 2 用于故障提醒');
+  assert.equal(ok.main, '备用：唤醒额度 2/4 · 保留 2 用于故障通知');
   assert.equal(ok.tone, 'ok', 'neutral at N ≤ reserve while push works');
   assert.equal(ok.passive, false, 'no passive hint while push works');
   for (const r of ['no_permission', 'rate_limited']) {
     const v = wakeupBudgetView(B, { push: { last_result: r } });
     assert.equal(v.tone, 'warn');
-    assert.equal(v.main, '备用：唤醒额度 2/4 · 保留 2 用于故障提醒，开播/下播只用被动回复');
+    assert.equal(v.main, '备用：唤醒额度 2/4 · 保留 2 用于故障通知，开播/下播只用被动回复');
     assert.equal(v.passive, true);
     assert.ok(pushLimited({ last_result: r }));
   }
@@ -56,7 +56,7 @@ test('§17.8 budget line: 备用： prefix, warn and passive hint only while pus
   assert.equal(wakeupBudgetView({ ...B, passive_window_open: false }, { push: { last_result: 'rate_limited' } }).passive, false);
   // Without active_push the §17 rules are unchanged.
   const legacy = wakeupBudgetView(B);
-  assert.equal(legacy.main, '唤醒额度 2/4 · 保留 2 用于故障提醒，开播/下播只用被动回复');
+  assert.equal(legacy.main, '唤醒额度 2/4 · 保留 2 用于故障通知，开播/下播只用被动回复');
   assert.equal(legacy.passive, true);
   assert.deepEqual(budgetSegments(ok)[0], { text: '备用：唤醒额度 2/4' });
   assert.equal(

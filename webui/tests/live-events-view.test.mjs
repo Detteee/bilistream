@@ -34,7 +34,7 @@ test('B1: a blocked /status falls back to — after 90 s, driven by failed polls
   // Mirrors refreshNotifyStatus: success stores the status, failure still redraws.
   const poll = async () => { try { status = await fetchStatus(); statusAt = clock; } catch {} draw(); };
   await poll();
-  assert.equal(e.main.textContent, '唤醒额度 3/4 · 保留 2 用于故障提醒');
+  assert.equal(e.main.textContent, '唤醒额度 3/4 · 保留 2 用于故障通知');
   assert.equal(e.next.hidden, false);
   assert.equal(e.passive.hidden, false);
   blocked = true;
@@ -49,7 +49,7 @@ test('B1: a blocked /status falls back to — after 90 s, driven by failed polls
   assert.ok(LIVE_EVENTS_TICK_MS < STATUS_STALE_MS);
   blocked = false;
   await poll();
-  assert.equal(e.main.textContent, '唤醒额度 3/4 · 保留 2 用于故障提醒', 'recovers on the next good poll');
+  assert.equal(e.main.textContent, '唤醒额度 3/4 · 保留 2 用于故障通知', 'recovers on the next good poll');
   const src = await readFile(new URL('../src/js/notify.js', import.meta.url), 'utf8');
   // These three assert the wiring still exists in source. They fail on a rename
   // and cannot catch a behaviour break; the behavioural checks above carry that
@@ -77,7 +77,7 @@ test('B2: the invalid_field error is described, marks the switch invalid, and cl
 
 test('B3: budget phrases are separate nowrap spans; breaks only at · and ，', async () => {
   const low = budgetSegments(wakeupBudgetView({ wakeup_remaining: 2, wakeup_reserve: 2 }));
-  assert.deepEqual(low, [{ text: '唤醒额度 2/4' }, { sep: ' · ' }, { text: '保留 2 用于故障提醒' }, { sep: '，' }, { text: '开播/下播只用被动回复', suffix: true }]);
+  assert.deepEqual(low, [{ text: '唤醒额度 2/4' }, { sep: ' · ' }, { text: '保留 2 用于故障通知' }, { sep: '，' }, { text: '开播/下播只用被动回复', suffix: true }]);
   assert.deepEqual(budgetSegments(wakeupBudgetView({}, { available: false })), [{ text: '唤醒额度 —' }]);
   const e = els();
   renderLiveEventsInto(doc, e, { status: { quota: { wakeup_remaining: 1, wakeup_reserve: 2, wakeup_next_close_at: 1_790_000_000 } }, statusAt: 0, now: 0 });

@@ -860,15 +860,26 @@
    12. Settings
    ========================================================================== */
 
-/* One declaration, no breakpoints. min(100%, 320px) makes the column count
-   non-decreasing in container width: narrower than 320 the single column just
-   fills, wider it adds whole 320s. The old 240px base plus a 1200px 300px
-   override and a 700px single-column reset made 4 cols fall back to 3 at
-   1200px and 2 cols fall back to 1 at 561px. */
+/* Two columns, one breakpoint. auto-fit with a rem minimum looked tidier but
+   overflowed: min(100%, 30rem) resolves to the container width, so Firefox
+   laid out a 480px track plus a squeezed 260px one and pushed the page 31px
+   wide at 768px. Fixed columns cannot do that, and two is the most a switch
+   row wants anyway. */
 .settings-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: var(--sp-4) var(--sp-5);
+  /* Switches are one line tall, fields carry a label and often a hint. Left
+     to stretch, a switch floats in the middle of a row sized by its tall
+     neighbour; top-aligning every cell puts the switch level with the label
+     beside it. */
+  align-items: start;
+}
+
+@media (max-width: 700px) {
+  .settings-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .settings-keys {
@@ -895,15 +906,82 @@
   max-width: 40rem;
 }
 
-/* A grouped panel stacks several topics in one body, so a subsection heading
-   needs air above it -- except when it opens the body. */
+/* Numbers hold short values. At the column width they read as prose fields and
+   leave the switch beside them stranded. */
+#view-settings .control-group > input[type="number"] {
+  max-width: 10rem;
+}
+
+/* A field that stands alone among switches takes a row of its own, so the row
+   is never as tall as the hint sitting under one cell while the switch beside
+   it has nothing to do. Capped in measure: stretched across the full width the
+   label and its input drift a screen apart. */
+#view-settings .settings-field-row {
+  grid-column: 1 / -1;
+  max-width: 24rem;
+}
+
+/* The auto-stop threshold belongs to the switch beside it, so it sits in the
+   same cell instead of taking a row of its own. Off, the switch hides it. */
+#view-settings .settings-toggle-inline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2) var(--sp-3);
+}
+
+#view-settings .settings-toggle-inline > .settings-help-text {
+  flex-basis: 100%;
+}
+
+#view-settings .settings-inline-value {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+#view-settings .settings-inline-value[hidden] {
+  display: none;
+}
+
+#view-settings .settings-inline-value > input {
+  width: 4.5rem;
+  text-align: center;
+}
+
+/* A grouped panel stacks several topics in one body. Air alone did not read as
+   a break, so each heading also opens with a hairline rule -- except the one
+   that opens the body. */
 #view-settings > .panel > .panel__body > .subsection-title {
   margin-top: var(--sp-5);
+  padding-top: var(--sp-4);
+  border-top: 1px solid var(--line);
 }
 
 #view-settings > .panel > .panel__body > .subsection-title:first-child {
   margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
 }
+/* The 通知 panels stack topics the same way, so they get the same rule. The
+   first section in a body keeps a clean edge; when 通知类型 is hidden the
+   section that follows it takes that place. */
+#view-notify .notify-section > .subsection-title {
+  margin-top: var(--sp-5);
+  padding-top: var(--sp-4);
+  border-top: 1px solid var(--line);
+}
+
+#view-notify .notify-section:first-child > .subsection-title,
+#notify-types[hidden] + .notify-section > .subsection-title {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
+}
+
 
 #view-settings .settings-actions {
   grid-column: 1 / -1;

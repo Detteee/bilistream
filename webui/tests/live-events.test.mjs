@@ -39,7 +39,7 @@ test('switch follows the writer gate and invalid_field shows inline', () => {
 test('wakeup budget line: ok, warn at reserve, unknown when missing or stale', () => {
   const at = 1_790_000_000;
   const ok = wakeupBudgetView({ wakeup_remaining: 3, wakeup_reserve: 2, wakeup_next_close_at: at });
-  assert.equal(ok.main, '唤醒额度 3/4 · 保留 2 用于故障提醒');
+  assert.equal(ok.main, '唤醒额度 3/4 · 保留 2 用于故障通知');
   assert.equal(ok.segments.map(seg => seg.sep ?? seg.text).join(''), ok.main, 'phrases and line stay in sync');
   assert.equal(ok.tone, 'ok');
   assert.equal(ok.next, ` · 下一档 ${formatLocalShort(at)} 到期`);
@@ -47,7 +47,7 @@ test('wakeup budget line: ok, warn at reserve, unknown when missing or stale', (
   for (const remaining of [2, 1, 0]) {
     const warn = wakeupBudgetView({ wakeup_remaining: remaining, wakeup_reserve: 2 });
     assert.equal(warn.tone, 'warn');
-    assert.equal(warn.main, `唤醒额度 ${remaining}/4 · 保留 2 用于故障提醒，开播/下播只用被动回复`);
+    assert.equal(warn.main, `唤醒额度 ${remaining}/4 · 保留 2 用于故障通知，开播/下播只用被动回复`);
   }
   assert.equal(wakeupBudgetView({ wakeup_remaining: 3, wakeup_reserve: 2, wakeup_next_close_at: null }).next, null, 'null hides the segment');
   assert.equal(wakeupBudgetView({ wakeup_remaining: 3, wakeup_reserve: 1 }).main.includes('保留 1'), true, 'reserve is never hard-coded');
