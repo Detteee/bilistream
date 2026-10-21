@@ -45,7 +45,7 @@ pub async fn check_for_updates() -> Result<UpdateInfo, Box<dyn Error + Send + Sy
     let response = client.get(&url).send().await?;
 
     if !response.status().is_success() {
-        return Err(format!("GitHub API 请求失败: {}", response.status()).into());
+        return Err(format!("GitHub API 请求失败：{}", response.status()).into());
     }
 
     let release: ReleaseInfo = response.json().await?;
@@ -177,7 +177,7 @@ pub async fn download_and_install_update(
     let response = client.get(download_url).send().await?;
 
     if !response.status().is_success() {
-        return Err(format!("下载失败: HTTP {}", response.status()).into());
+        return Err(format!("下载失败：HTTP {}", response.status()).into());
     }
 
     let total_size = response.content_length().unwrap_or(0);

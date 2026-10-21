@@ -493,11 +493,11 @@ async function confirmHolodexAddChannel(button) {
         loadChannels();
       }
     } else {
-      showNotification('添加失败: ' + (result.message || 'Unknown error'), 'error');
+      showNotification('添加失败：' + (result.message || 'Unknown error'), 'error');
       setHolodexAddChannelButtonsDisabled(control, false);
     }
   } catch (error) {
-    showNotification('添加失败: ' + error.message, 'error');
+    showNotification('添加失败：' + error.message, 'error');
     setHolodexAddChannelButtonsDisabled(control, false);
   }
 }
@@ -544,7 +544,7 @@ function createStreamCard(model) {
     avatarHref: model.channelId ? channelHref : '',
     avatarPhoto: model.channelId ? getHolodexChannelPhotoUrl(model) : '',
     areaHint: model.suggestedAreaId && model.suggestedAreaName
-      ? `🎯 建议分区: ${model.suggestedAreaName}`
+      ? `🎯 建议分区：${model.suggestedAreaName}`
       : '',
     channelExtra: createHolodexAddChannelControls(model),
   });
@@ -711,7 +711,7 @@ async function refreshStreamList({ force = false } = {}) {
 
   } catch (error) {
     if (generation !== streamListState.refreshGeneration) return;
-    setStreamListStatus(statusDiv, `❌ 请求失败: ${error.message}`, 'streams-status-error');
+    setStreamListStatus(statusDiv, `❌ 请求失败：${error.message}`, 'streams-status-error');
   } finally {
     // Stop spinning animation when complete
     if (generation === streamListState.refreshGeneration) {
@@ -755,11 +755,11 @@ async function toggleHolodexSkipJwtVerify() {
       await refreshStreamList();
     } else {
       toggle.checked = !toggle.checked;
-      showNotification('更新失败: ' + (data.message || '未知错误'), 'error');
+      showNotification('更新失败：' + (data.message || '未知错误'), 'error');
     }
   } catch (error) {
     toggle.checked = !toggle.checked;
-    showNotification('更新失败: ' + error.message, 'error');
+    showNotification('更新失败：' + error.message, 'error');
   }
 }
 async function saveHolodexJwt() {
@@ -780,10 +780,10 @@ async function saveHolodexJwt() {
       await loadHolodexAuthStatus();
       await refreshStreamList();
     } else {
-      showNotification('保存失败: ' + (data.message || '未知错误'), 'error');
+      showNotification('保存失败：' + (data.message || '未知错误'), 'error');
     }
   } catch (error) {
-    showNotification('保存失败: ' + error.message, 'error');
+    showNotification('保存失败：' + error.message, 'error');
   }
 }
 async function logoutHolodexJwt() {
@@ -798,10 +798,10 @@ async function logoutHolodexJwt() {
       await loadHolodexAuthStatus();
       await refreshStreamList();
     } else {
-      showNotification('退出失败: ' + (data.message || '未知错误'), 'error');
+      showNotification('退出失败：' + (data.message || '未知错误'), 'error');
     }
   } catch (error) {
-    showNotification('退出失败: ' + error.message, 'error');
+    showNotification('退出失败：' + error.message, 'error');
   }
 }
 

@@ -160,7 +160,7 @@ async function loadAreas() {
       const areasContent = document.getElementById('areas-content');
       if (areasContent) {
         areasContent.replaceChildren(
-          createManagementMessage(`加载失败: ${result.message}`, 'management-error-message')
+          createManagementMessage(`加载失败：${result.message}`, 'management-error-message')
         );
       }
     }
@@ -169,7 +169,7 @@ async function loadAreas() {
     const areasContent = document.getElementById('areas-content');
     if (areasContent) {
       areasContent.replaceChildren(
-        createManagementMessage(`加载失败: ${error.message}`, 'management-error-message')
+        createManagementMessage(`加载失败：${error.message}`, 'management-error-message')
       );
     }
   }
@@ -189,11 +189,11 @@ async function addArea() {
       clearAreaForm();
       loadAreas();
     } else {
-      showNotification(`添加失败: ${result.message}`, 'error');
+      showNotification(`添加失败：${result.message}`, 'error');
     }
   } catch (error) {
     console.error('Add area error:', error);
-    showNotification(`添加失败: ${error.message}`, 'error');
+    showNotification(`添加失败：${error.message}`, 'error');
   }
 }
 function showManagementSuccess(result, fallbackMessage) {
@@ -280,7 +280,7 @@ async function loadChannels() {
       const channelsContent = document.getElementById('channels-content');
       if (channelsContent) {
         channelsContent.replaceChildren(
-          createManagementMessage(`加载失败: ${result.message}`, 'management-error-message')
+          createManagementMessage(`加载失败：${result.message}`, 'management-error-message')
         );
       }
     }
@@ -289,7 +289,7 @@ async function loadChannels() {
     const channelsContent = document.getElementById('channels-content');
     if (channelsContent) {
       channelsContent.replaceChildren(
-        createManagementMessage(`加载失败: ${error.message}`, 'management-error-message')
+        createManagementMessage(`加载失败：${error.message}`, 'management-error-message')
       );
     }
   }
@@ -314,11 +314,11 @@ async function addChannel() {
       clearChannelForm();
       loadChannels();
     } else {
-      showNotification(`添加失败: ${result.message}`, 'error');
+      showNotification(`添加失败：${result.message}`, 'error');
     }
   } catch (error) {
     console.error('Add channel error:', error);
-    showNotification(`添加失败: ${error.message}`, 'error');
+    showNotification(`添加失败：${error.message}`, 'error');
   }
 }
 async function updateChannel() {
@@ -346,10 +346,10 @@ async function updateChannel() {
       clearChannelForm();
       loadChannels();
     } else {
-      showNotification(`更新失败: ${result.message}`, 'error');
+      showNotification(`更新失败：${result.message}`, 'error');
     }
   } catch (error) {
-    showNotification(`更新失败: ${error.message}`, 'error');
+    showNotification(`更新失败：${error.message}`, 'error');
   }
 }
 function readChannelForm() {
@@ -373,7 +373,7 @@ async function editChannel(channelName) {
   try {
     const result = await managementRequest('/api/manage/channels');
     if (!result.success) {
-      showNotification(`加载失败: ${result.message}`, 'error');
+      showNotification(`加载失败：${result.message}`, 'error');
       return;
     }
 
@@ -398,7 +398,7 @@ async function editChannel(channelName) {
     setElementText('channel-submit-btn', '更新频道');
     document.getElementById('channel-name').scrollIntoView({ behavior: 'smooth' });
   } catch (error) {
-    showNotification(`加载失败: ${error.message}`, 'error');
+    showNotification(`加载失败：${error.message}`, 'error');
   }
 }
 function clearChannelForm() {
@@ -419,7 +419,7 @@ async function editArea(areaId) {
   try {
     const result = await managementRequest('/api/manage/areas');
     if (!result.success) {
-      showNotification(`加载失败: ${result.message}`, 'error');
+      showNotification(`加载失败：${result.message}`, 'error');
       return;
     }
 
@@ -440,7 +440,7 @@ async function editArea(areaId) {
     setElementText('area-submit-btn', '更新分区');
     document.getElementById('area-id').scrollIntoView({ behavior: 'smooth' });
   } catch (error) {
-    showNotification(`加载失败: ${error.message}`, 'error');
+    showNotification(`加载失败：${error.message}`, 'error');
   }
 }
 function clearAreaForm() {
@@ -474,11 +474,11 @@ async function updateArea(originalId) {
       clearAreaForm();
       loadAreas();
     } else {
-      showNotification(`更新失败: ${result.message}`, 'error');
+      showNotification(`更新失败：${result.message}`, 'error');
     }
   } catch (error) {
     console.error('Update area error:', error);
-    showNotification(`更新失败: ${error.message}`, 'error');
+    showNotification(`更新失败：${error.message}`, 'error');
   }
 }
 // Delete functions
@@ -493,10 +493,10 @@ async function deleteArea(areaId) {
       showManagementSuccess(result, '分区删除成功');
       loadAreas();
     } else {
-      showNotification(`删除失败: ${result.message}`, 'error');
+      showNotification(`删除失败：${result.message}`, 'error');
     }
   } catch (error) {
-    showNotification(`删除失败: ${error.message}`, 'error');
+    showNotification(`删除失败：${error.message}`, 'error');
   }
 }
 async function deleteChannel(channelName) {
@@ -510,10 +510,10 @@ async function deleteChannel(channelName) {
       showManagementSuccess(result, '频道删除成功');
       loadChannels();
     } else {
-      showNotification(`删除失败: ${result.message}`, 'error');
+      showNotification(`删除失败：${result.message}`, 'error');
     }
   } catch (error) {
-    showNotification(`删除失败: ${error.message}`, 'error');
+    showNotification(`删除失败：${error.message}`, 'error');
   }
 }
 // Animated refresh functions

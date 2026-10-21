@@ -259,7 +259,7 @@ pub async fn restart_server_process() -> Result<ApiResponse<()>, StatusCode> {
             return Ok(ApiResponse {
                 success: false,
                 data: None,
-                message: Some(format!("生成重启命令失败: {}", e)),
+                message: Some(format!("生成重启命令失败：{}", e)),
             });
         }
     };
@@ -273,7 +273,7 @@ pub async fn restart_server_process() -> Result<ApiResponse<()>, StatusCode> {
         return Ok(ApiResponse {
             success: false,
             data: None,
-            message: Some(format!("发送 screen 重启命令失败: {}", e)),
+            message: Some(format!("发送 screen 重启命令失败：{}", e)),
         });
     }
     restart_command.handed_off();

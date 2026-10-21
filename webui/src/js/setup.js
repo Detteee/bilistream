@@ -308,7 +308,7 @@ async function showQrCode() {
   } catch (error) {
     if (generation !== qrGeneration) return;
     console.error('Failed to get QR code:', error);
-    showNotification('获取二维码失败: ' + error.message, 'error');
+    showNotification('获取二维码失败：' + error.message, 'error');
   }
 }
 function startLoginPolling() {
@@ -366,7 +366,7 @@ async function triggerBiliLogin() {
     }
   } catch (error) {
     console.error('Login failed:', error);
-    showNotification('登录失败: ' + error.message, 'error');
+    showNotification('登录失败：' + error.message, 'error');
   }
 }
 let setupSaving = false;
@@ -478,7 +478,7 @@ async function saveSetupConfig() {
       showNotification(data.message || '保存配置失败', 'error');
     }
   } catch (error) {
-    showNotification('保存配置失败: ' + error.message, 'error');
+    showNotification('保存配置失败：' + error.message, 'error');
     if (!error.status || error.status === 401 || error.status === 409 || error.status >= 500) {
       password.value = '';
       setupNeedsRecheck = true;

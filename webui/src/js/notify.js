@@ -872,7 +872,7 @@ async function save() {
   if (Object.keys(errors).length) {
     const first = Object.keys(errors)[0];
     (first === 'admin_openid' ? $('notify-admin-openid') : $(FIELDS[first] || FIELDS.token_url))?.focus();
-    showNotification('通知设置保存失败: 请检查标红的项目', 'error');
+    showNotification('通知设置保存失败：请检查标红的项目', 'error');
     return;
   }
   if (!form.enabled && baseline?.enabled && status?.authority === 'primary'
@@ -914,7 +914,7 @@ async function save() {
     handleRefusal(error, 'config', { credentialsSent: bodyCarriesCredentials(body) });
     liveEventsError = liveEventsFieldError(error);
     if (liveEventsError) $('notify-live-events')?.focus();
-    showNotification(`通知设置保存失败: ${refusal ? refusal.banner.lead : error.message}`, 'error');
+    showNotification(`通知设置保存失败：${refusal ? refusal.banner.lead : error.message}`, 'error');
   } finally {
     // §16.4: the typed openid never outlives the request, success or not.
     $('notify-admin-openid').value = '';
@@ -942,7 +942,7 @@ async function clearSecret() {
     },
     onError: error => {
       handleRefusal(error, 'config');
-      showNotification(`通知设置保存失败: ${refusal ? refusal.banner.lead : error.message}`, 'error');
+      showNotification(`通知设置保存失败：${refusal ? refusal.banner.lead : error.message}`, 'error');
     },
     secretInput: () => $('notify-app-secret'),
   });
@@ -1005,7 +1005,7 @@ async function unbindOpenid() {
     showNotification(before.length ? '已在本节点解除绑定，正在同步到其他节点…' : '管理员 openid 已解除绑定', 'success');
   } catch (error) {
     handleRefusal(error);
-    showNotification(`解除绑定失败: ${refusal ? refusal.banner.lead : error.message}`, 'error');
+    showNotification(`解除绑定失败：${refusal ? refusal.banner.lead : error.message}`, 'error');
   } finally {
     busy = false;
     render();

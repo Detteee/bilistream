@@ -99,7 +99,7 @@ pub async fn capture_frame(
                         "该频道未在直播".to_string()
                     } else {
                         format!(
-                            "获取直播流失败: {}",
+                            "获取直播流失败：{}",
                             stderr.lines().next().unwrap_or("未知错误")
                         )
                     };

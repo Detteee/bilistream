@@ -1061,7 +1061,7 @@ pub(crate) fn check_peer_request(
         return Err(BadRequest("未知统计查询".into()));
     }
     crate::history::query::validate_peer(&req.query, now)
-        .map_err(|e| BadRequest(format!("统计查询无效: {}", e.0)))?;
+        .map_err(|e| BadRequest(format!("统计查询无效：{}", e.0)))?;
     if req.name == "stats" {
         let cutoff = now - cfg.history.retention.raw_days as i64 * 86_400;
         req.query.raw_from = (req.query.from < cutoff).then(|| (cutoff + 59).div_euclid(60) * 60);

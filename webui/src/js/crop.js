@@ -165,7 +165,7 @@ async function clearCropConfig(platform) {
       showNotification(result.message || '清除失败', 'error');
     }
   } catch (error) {
-    showNotification('清除失败: ' + error.message, 'error');
+    showNotification('清除失败：' + error.message, 'error');
   }
 }
 async function autoCaptureFrame() {
@@ -190,7 +190,7 @@ async function autoCaptureFrame() {
   } catch (error) {
     if (!isCropSessionCurrent(session)) return;
     console.error('Capture error:', error);
-    showNotification('捕获失败: ' + error.message, 'error');
+    showNotification('捕获失败：' + error.message, 'error');
   }
 }
 async function loadCurrentCropSettings(session = cropSession) {
@@ -679,7 +679,7 @@ async function saveCropSelection(restart) {
       showNotification(result.message || '保存失败', 'error');
     }
   } catch (error) {
-    showNotification('保存失败: ' + error.message, 'error');
+    showNotification('保存失败：' + error.message, 'error');
   } finally {
     cropSaving = false;
   }
@@ -700,7 +700,7 @@ async function disableCrop() {
       showNotification(result.message || '禁用失败', 'error');
     }
   } catch (error) {
-    showNotification('禁用失败: ' + error.message, 'error');
+    showNotification('禁用失败：' + error.message, 'error');
   }
 }
 function selectAspectRatio(ratio) {

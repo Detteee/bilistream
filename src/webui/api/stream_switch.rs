@@ -301,7 +301,7 @@ pub async fn switch_stream(
             success: true,
             data: Some(()),
             message: Some(format!(
-                "已切换到 Niconico {} (分区: {}) - {}{}",
+                "已切换到 Niconico {} (分区：{}) - {}{}",
                 cfg.niconico.channel_name,
                 cfg.niconico.area_v2,
                 if is_live { "直播中" } else { "预定直播" },
@@ -395,7 +395,7 @@ pub async fn switch_stream(
             success: true,
             data: Some(()),
             message: Some(format!(
-                "已切换到 Twitch {} (分区: {}) - {}{}",
+                "已切换到 Twitch {} (分区：{}) - {}{}",
                 cfg.twitch.channel_name,
                 cfg.twitch.area_v2,
                 if is_live { "直播中" } else { "预定直播" },
@@ -478,7 +478,7 @@ pub async fn switch_stream(
         success: true,
         data: Some(()),
         message: Some(format!(
-            "已切换到 {} (分区: {}) - {}{}",
+            "已切换到 {} (分区：{}) - {}{}",
             cfg.youtube.channel_name,
             cfg.youtube.area_v2,
             if is_live { "直播中" } else { "预定直播" },

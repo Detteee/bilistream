@@ -799,7 +799,7 @@ async fn finish_target_update<AfterUpdate, AfterFuture, Reply, ReplyFuture>(
             reply(message).await;
         }
         Err(error) => {
-            outcome.reject(&format!("更新配置时出错: {error}"));
+            outcome.reject(&format!("更新配置时出错：{error}"));
             reply(format!("错误：更新配置时出错 {error}")).await;
         }
     }
@@ -810,7 +810,7 @@ async fn finish_target_update<AfterUpdate, AfterFuture, Reply, ReplyFuture>(
 /// cannot mistake it for a bad area argument.
 pub(crate) fn banned_keyword_text(channel_name: &str, platform: &str, keyword: &str) -> String {
     format!(
-        "不可点播：{} 在 {} 的标题/分区含关键词: {}。",
+        "不可点播：{} 在 {} 的标题/分区含关键词：{}。",
         safe_text(channel_name, 32),
         safe_text(platform, 8),
         safe_text(keyword, 32)
@@ -963,9 +963,9 @@ pub async fn process_danmaku_with_owner(command: &str, is_owner: bool, sender: &
         return;
     }
 
-    tracing::debug!("原始分区输入: '{}'", safe_text(area_alias, 80));
+    tracing::debug!("原始分区输入：'{}'", safe_text(area_alias, 80));
     let area_name = resolve_area_alias(area_alias);
-    tracing::debug!("解析后的分区名称: '{}'", safe_text(&area_name, 80));
+    tracing::debug!("解析后的分区名称：'{}'", safe_text(&area_name, 80));
 
     let area_id = match get_area_id(&area_name) {
         Ok(id) => id,
@@ -983,7 +983,7 @@ pub async fn process_danmaku_with_owner(command: &str, is_owner: bool, sender: &
         let channel_id = match get_channel_id(&platform, channel_name) {
             Ok(id) => id,
             Err(e) => {
-                outcome.reject(&format!("检查频道时出错: {e}"));
+                outcome.reject(&format!("检查频道时出错：{e}"));
                 let _ = bilibili::send_danmaku(&cfg, &format!("错误：检查频道时出错 {}", e)).await;
                 return;
             }
@@ -1020,7 +1020,7 @@ pub async fn process_danmaku_with_owner(command: &str, is_owner: bool, sender: &
                 return;
             }
             Err(e) => {
-                outcome.reject(&format!("获取频道名称时出错: {e}"));
+                outcome.reject(&format!("获取频道名称时出错：{e}"));
                 return;
             }
         };
@@ -1058,7 +1058,7 @@ pub async fn process_danmaku_with_owner(command: &str, is_owner: bool, sender: &
                     (t, topic.unwrap_or_default(), video_id)
                 }
                 Err(e) => {
-                    outcome.reject(&format!("获取 YT 直播标题时出错: {e}"));
+                    outcome.reject(&format!("获取 YT 直播标题时出错：{e}"));
                     let _ =
                         bilibili::send_danmaku(&cfg, &format!("错误：获取YT直播标题时出错 {}", e))
                             .await;
@@ -1073,7 +1073,7 @@ pub async fn process_danmaku_with_owner(command: &str, is_owner: bool, sender: &
                         outcome.reject("TW 频道未在直播");
                         let _ = bilibili::send_danmaku(
                             &cfg,
-                            &format!("错误: {} 未在直播", resolved_channel_name),
+                            &format!("错误：{} 未在直播", resolved_channel_name),
                         )
                         .await;
                         return;
@@ -1098,7 +1098,7 @@ pub async fn process_danmaku_with_owner(command: &str, is_owner: bool, sender: &
                     (t, topic.unwrap_or_default(), None)
                 }
                 Err(e) => {
-                    outcome.reject(&format!("获取 TW 状态时出错: {e}"));
+                    outcome.reject(&format!("获取 TW 状态时出错：{e}"));
                     let _ =
                         bilibili::send_danmaku(&cfg, &format!("错误：获取TW直播标题时出错 {}", e))
                             .await;
@@ -1112,7 +1112,7 @@ pub async fn process_danmaku_with_owner(command: &str, is_owner: bool, sender: &
         let live_topic_title = danmaku_haystack(&live_topic, &live_title);
 
         if let Some(keyword) = banned_keyword_hit(&live_topic_title, &danmaku_banned_keywords()) {
-            outcome.reject(&format!("直播标题/分区包含不支持的关键词: {}", keyword));
+            outcome.reject(&format!("直播标题/分区包含不支持的关键词：{}", keyword));
             let _ = send_banned_keyword_notice(&cfg, channel_name, &platform, &keyword).await;
             return;
         }
@@ -1557,7 +1557,7 @@ pub async fn wait_config_update_or_timeout(timeout: Duration) -> bool {
 pub fn get_area_name(area_id: u64) -> Option<String> {
     let name = area_name(area_id);
     if name.is_none() {
-        tracing::error!("未知的分区ID: {}", area_id);
+        tracing::error!("未知的分区ID：{}", area_id);
     }
     name
 }
@@ -1602,10 +1602,10 @@ fn get_area_id(area_name: &str) -> Result<u64, Box<dyn std::error::Error>> {
     }
 
     tracing::debug!(
-        "未知的分区: '{}' (已尝试匹配)",
+        "未知的分区：'{}' (已尝试匹配)",
         safe_text(area_name_trimmed, 80)
     );
-    Err(format!("未知的分区: {}", area_name_trimmed).into())
+    Err(format!("未知的分区：{}", area_name_trimmed).into())
 }
 
 pub fn get_aliases(target_name: &str) -> Result<Vec<String>, Box<dyn std::error::Error>> {
@@ -2110,19 +2110,19 @@ mod tests {
     #[test]
     fn a_banned_keyword_notice_names_the_channel_and_splits_a_long_detail() {
         let main = banned_keyword_text("英リサ", "YT", "apex");
-        assert_eq!(main, "不可点播：英リサ 在 YT 的标题/分区含关键词: apex。");
+        assert_eq!(main, "不可点播：英リサ 在 YT 的标题/分区含关键词：apex。");
         let advert = Some("网页详情：status.detteee.xyz".to_string());
         assert_eq!(
             banned_keyword_messages(main.clone(), advert.clone()),
             vec![
-                "不可点播：英リサ 在 YT 的标题/分区含关键词: apex。网页详情：status.detteee.xyz"
+                "不可点播：英リサ 在 YT 的标题/分区含关键词：apex。网页详情：status.detteee.xyz"
                     .to_string()
             ]
         );
         // A long sentence pushes the combined line past the cap, so the
         // detail goes as its own send instead of being truncated.
         let long = format!(
-            "不可点播：{} 在 YT 的标题/分区含关键词: apex。",
+            "不可点播：{} 在 YT 的标题/分区含关键词：apex。",
             "频".repeat(20)
         );
         assert_eq!(

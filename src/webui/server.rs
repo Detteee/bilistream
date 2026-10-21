@@ -60,14 +60,14 @@ pub(crate) async fn serve_prepared(
 
     println!("\nWeb UI 服务已启动");
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    println!("监听地址:     {}", addr);
-    println!("本地访问:     http://127.0.0.1:{}", port);
+    println!("监听地址：{}", addr);
+    println!("本地访问：http://127.0.0.1:{}", port);
     if required {
         println!("网页需密码登录");
     }
 
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    println!("提示: 在浏览器中打开上述地址访问\n");
+    println!("提示：在浏览器中打开上述地址访问\n");
 
     axum::serve(
         listener,

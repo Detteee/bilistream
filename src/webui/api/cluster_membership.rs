@@ -418,7 +418,7 @@ pub(crate) async fn submit_operation(
         return reply::<()>(
             StatusCode::BAD_GATEWAY,
             None,
-            format!("以下节点必须在线才能变更成员: {}", missing.join("、")),
+            format!("以下节点必须在线才能变更成员：{}", missing.join("、")),
         );
     }
     let begin = {
@@ -510,7 +510,7 @@ async fn add_with_password(runtime: &Runtime, op: &Operation, password: String) 
             reply::<()>(status, None, message)
         }
         Ok((_, Reservation::Uncertain(message))) => {
-            let note = format!("无法确认目标节点是否已预约，将自动核对: {message}");
+            let note = format!("无法确认目标节点是否已预约，将自动核对：{message}");
             let note_id = id.clone();
             let _ = record(runtime, move |m| m.note(note_id, note)).await;
             runtime.spawn_driver(id.clone());
@@ -528,7 +528,7 @@ async fn add_with_password(runtime: &Runtime, op: &Operation, password: String) 
             reply::<()>(
                 StatusCode::BAD_GATEWAY,
                 None,
-                format!("目标节点不可达或身份验证失败: {error}"),
+                format!("目标节点不可达或身份验证失败：{error}"),
             )
         }
     }
@@ -598,7 +598,7 @@ async fn forward_self_removal(
     reply::<()>(
         StatusCode::BAD_GATEWAY,
         None,
-        format!("没有可协调的保留节点: {}", unreachable.join("、")),
+        format!("没有可协调的保留节点：{}", unreachable.join("、")),
     )
 }
 

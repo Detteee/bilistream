@@ -201,7 +201,7 @@ pub(crate) async fn cluster_drain_for_config(
                 data: Some(without_heartbeat_only_fields(
                     crate::cluster::get_cluster_status_for_config(cfg).await,
                 )),
-                message: Some(format!("集群节点禁用前切换失败: {}", e)),
+                message: Some(format!("集群节点禁用前切换失败：{}", e)),
             });
         }
     }
@@ -223,7 +223,7 @@ pub(crate) async fn cluster_drain_for_config(
                 data: Some(without_heartbeat_only_fields(
                     crate::cluster::get_cluster_status_for_config(cfg).await,
                 )),
-                message: Some(format!("目标节点未确认状态更新: {error}")),
+                message: Some(format!("目标节点未确认状态更新：{error}")),
             });
         }
     } else {
@@ -236,7 +236,7 @@ pub(crate) async fn cluster_drain_for_config(
             if let Err(error) =
                 post_cluster_control(cfg, "/api/cluster/drain", &forwarded, None).await
             {
-                message = format!("本节点状态已更新；部分节点同步失败: {error}");
+                message = format!("本节点状态已更新；部分节点同步失败：{error}");
             }
         }
     }
@@ -411,7 +411,7 @@ pub async fn cluster_set_public_status(
                 return Ok(Json(ApiResponse {
                     success: false,
                     data: Some(without_heartbeat_only_fields(status)),
-                    message: Some(format!("本节点已保存，但同步失败: {}", e)),
+                    message: Some(format!("本节点已保存，但同步失败：{}", e)),
                 }));
             }
         }
@@ -539,7 +539,7 @@ pub async fn cluster_failover(
                     .await
                     .ok()
                     .map(without_heartbeat_only_fields),
-                message: Some(format!("集群节点切换失败: {}", e)),
+                message: Some(format!("集群节点切换失败：{}", e)),
             }));
         }
         crate::cluster::get_cluster_status_for_config(&cfg).await
@@ -573,7 +573,7 @@ pub async fn cluster_failover(
         if let Err(error) =
             post_cluster_control(&cfg, "/api/cluster/failover", &forwarded, None).await
         {
-            message = format!("集群节点切换已触发；部分节点同步失败: {error}");
+            message = format!("集群节点切换已触发；部分节点同步失败：{error}");
         }
         status = crate::cluster::get_cluster_status_for_config(&cfg).await;
     }
@@ -613,7 +613,7 @@ pub(crate) fn normalize_cluster_failover_target(
     {
         Ok(Some(target_node_id.to_string()))
     } else {
-        Err(format!("未知集群节点: {}", target_node_id))
+        Err(format!("未知集群节点：{}", target_node_id))
     }
 }
 
@@ -675,7 +675,7 @@ pub(crate) async fn restart_peer_server(
         Duration::from_secs(5),
     )
     .await
-    .map_err(|e| format!("节点 {} 重启请求失败: {}", peer.node_id, e))?;
+    .map_err(|e| format!("节点 {} 重启请求失败：{}", peer.node_id, e))?;
     if envelope.success {
         Ok(envelope
             .message
@@ -755,7 +755,7 @@ pub async fn cluster_push_config() -> Result<Json<ApiResponse<ClusterStatus>>, S
             return Ok(Json(ApiResponse {
                 success: false,
                 data: None,
-                message: Some(format!("监控频道配置同步失败: {}", e)),
+                message: Some(format!("监控频道配置同步失败：{}", e)),
             }));
         }
     };

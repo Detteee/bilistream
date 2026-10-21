@@ -120,7 +120,7 @@ pub async fn get_area_catalog() -> Json<ApiResponse<Vec<SetupArea>>> {
             .await
             .map_err(|e| e.to_string())?;
         parse_area_catalog(
-            serde_json::from_slice(&bytes).map_err(|e| format!("分区列表格式无效: {e}"))?,
+            serde_json::from_slice(&bytes).map_err(|e| format!("分区列表格式无效：{e}"))?,
         )
     }
     .await;

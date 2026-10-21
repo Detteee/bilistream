@@ -1587,7 +1587,7 @@ impl BilibiliDanmakuClient {
                         }
                         Ok(_) => warn!("收到 ROOM_LOCK，但 room_init 显示房间未锁定"),
                         Err(error) => error!(
-                            "查询房间锁定状态失败: {}",
+                            "查询房间锁定状态失败：{}",
                             safe_diagnostic(&error.to_string())
                         ),
                     }
@@ -2749,7 +2749,7 @@ mod tests {
     fn l1a_any_double_slash_starts_a_link_and_full_width_separators_are_converted() {
         // The old rule: `://` starts a link even with no ASCII scheme before
         // it (`看://…`, full-width letters).
-        assert_eq!(stripped("看://x.example 吧"), "看[链接已省略] 吧");
+        assert_eq!(stripped("看：//x.example 吧"), "看[链接已省略] 吧");
         assert_eq!(
             stripped("看 ｈｔｔｐｓ://x.example 吧"),
             "看 [链接已省略] 吧"

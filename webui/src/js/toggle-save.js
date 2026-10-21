@@ -26,7 +26,7 @@ export function saveBooleanToggle(id, confirmed, save, onSaved) {
         onSaved?.(submitted);
         if (entry.desired === submitted && result.message) showNotification(result.message, 'success');
       } catch (error) {
-        showNotification(`保存失败: ${error.message}`, 'error');
+        showNotification(`保存失败：${error.message}`, 'error');
         if (entry.desired === submitted) {
           entry.desired = entry.confirmed;
           break;

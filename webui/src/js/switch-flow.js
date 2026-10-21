@@ -152,7 +152,7 @@ async function performSwitch(channelId, areaId, title, topicId, status, platform
     }
   } catch (error) {
     console.error('Switch error:', error);
-    showNotification('频道切换失败: ' + error.message, 'error');
+    showNotification('频道切换失败：' + error.message, 'error');
   }
 }
 

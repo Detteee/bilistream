@@ -189,9 +189,9 @@ pub(crate) async fn check(cfg: &Config, force: bool) -> SessionStatus {
             .is_none_or(|(old, _)| old.state != status.state)
         {
             if status.state == SessionState::Invalid {
-                tracing::warn!("Niconico: {}", status.message);
+                tracing::warn!("Niconico：{}", status.message);
             } else {
-                tracing::info!("Niconico: {}", status.message);
+                tracing::info!("Niconico：{}", status.message);
             }
         }
         *CHECKED.lock().unwrap_or_else(|e| e.into_inner()) = Some(Checked {

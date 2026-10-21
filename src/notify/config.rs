@@ -187,7 +187,7 @@ pub fn validate(cfg: &NotifyConfig) -> Result<(), String> {
     for key in cfg.events.keys() {
         if super::event::EventKind::from_key(key).is_none() {
             return Err(format!(
-                "未知通知事件: {}",
+                "未知通知事件：{}",
                 crate::logging::safe_text(key, 40)
             ));
         }

@@ -302,7 +302,7 @@ impl Runtime {
                 self.blocking(move |m| m.propose(id, Some(receipt))).await?;
                 Ok(Step::Again)
             }
-            Reply::Unavailable(message) => Ok(Step::Wait(format!("目标节点暂不可达: {message}"))),
+            Reply::Unavailable(message) => Ok(Step::Wait(format!("目标节点暂不可达：{message}"))),
             // The target holds no reservation for this intent: abort. The
             // password was not kept, so the operator starts a new operation.
             _ => {
@@ -383,7 +383,7 @@ impl Runtime {
             return Ok(Step::Again);
         }
         if !refused.is_empty() {
-            let message = format!("节点拒绝准备，操作已取消: {}", refused.join("；"));
+            let message = format!("节点拒绝准备，操作已取消：{}", refused.join("；"));
             self.blocking(move |m| {
                 m.decide(id.clone(), DecisionKind::Abort)?;
                 m.note(id, message)
@@ -392,7 +392,7 @@ impl Runtime {
             return Ok(Step::Again);
         }
         Ok(Step::Wait(format!(
-            "等待节点停机准备: {}",
+            "等待节点停机准备：{}",
             waiting.join("；")
         )))
     }
@@ -514,7 +514,7 @@ impl Runtime {
             return Ok(Step::Again);
         }
         Ok(Step::Wait(format!(
-            "等待节点安装成员变更: {}",
+            "等待节点安装成员变更：{}",
             waiting.join("；")
         )))
     }
@@ -572,7 +572,7 @@ impl Runtime {
             Ok(Step::Done)
         } else {
             Ok(Step::Wait(format!(
-                "等待节点确认完成: {}",
+                "等待节点确认完成：{}",
                 waiting.join("；")
             )))
         }
@@ -641,7 +641,7 @@ impl Runtime {
             Ok(Step::Done)
         } else {
             Ok(Step::Wait(format!(
-                "等待节点确认取消: {}",
+                "等待节点确认取消：{}",
                 waiting.join("；")
             )))
         }

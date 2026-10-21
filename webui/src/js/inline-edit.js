@@ -111,7 +111,7 @@ async function saveHlsCacheEdit(prefix, apiPlatform, label) {
     cancelHlsCacheEdit(prefix);
     showNotification(`${label} HLS 缓存已更新`, 'success');
   } catch (error) {
-    showNotification('HLS 缓存配置保存失败: ' + error.message, 'error');
+    showNotification('HLS 缓存配置保存失败：' + error.message, 'error');
   }
 }
 function toggleYtHlsCacheEdit() {

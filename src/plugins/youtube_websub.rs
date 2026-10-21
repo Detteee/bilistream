@@ -686,7 +686,7 @@ impl Worker {
                 true
             }
             Err(e) => {
-                let message = format!("WebSub 回调端口 {} 无法监听: {}", port, e);
+                let message = format!("WebSub 回调端口 {} 无法监听：{}", port, e);
                 let changed = with_hub(|hub| {
                     hub.listening = None;
                     let changed = hub.error.as_deref() != Some(message.as_str());

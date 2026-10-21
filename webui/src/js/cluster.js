@@ -973,7 +973,7 @@ async function runClusterMutation(action, context, onSuccess) {
     showNotification(result.message || `${context}${result.success ? '成功' : '失败'}`, result.success ? 'success' : 'error');
     return !!result.success;
   } catch (error) {
-    showNotification(`${context}失败: ${error.message}`, 'error');
+    showNotification(`${context}失败：${error.message}`, 'error');
     return false;
   } finally {
     clusterMutationInFlight = false;

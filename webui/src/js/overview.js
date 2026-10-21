@@ -501,7 +501,7 @@ async function savePriorityChannelEdit() {
     }
   } catch (error) {
     console.error('Failed to save priority channel:', error);
-    showNotification('保存失败: ' + error.message, 'error');
+    showNotification('保存失败：' + error.message, 'error');
   }
 }
 
@@ -575,7 +575,7 @@ async function savePriorityAreaEdit() {
     }
   } catch (error) {
     console.error('Failed to save priority area:', error);
-    showNotification('保存失败: ' + error.message, 'error');
+    showNotification('保存失败：' + error.message, 'error');
   }
 }
 
@@ -686,7 +686,7 @@ async function flushPlatformMonitorToggle(platform, toggleId, endpoint) {
       if (toggle) {
         toggle.checked = state.confirmed;
       }
-      showNotification('保存失败: ' + error.message, 'error');
+      showNotification('保存失败：' + error.message, 'error');
     }
   } finally {
     state.inFlight = false;
@@ -767,7 +767,7 @@ async function startStream() {
     setTimeout(refreshStatus, 2000);
   } catch (error) {
     console.error('Start stream error:', error);
-    showNotification('操作失败: ' + error.message, 'error');
+    showNotification('操作失败：' + error.message, 'error');
   }
 }
 async function stopStream() {
@@ -776,7 +776,7 @@ async function stopStream() {
     showNotification(data.message || (data.success ? '直播已停止' : '停播失败'), data.success ? 'success' : 'error');
     setTimeout(refreshStatus, 2000);
   } catch (error) {
-    showNotification('操作失败: ' + error.message, 'error');
+    showNotification('操作失败：' + error.message, 'error');
   }
 }
 async function restartStream() {
@@ -795,7 +795,7 @@ async function restartStream() {
     showNotification(data.message || (data.success ? '已重启流' : '重启失败'), data.success ? 'success' : 'error');
     setTimeout(refreshStatus, 2000);
   } catch (error) {
-    showNotification('操作失败: ' + error.message, 'error');
+    showNotification('操作失败：' + error.message, 'error');
   } finally {
     // Re-enable button and stop spinning after a delay
     setTimeout(() => {
@@ -826,7 +826,7 @@ async function changeTitle() {
       showNotification(data.message || '更新失败', 'error');
     }
   } catch (error) {
-    showNotification('更新失败: ' + error.message, 'error');
+    showNotification('更新失败：' + error.message, 'error');
   }
 }
 function handleTitleEditKeydown(event) {
@@ -912,7 +912,7 @@ async function saveYtChannelEdit() {
     // Refresh status immediately to show updated info
     refreshStatus();
   } catch (error) {
-    showNotification('更新失败: ' + error.message, 'error');
+    showNotification('更新失败：' + error.message, 'error');
   }
 }
 // YouTube area editing functions
@@ -973,7 +973,7 @@ async function saveYtAreaEdit() {
     // Refresh status immediately to show updated info
     refreshStatus();
   } catch (error) {
-    showNotification('更新失败: ' + error.message, 'error');
+    showNotification('更新失败：' + error.message, 'error');
   }
 }
 // YouTube quality editing functions
@@ -1029,7 +1029,7 @@ async function saveYtQualityEdit() {
     // Refresh status to get updated info
     refreshStatus();
   } catch (error) {
-    showNotification('更新失败: ' + error.message, 'error');
+    showNotification('更新失败：' + error.message, 'error');
   }
 }
 // Twitch quality editing functions
@@ -1085,7 +1085,7 @@ async function saveTwQualityEdit() {
     // Refresh status to get updated info
     refreshStatus();
   } catch (error) {
-    showNotification('更新失败: ' + error.message, 'error');
+    showNotification('更新失败：' + error.message, 'error');
   }
 }
 // Twitch channel editing functions
@@ -1145,7 +1145,7 @@ async function saveTwChannelEdit() {
     // Refresh status immediately to show updated info
     refreshStatus();
   } catch (error) {
-    showNotification('更新失败: ' + error.message, 'error');
+    showNotification('更新失败：' + error.message, 'error');
   }
 }
 // Twitch area editing functions
@@ -1206,7 +1206,7 @@ async function saveTwAreaEdit() {
     // Refresh status immediately to show updated info
     refreshStatus();
   } catch (error) {
-    showNotification('更新失败: ' + error.message, 'error');
+    showNotification('更新失败：' + error.message, 'error');
   }
 }
 async function toggleNcChannelEdit() {
@@ -1219,7 +1219,7 @@ async function toggleNcChannelEdit() {
   try {
     state.channelsData = await getJson('/api/channels');
   } catch (error) {
-    showNotification('加载频道列表失败: ' + error.message, 'error');
+    showNotification('加载频道列表失败：' + error.message, 'error');
     return;
   }
 
@@ -1287,7 +1287,7 @@ async function saveNcChannelEdit() {
     setNcChannelDisplay(channelInfo.name, channelInfo.id);
     refreshStatus();
   } catch (error) {
-    showNotification('更新失败: ' + error.message, 'error');
+    showNotification('更新失败：' + error.message, 'error');
   }
 }
 function toggleNcQualityEdit() {
@@ -1335,7 +1335,7 @@ async function saveNcQualityEdit() {
     document.getElementById('nc-quality').textContent = getQualityDisplayText(quality, 'niconico');
     refreshStatus();
   } catch (error) {
-    showNotification('更新失败: ' + error.message, 'error');
+    showNotification('更新失败：' + error.message, 'error');
   }
 }
 function toggleNcAreaEdit() {
@@ -1392,7 +1392,7 @@ async function saveNcAreaEdit() {
     cancelNcAreaEdit();
     refreshStatus();
   } catch (error) {
-    showNotification('更新失败: ' + error.message, 'error');
+    showNotification('更新失败：' + error.message, 'error');
   }
 }
 // Area editing functions
@@ -1445,7 +1445,7 @@ async function saveAreaEdit() {
     cancelAreaEdit();
     setTimeout(refreshStatus, 2000);
   } catch (error) {
-    showNotification('更新失败: ' + error.message, 'error');
+    showNotification('更新失败：' + error.message, 'error');
   }
 }
 async function saveTitleEdit() {
@@ -1467,7 +1467,7 @@ async function saveTitleEdit() {
       showNotification(data.message || '更新失败', 'error');
     }
   } catch (error) {
-    showNotification('更新失败: ' + error.message, 'error');
+    showNotification('更新失败：' + error.message, 'error');
   }
 }
 // Channel management functions
@@ -1492,7 +1492,7 @@ async function loadChannelData() {
     }
   } catch (error) {
     console.error('Failed to load channel data:', error);
-    showNotification('加载频道数据失败: ' + error.message, 'error');
+    showNotification('加载频道数据失败：' + error.message, 'error');
   } finally {
     // Stop spinning animation when complete
     setButtonLoading(null, icon, false);
@@ -1644,13 +1644,13 @@ async function saveYtCookiesEdit() {
     cancelYtCookiesEdit();
     refreshStatus();
   } catch (error) {
-    showNotification('更新失败: ' + error.message, 'error');
+    showNotification('更新失败：' + error.message, 'error');
   }
 }
 function updateYtCookiesStatus(browser, file) {
   const statusSpan = document.getElementById('yt-cookies-status');
   if (browser) {
-    statusSpan.textContent = `浏览器: ${browser}`;
+    statusSpan.textContent = `浏览器：${browser}`;
   } else if (file) {
     statusSpan.textContent = `文件: ${file.split('/').pop()}`;
   } else {

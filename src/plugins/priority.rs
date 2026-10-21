@@ -203,7 +203,7 @@ pub async fn resolve_priority_channel_liveness(cfg: &Config) -> PriorityChannelL
                 };
             }
             Ok(_) => {}
-            Err(e) => tracing::warn!("优先频道监控：YouTube 状态检查失败：{}", e),
+            Err(e) => tracing::warn!("[YT] 优先频道监控：状态检查失败：{}", e),
         }
     }
 
@@ -218,7 +218,7 @@ pub async fn resolve_priority_channel_liveness(cfg: &Config) -> PriorityChannelL
                 };
             }
             Ok(_) => {}
-            Err(e) => tracing::warn!("优先频道监控：Twitch 状态检查失败：{}", e),
+            Err(e) => tracing::warn!("[TW] 优先频道监控：状态检查失败：{}", e),
         }
     }
 
@@ -241,8 +241,8 @@ fn playable_liveness(
 
     let Some(m3u8_url) = m3u8_url.filter(|url| !url.is_empty()) else {
         tracing::info!(
-            "优先频道监控：{} 显示开播但拿不到可播放的流地址，暂不切换",
-            platform.label()
+            "[{}] 优先频道监控：显示开播但拿不到可播放的流地址，暂不切换",
+            platform.code()
         );
         return None;
     };
@@ -298,7 +298,7 @@ pub async fn resolve_playable_priority_channel(cfg: &Config) -> PriorityChannelL
                     }
                 }
             }
-            Err(e) => tracing::warn!("优先频道监控：YouTube 流地址获取失败：{}", e),
+            Err(e) => tracing::warn!("[YT] 优先频道监控：流地址获取失败：{}", e),
         }
     }
 
@@ -330,9 +330,9 @@ pub async fn resolve_playable_priority_channel(cfg: &Config) -> PriorityChannelL
                         }
                     }
                 }
-                Err(e) => tracing::warn!("优先频道监控：Twitch 流地址获取失败：{}", e),
+                Err(e) => tracing::warn!("[TW] 优先频道监控：流地址获取失败：{}", e),
             },
-            Err(e) => tracing::warn!("优先频道监控：Twitch 客户端初始化失败：{}", e),
+            Err(e) => tracing::warn!("[TW] 优先频道监控：客户端初始化失败：{}", e),
         }
     }
 
@@ -371,7 +371,7 @@ pub(crate) async fn observe_priority_sources(
                     || status.video_id.as_ref().is_some_and(|id| !id.is_empty()),
             )),
             Err(error) => tracing::warn!(
-                "优先频道警告复核：YouTube 状态检查失败；{}",
+                "[YT] 优先频道警告复核：状态检查失败；{}",
                 crate::logging::safe_diagnostic(&error.to_string())
             ),
         }
@@ -391,7 +391,7 @@ pub(crate) async fn observe_priority_sources(
                 false,
             )),
             Err(error) => tracing::warn!(
-                "优先频道警告复核：Twitch 状态检查失败；{}",
+                "[TW] 优先频道警告复核：状态检查失败；{}",
                 crate::logging::safe_diagnostic(&error.to_string())
             ),
         }

@@ -1332,9 +1332,9 @@ async fn skip_stream_if_banned_keyword(
 
     if should_warn {
         tracing::error!(
-            "{} 在 {} 的直播标题/分区包含不支持的关键词：{}",
-            crate::logging::safe_text(&stream.channel_name, 64),
+            "[{}] {} 的直播标题/分区包含不支持的关键词：{}",
             platform,
+            crate::logging::safe_text(&stream.channel_name, 64),
             keyword
         );
         if let Err(e) = crate::plugins::danmaku::send_banned_keyword_notice(
@@ -2840,20 +2840,20 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
             else {
                 if yt_stream.is_live && yt_stream.m3u8_url.is_none() {
                     tracing::warn!(
-                        "YouTube 直播 {} 缺少可播放的流URL，跳过本轮转播",
-                        yt_stream.channel_name
+                        "[YT] {} 缺少可播放的流URL，跳过本轮转播",
+                        safe_text(&yt_stream.channel_name, 64)
                     );
                 }
                 if tw_stream.is_live && tw_stream.m3u8_url.is_none() {
                     tracing::warn!(
-                        "Twitch 直播 {} 缺少可播放的流URL，跳过本轮转播",
-                        tw_stream.channel_name
+                        "[TW] {} 缺少可播放的流URL，跳过本轮转播",
+                        safe_text(&tw_stream.channel_name, 64)
                     );
                 }
                 if nico_stream.is_live && nico_stream.piped_ingest.is_none() {
                     tracing::warn!(
-                        "Niconico 直播 {} 缺少可播放的摄取源，跳过本轮转播",
-                        nico_stream.channel_name
+                        "[NC] {} 缺少可播放的摄取源，跳过本轮转播",
+                        safe_text(&nico_stream.channel_name, 64)
                     );
                 }
                 tracing::warn!("未找到可转播的直播候选，等待下一轮检查");
@@ -2864,7 +2864,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                 tracing::warn!(
                     "[{}] {} 缺少可播放的流，等待下一轮检查",
                     selected_stream.platform.code(),
-                    selected_stream.channel_name
+                    safe_text(&selected_stream.channel_name, 64)
                 );
                 wait_config_update_or_timeout(Duration::from_secs(cfg.interval)).await;
                 continue 'outer;

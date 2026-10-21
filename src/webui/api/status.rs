@@ -352,11 +352,11 @@ pub async fn get_status() -> impl IntoResponse {
                 }
 
                 let error_msg = if e.to_string().contains("Permission denied") {
-                    format!("配置文件权限错误: {}。请确保 config.json 文件存在且有读取权限，或在可执行文件所在目录运行程序。", e)
+                    format!("配置文件权限错误：{}。请确保 config.json 文件存在且有读取权限，或在可执行文件所在目录运行程序。", e)
                 } else if is_not_found {
                     "配置文件不存在，请完成首次设置".to_string()
                 } else {
-                    format!("配置加载失败: {}", e)
+                    format!("配置加载失败：{}", e)
                 };
                 return (
                     StatusCode::OK,

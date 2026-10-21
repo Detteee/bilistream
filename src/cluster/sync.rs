@@ -44,7 +44,7 @@ fn handoff_membership_store() -> Result<Arc<crate::storage::Store>, String> {
     {
         return Ok(store);
     }
-    crate::storage::global().map_err(|e| format!("无法读取成员停机证明: {e}"))
+    crate::storage::global().map_err(|e| format!("无法读取成员停机证明：{e}"))
 }
 
 pub fn cluster_sync_config_from_config(cfg: &Config) -> ClusterSyncConfigRequest {
@@ -145,10 +145,10 @@ pub(crate) async fn push_active_monitor_state_to_peer(
         timeout,
     )
     .await
-    .map_err(|e| format!("节点 {} 缓存监控开关失败: {}", peer.node_id, e))?;
+    .map_err(|e| format!("节点 {} 缓存监控开关失败：{}", peer.node_id, e))?;
     if !envelope.success {
         return Err(format!(
-            "节点 {} 缓存监控开关失败: {}",
+            "节点 {} 缓存监控开关失败：{}",
             peer.node_id,
             envelope.message.unwrap_or_else(|| "缓存被拒绝".to_string())
         ));
@@ -220,7 +220,7 @@ pub async fn sync_monitored_config_after_change(cfg: &Config) -> String {
         Ok(count) => format!("；已同步到 {} 个节点", count),
         Err(e) => {
             tracing::warn!("Cluster monitored config auto-sync failed: {}", e);
-            format!("；集群同步失败: {}", e)
+            format!("；集群同步失败：{}", e)
         }
     }
 }
@@ -529,7 +529,7 @@ pub(crate) async fn finalize_cluster_node_switch_observed(
         .await
     })
     .await
-    .map_err(|e| format!("集群交接任务失败: {e}"))?
+    .map_err(|e| format!("集群交接任务失败：{e}"))?
 }
 
 #[cfg(test)]
@@ -576,7 +576,7 @@ async fn finalize_cluster_node_switch_inner_observed(
             let membership = super::membership::Membership::new(handoff_membership_store()?);
             membership
                 .removed_source_stopped(source_node_id)
-                .map_err(|e| format!("无法验证成员停机证明: {e}"))?
+                .map_err(|e| format!("无法验证成员停机证明：{e}"))?
         } else {
             false
         };
@@ -585,7 +585,7 @@ async fn finalize_cluster_node_switch_inner_observed(
         && current_owner.as_deref() != Some(target_node_id)
     {
         return Err(format!(
-            "取消过期集群切换: 当前活跃节点为 {}, 请求源/目标为 {}/{}",
+            "取消过期集群切换：当前活跃节点为 {}, 请求源/目标为 {}/{}",
             current_owner.as_deref().unwrap_or("none"),
             source_node_id,
             target_node_id
@@ -688,7 +688,7 @@ async fn finalize_cluster_node_switch_inner_observed(
                 cached_stop_bound(source_node_id),
             ) && super::fencing::local_has_fresh_quorum(cfg))
             {
-                return Err(format!("源节点尚未确认停止，取消接管: {e}"));
+                return Err(format!("源节点尚未确认停止，取消接管：{e}"));
             }
             if observer.is_none() {
                 tracing::warn!(
@@ -865,7 +865,7 @@ pub(crate) async fn export_cluster_config_from_node(
         cluster_control_timeout(cfg),
     )
     .await
-    .map_err(|e| format!("读取源节点配置失败: {}", e))?;
+    .map_err(|e| format!("读取源节点配置失败：{}", e))?;
 
     if envelope.success {
         envelope.data.ok_or_else(|| "源节点未返回配置".to_string())
@@ -1100,10 +1100,10 @@ async fn apply_node_mode_classified(
     .await
     .map_err(|e| match e {
         super::peer_call::PeerCallError::Unreachable(m) => {
-            Unreachable(format!("更新节点 {} 模式失败: {}", node_id, m))
+            Unreachable(format!("更新节点 {} 模式失败：{}", node_id, m))
         }
         super::peer_call::PeerCallError::Refused(m) => {
-            Refused(format!("更新节点 {} 模式失败: {}", node_id, m))
+            Refused(format!("更新节点 {} 模式失败：{}", node_id, m))
         }
     })?;
 
@@ -1127,7 +1127,7 @@ pub async fn apply_cluster_node_mode_locally(
     // The hold, commit, runtime changes and acknowledgement form one owned task.
     tokio::spawn(apply_cluster_node_mode_inner(payload))
         .await
-        .map_err(|e| format!("节点模式更新任务失败: {e}"))?
+        .map_err(|e| format!("节点模式更新任务失败：{e}"))?
 }
 
 pub(crate) fn validate_node_mode_response(
@@ -1271,7 +1271,7 @@ pub(crate) fn validate_node_mode_precondition(
         return Ok(());
     }
     Err(format!(
-        "拒绝过期节点模式更新: 当前活跃节点为 {}, 请求期望 {}",
+        "拒绝过期节点模式更新：当前活跃节点为 {}, 请求期望 {}",
         current_owner.unwrap_or("none"),
         expected_owner
     ))

@@ -80,7 +80,7 @@ impl Drop for InstanceLock {
 
 fn sql_error(error: rusqlite::Error) -> io::Error {
     // SQL errors never include bound parameters/secret payloads.
-    io::Error::other(format!("本地数据库操作失败: {error}"))
+    io::Error::other(format!("本地数据库操作失败：{error}"))
 }
 
 fn invalid(message: &str) -> io::Error {

@@ -844,11 +844,11 @@ async function saveSystemConfig() {
       await saveBannedKeywords();
       showNotification(keywordsBaseline ? '配置已保存' : '系统配置已保存；关键词未加载，未保存关键词', 'success');
     } catch (keywordError) {
-      showNotification(`系统配置已保存，但禁用关键词保存失败: ${keywordError.message}`, 'error');
+      showNotification(`系统配置已保存，但禁用关键词保存失败：${keywordError.message}`, 'error');
     }
   } catch (error) {
     console.error('Failed to save system config:', error);
-    showNotification(`配置保存失败: ${error.message}`, 'error');
+    showNotification(`配置保存失败：${error.message}`, 'error');
   } finally {
     settingsSaving = false;
     renderSecretControls();
@@ -927,7 +927,7 @@ async function checkForUpdates() {
     }
   } catch (error) {
     console.error('Failed to check for updates:', error);
-    showNotification('检查更新失败: ' + error.message, 'error');
+    showNotification('检查更新失败：' + error.message, 'error');
   }
 }
 function renderUpdateNotification(updateInfo, options = {}) {
@@ -966,7 +966,7 @@ function formatUpdateMessage(updateInfo, options = {}) {
     const buildSuffix = options.includeBuildType
       ? ` — ${IS_TAURI ? '桌面版 (Tauri)' : '标准版'}`
       : '';
-    message += `\n文件: ${updateInfo.asset_name} (${sizeMB} MB)${buildSuffix}`;
+    message += `\n文件：${updateInfo.asset_name} (${sizeMB} MB)${buildSuffix}`;
   }
   return message;
 }
@@ -1020,7 +1020,7 @@ async function autoInstallUpdate() {
     }
   } catch (error) {
     console.error('Failed to download update:', error);
-    showNotification('自动更新失败: ' + error.message, 'error');
+    showNotification('自动更新失败：' + error.message, 'error');
 
     const autoUpdateBtn = document.getElementById('auto-update-btn');
     const updateProgress = document.getElementById('update-progress');

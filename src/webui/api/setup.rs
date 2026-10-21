@@ -519,7 +519,7 @@ pub async fn trigger_login() -> Result<ApiResponse<String>, StatusCode> {
         Err(e) => Ok(ApiResponse {
             success: false,
             data: None,
-            message: Some(format!("登录失败: {}", e)),
+            message: Some(format!("登录失败：{}", e)),
         }),
     }
 }
@@ -558,7 +558,7 @@ pub async fn get_qr_code() -> Result<Json<ApiResponse<QrCodeResponse>>, StatusCo
         Err(e) => Ok(Json(ApiResponse {
             success: false,
             data: None,
-            message: Some(format!("获取二维码失败: {}", e)),
+            message: Some(format!("获取二维码失败：{}", e)),
         })),
     }
 }
@@ -597,7 +597,7 @@ pub async fn poll_login(
         Err(e) => Ok(Json(ApiResponse {
             success: false,
             data: None,
-            message: Some(format!("轮询登录状态失败: {}", e)),
+            message: Some(format!("轮询登录状态失败：{}", e)),
         })),
     }
 }
@@ -613,7 +613,7 @@ pub async fn check_updates() -> Result<Json<ApiResponse<updater::UpdateInfo>>, S
         Err(e) => Ok(Json(ApiResponse {
             success: false,
             data: None,
-            message: Some(format!("检查更新失败: {}", e)),
+            message: Some(format!("检查更新失败：{}", e)),
         })),
     }
 }
@@ -672,7 +672,7 @@ pub async fn download_update(
                 }
             }
             Err(e) => {
-                updater::set_update_status("failed", format!("更新失败: {e}"));
+                updater::set_update_status("failed", format!("更新失败：{e}"));
                 tracing::error!("更新安装失败：{}", e);
             }
         }
@@ -690,7 +690,7 @@ pub async fn update_status() -> Json<updater::UpdateStatus> {
 }
 
 pub(crate) fn current_exe_dir() -> Result<PathBuf, String> {
-    let exe = std::env::current_exe().map_err(|e| format!("获取当前程序路径失败: {}", e))?;
+    let exe = std::env::current_exe().map_err(|e| format!("获取当前程序路径失败：{}", e))?;
     executable_parent_dir(&exe)
 }
 
@@ -698,7 +698,7 @@ pub(crate) fn executable_parent_dir(exe: &Path) -> Result<PathBuf, String> {
     exe.parent()
         .filter(|parent| !parent.as_os_str().is_empty())
         .map(Path::to_path_buf)
-        .ok_or_else(|| format!("当前程序路径没有有效父目录: {}", exe.display()))
+        .ok_or_else(|| format!("当前程序路径没有有效父目录：{}", exe.display()))
 }
 
 #[cfg(target_os = "windows")]
@@ -706,7 +706,7 @@ pub(crate) fn schedule_update_restart() -> Result<(), String> {
     let restart_script = current_exe_dir()?.join("restart_after_update.bat");
     let command = crate::webui::restart::windows_restart_bat()?;
     std::fs::write(&restart_script, command.as_str())
-        .map_err(|e| format!("写入重启脚本失败: {}", e))?;
+        .map_err(|e| format!("写入重启脚本失败：{}", e))?;
     let restart_script = restart_script
         .to_str()
         .ok_or_else(|| format!("重启脚本路径不是有效 UTF-8: {}", restart_script.display()))?;
@@ -714,7 +714,7 @@ pub(crate) fn schedule_update_restart() -> Result<(), String> {
         .env_remove("BILISTREAM_PASSWORD")
         .args(["/C", "start", "", restart_script])
         .spawn()
-        .map_err(|e| format!("启动重启脚本失败: {}", e))?;
+        .map_err(|e| format!("启动重启脚本失败：{}", e))?;
     command.handed_off();
     Ok(())
 }
@@ -744,12 +744,12 @@ pub(crate) fn schedule_update_restart() -> Result<(), String> {
     // The credential file is private; the script contains only its path.
     let _ = std::fs::remove_file(&restart_script);
     crate::storage::paths::write_private(&restart_script, script_content.as_bytes())
-        .map_err(|e| format!("写入重启脚本失败: {e}"))?;
+        .map_err(|e| format!("写入重启脚本失败：{e}"))?;
     std::process::Command::new("sh")
         .env_remove("BILISTREAM_PASSWORD")
         .arg(&restart_script)
         .spawn()
-        .map_err(|e| format!("启动重启脚本失败: {}", e))?;
+        .map_err(|e| format!("启动重启脚本失败：{}", e))?;
     restart_command.handed_off();
     Ok(())
 }
