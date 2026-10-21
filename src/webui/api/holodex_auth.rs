@@ -10,7 +10,7 @@ pub async fn auth_status() -> Json<serde_json::Value> {
         Err(e) => {
             return Json(json!({
                 "success": false,
-                "message": format!("Failed to load config: {}", e)
+                "message": format!("配置读取失败：{}", e)
             }));
         }
     };
@@ -20,7 +20,7 @@ pub async fn auth_status() -> Json<serde_json::Value> {
             "success": true,
             "data": {
                 "logged_in": false,
-                "message": "Holodex API key not configured"
+                "message": "尚未配置 Holodex API Key"
             }
         }));
     }

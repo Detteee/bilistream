@@ -11,7 +11,7 @@ pub async fn get_status() -> Json<serde_json::Value> {
         Err(e) => {
             return Json(json!({
                 "success": false,
-                "message": format!("Failed to load config: {}", e)
+                "message": format!("配置读取失败：{}", e)
             }));
         }
     };

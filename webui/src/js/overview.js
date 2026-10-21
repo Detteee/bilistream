@@ -603,10 +603,10 @@ function refreshBilibiliStatus() {
     endpoint: '/api/status',
     buttonId: 'refreshBilibiliBtn',
     iconId: 'refreshBilibiliIcon',
-    successMessage: 'Bilibili status refreshed',
+    successMessage: 'B站状态已刷新',
     failureMessage: '刷新失败',
     defaultError: '服务器未响应',
-    logMessage: 'Error refreshing Bilibili status:'
+    logMessage: '刷新 B站状态出错：'
   });
 }
 function togglePlatformMonitor(platform, toggleId, endpoint) {
@@ -713,14 +713,14 @@ async function refreshPlatformStatus(label, endpoint, buttonId, iconId) {
   try {
     const data = await getJson(endpoint);
     if (data.success) {
-      showNotification(`${label} status refreshed`, 'success');
+      showNotification(`${label} 状态已刷新`, 'success');
       await refreshStatus();
     } else {
-      showNotification(data.message || `Failed to refresh ${label} status`, 'error');
+      showNotification(data.message || `刷新 ${label} 状态失败`, 'error');
     }
   } catch (error) {
     console.error(`Error refreshing ${label} status:`, error);
-    showNotification(`Failed to refresh ${label} status: ${error.message}`, 'error');
+    showNotification(`刷新 ${label} 状态失败：${error.message}`, 'error');
   } finally {
     setButtonLoading(btn, icon, false);
   }
@@ -741,9 +741,9 @@ function refreshPriorityStatus() {
     buttonId: 'refreshPriorityBtn',
     iconId: 'refreshPriorityIcon',
     successMessage: '优先频道状态已刷新',
-    failureMessage: '刷新优先频道状态失败',
-    defaultError: 'Failed to refresh priority channel status',
-    logMessage: 'Error refreshing priority channel status:'
+    failureMessage: '刷新失败',
+    defaultError: '服务器未响应',
+    logMessage: '刷新优先频道状态出错：'
   });
 }
 

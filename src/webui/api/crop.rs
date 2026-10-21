@@ -16,7 +16,7 @@ pub async fn capture_frame(
             return Json(ApiResponse {
                 success: false,
                 data: None,
-                message: Some(format!("Failed to load config: {}", e)),
+                message: Some(format!("配置读取失败：{}", e)),
             });
         }
     };
@@ -80,9 +80,7 @@ pub async fn capture_frame(
                         return Json(ApiResponse {
                             success: false,
                             data: None,
-                            message: Some(
-                                "YouTube stream is not live or URL not found".to_string(),
-                            ),
+                            message: Some("未取到 YouTube 直播流地址，请确认正在直播".to_string()),
                         });
                     }
                     proxy = cfg.youtube.proxy.clone();
@@ -122,7 +120,7 @@ pub async fn capture_frame(
                         success: false,
                         data: None,
                         message: Some(format!(
-                            "Failed to execute yt-dlp: {}. Make sure yt-dlp is installed and in PATH.",
+                            "yt-dlp 启动失败：{}。请确认已安装 yt-dlp 并位于 PATH 中。",
                             e
                         )),
                     });
@@ -178,7 +176,7 @@ pub async fn capture_frame(
                         return Json(ApiResponse {
                             success: false,
                             data: None,
-                            message: Some("Twitch stream is not live or URL not found".to_string()),
+                            message: Some("未取到 Twitch 直播流地址，请确认正在直播".to_string()),
                         });
                     }
                     proxy = cfg.twitch.proxy.clone();
@@ -188,7 +186,7 @@ pub async fn capture_frame(
                         success: false,
                         data: None,
                         message: Some(
-                            "Failed to get Twitch stream URL. Make sure streamlink and streamlink-ttvlol plugin are installed."
+                            "未取到 Twitch 直播流地址，请确认已安装 streamlink 与 streamlink-ttvlol 插件"
                                 .to_string(),
                         ),
                     });
@@ -208,7 +206,7 @@ pub async fn capture_frame(
             return Json(ApiResponse {
                 success: false,
                 data: None,
-                message: Some("Invalid platform".to_string()),
+                message: Some("不支持的平台".to_string()),
             });
         }
     }
@@ -220,7 +218,7 @@ pub async fn capture_frame(
             return Json(ApiResponse {
                 success: false,
                 data: None,
-                message: Some("Failed to get executable path".to_string()),
+                message: Some("未取到程序所在目录".to_string()),
             });
         }
     };
@@ -265,7 +263,7 @@ pub async fn capture_frame(
             return Json(ApiResponse {
                 success: false,
                 data: None,
-                message: Some(format!("Failed to execute ffmpeg: {}", e)),
+                message: Some(format!("ffmpeg 执行失败：{}", e)),
             });
         }
     };
@@ -275,7 +273,10 @@ pub async fn capture_frame(
         return Json(ApiResponse {
             success: false,
             data: None,
-            message: Some(format!("FFmpeg failed: {}", stderr)),
+            message: Some(format!(
+                "ffmpeg 取帧失败：{}",
+                crate::logging::safe_diagnostic(&stderr)
+            )),
         });
     }
 
@@ -286,7 +287,7 @@ pub async fn capture_frame(
             return Json(ApiResponse {
                 success: false,
                 data: None,
-                message: Some(format!("Failed to read captured image: {}", e)),
+                message: Some(format!("读取截取的画面失败：{}", e)),
             });
         }
     };
@@ -345,7 +346,7 @@ pub async fn update_crop(
             return Ok(ApiResponse {
                 success: false,
                 data: None,
-                message: Some("Invalid platform".to_string()),
+                message: Some("不支持的平台".to_string()),
             });
         }
     }
@@ -359,7 +360,7 @@ pub async fn update_crop(
     Ok(ApiResponse {
         success: true,
         data: None,
-        message: Some("Crop configuration updated".to_string()),
+        message: Some("裁剪配置已更新".to_string()),
     })
 }
 
@@ -404,7 +405,7 @@ pub async fn get_crop(
             return Ok(Json(ApiResponse {
                 success: false,
                 data: None,
-                message: Some("Invalid platform".to_string()),
+                message: Some("不支持的平台".to_string()),
             }));
         }
     };
@@ -438,7 +439,7 @@ pub async fn update_ffmpeg_cache(
             return Ok(ApiResponse {
                 success: false,
                 data: None,
-                message: Some("Invalid platform".to_string()),
+                message: Some("不支持的平台".to_string()),
             });
         }
     };
@@ -458,7 +459,7 @@ pub async fn update_ffmpeg_cache(
     Ok(ApiResponse {
         success: true,
         data: None,
-        message: Some("HLS cache configuration updated".to_string()),
+        message: Some("HLS 缓存配置已更新".to_string()),
     })
 }
 
@@ -477,7 +478,7 @@ pub async fn get_ffmpeg_cache(
             return Ok(Json(ApiResponse {
                 success: false,
                 data: None,
-                message: Some("Invalid platform".to_string()),
+                message: Some("不支持的平台".to_string()),
             }));
         }
     };

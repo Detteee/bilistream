@@ -145,7 +145,7 @@ pub(crate) async fn refresh_bilibili_status_cache_with_config(cfg: &Config) -> R
 
 pub(crate) async fn refresh_youtube_status_cache_with_config(cfg: &Config) -> Result<(), String> {
     if cfg.youtube.channel_id.is_empty() {
-        return Err("YouTube channel not configured".to_string());
+        return Err("尚未配置 YouTube 频道".to_string());
     }
 
     // Same selection the monitor loop runs on, minus the yt-dlp URL lookup.
@@ -180,7 +180,7 @@ pub(crate) async fn refresh_youtube_status_cache_with_config(cfg: &Config) -> Re
 
 pub(crate) async fn refresh_twitch_status_cache_with_config(cfg: &Config) -> Result<(), String> {
     if cfg.twitch.channel_id.is_empty() {
-        return Err("Twitch channel not configured".to_string());
+        return Err("尚未配置 Twitch 频道".to_string());
     }
 
     let (is_live, game, title, _) = crate::plugins::get_twitch_status(&cfg.twitch.channel_id)
@@ -213,7 +213,7 @@ pub(crate) async fn refresh_twitch_status_cache_with_config(cfg: &Config) -> Res
 
 pub(crate) async fn refresh_niconico_status_cache_with_config(cfg: &Config) -> Result<(), String> {
     if !crate::plugins::niconico_configured(&cfg.niconico) {
-        return Err("Niconico channel not configured".to_string());
+        return Err("尚未配置 Niconico 频道".to_string());
     }
 
     let SourceStatus {
@@ -254,11 +254,11 @@ pub(crate) async fn refresh_priority_channel_status_cache_with_config(
     cfg: &Config,
 ) -> Result<(), String> {
     if !cfg.priority_channel.enabled {
-        return Err("Priority channel not enabled".to_string());
+        return Err("优先频道未启用".to_string());
     }
 
     if cfg.priority_channel.channel_name.is_empty() {
-        return Err("Priority channel not configured".to_string());
+        return Err("尚未配置优先频道".to_string());
     }
 
     // Metadata only: the panel shows what the platforms report, while the
@@ -445,7 +445,7 @@ pub async fn refresh_youtube_status() -> Json<ApiResponse<()>> {
             return Json(ApiResponse {
                 success: false,
                 data: None,
-                message: Some(format!("Failed to load config: {}", e)),
+                message: Some(format!("配置读取失败：{}", e)),
             });
         }
     };
@@ -454,7 +454,7 @@ pub async fn refresh_youtube_status() -> Json<ApiResponse<()>> {
         return Json(ApiResponse {
             success: false,
             data: None,
-            message: Some("YouTube channel not configured".to_string()),
+            message: Some("尚未配置 YouTube 频道".to_string()),
         });
     }
 
@@ -462,12 +462,12 @@ pub async fn refresh_youtube_status() -> Json<ApiResponse<()>> {
         Ok(()) => Json(ApiResponse {
             success: true,
             data: Some(()),
-            message: Some("YouTube status refreshed".to_string()),
+            message: Some("YouTube 状态已刷新".to_string()),
         }),
         Err(e) => Json(ApiResponse {
             success: false,
             data: None,
-            message: Some(format!("Failed to get YouTube status: {}", e)),
+            message: Some(format!("获取 YouTube 状态失败：{}", e)),
         }),
     }
 }
@@ -480,7 +480,7 @@ pub async fn refresh_twitch_status() -> Json<ApiResponse<()>> {
             return Json(ApiResponse {
                 success: false,
                 data: None,
-                message: Some(format!("Failed to load config: {}", e)),
+                message: Some(format!("配置读取失败：{}", e)),
             });
         }
     };
@@ -489,7 +489,7 @@ pub async fn refresh_twitch_status() -> Json<ApiResponse<()>> {
         return Json(ApiResponse {
             success: false,
             data: None,
-            message: Some("Twitch channel not configured".to_string()),
+            message: Some("尚未配置 Twitch 频道".to_string()),
         });
     }
 
@@ -497,12 +497,12 @@ pub async fn refresh_twitch_status() -> Json<ApiResponse<()>> {
         Ok(()) => Json(ApiResponse {
             success: true,
             data: Some(()),
-            message: Some("Twitch status refreshed".to_string()),
+            message: Some("Twitch 状态已刷新".to_string()),
         }),
         Err(e) => Json(ApiResponse {
             success: false,
             data: None,
-            message: Some(format!("Failed to get Twitch status: {}", e)),
+            message: Some(format!("获取 Twitch 状态失败：{}", e)),
         }),
     }
 }
@@ -514,7 +514,7 @@ pub async fn refresh_niconico_status() -> Json<ApiResponse<()>> {
             return Json(ApiResponse {
                 success: false,
                 data: None,
-                message: Some(format!("Failed to load config: {}", e)),
+                message: Some(format!("配置读取失败：{}", e)),
             });
         }
     };
@@ -523,7 +523,7 @@ pub async fn refresh_niconico_status() -> Json<ApiResponse<()>> {
         return Json(ApiResponse {
             success: false,
             data: None,
-            message: Some("Niconico channel not configured".to_string()),
+            message: Some("尚未配置 Niconico 频道".to_string()),
         });
     }
 
@@ -531,12 +531,12 @@ pub async fn refresh_niconico_status() -> Json<ApiResponse<()>> {
         Ok(()) => Json(ApiResponse {
             success: true,
             data: Some(()),
-            message: Some("Niconico status refreshed".to_string()),
+            message: Some("Niconico 状态已刷新".to_string()),
         }),
         Err(e) => Json(ApiResponse {
             success: false,
             data: None,
-            message: Some(format!("Failed to get Niconico status: {}", e)),
+            message: Some(format!("获取 Niconico 状态失败：{}", e)),
         }),
     }
 }
@@ -549,7 +549,7 @@ pub async fn refresh_priority_channel_status() -> Json<ApiResponse<()>> {
             return Json(ApiResponse {
                 success: false,
                 data: None,
-                message: Some(format!("Failed to load config: {}", e)),
+                message: Some(format!("配置读取失败：{}", e)),
             });
         }
     };
@@ -558,7 +558,7 @@ pub async fn refresh_priority_channel_status() -> Json<ApiResponse<()>> {
         return Json(ApiResponse {
             success: false,
             data: None,
-            message: Some("Priority channel not enabled".to_string()),
+            message: Some("优先频道未启用".to_string()),
         });
     }
 
@@ -566,7 +566,7 @@ pub async fn refresh_priority_channel_status() -> Json<ApiResponse<()>> {
         return Json(ApiResponse {
             success: false,
             data: None,
-            message: Some("Priority channel not configured".to_string()),
+            message: Some("尚未配置优先频道".to_string()),
         });
     }
 
@@ -574,12 +574,12 @@ pub async fn refresh_priority_channel_status() -> Json<ApiResponse<()>> {
         Ok(()) => Json(ApiResponse {
             success: true,
             data: Some(()),
-            message: Some("Priority channel status refreshed".to_string()),
+            message: Some("优先频道状态已刷新".to_string()),
         }),
         Err(e) => Json(ApiResponse {
             success: false,
             data: None,
-            message: Some(format!("Failed to get priority channel status: {}", e)),
+            message: Some(format!("获取优先频道状态失败：{}", e)),
         }),
     }
 }
