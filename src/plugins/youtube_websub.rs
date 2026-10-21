@@ -648,7 +648,7 @@ impl Worker {
         if let Some(mut listener) = self.listener.take() {
             listener.task.abort();
             let _ = (&mut listener.task).await;
-            tracing::info!("WebSub 回调监听已关闭 (端口 {})", listener.port);
+            tracing::info!("WebSub 回调监听已关闭（端口 {}）", listener.port);
         }
     }
 

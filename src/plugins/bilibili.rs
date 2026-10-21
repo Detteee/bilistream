@@ -259,7 +259,7 @@ pub fn parse_bili_room_lock(res: &Value) -> Result<BiliRoomLock, Box<dyn Error>>
             .as_str()
             .or_else(|| res["msg"].as_str())
             .unwrap_or("Unknown error");
-        return Err(format!("room_init 失败 (错误码 {code}): {message}").into());
+        return Err(format!("room_init 失败（错误码 {code}）：{message}").into());
     }
     let data = &res["data"];
     if data.is_null() {
@@ -512,7 +512,7 @@ async fn bili_start_live_inner(cfg: &mut Config, area_v2: u64) -> Result<(), Box
                     return Err(format!("FACE_AUTH_REQUIRED:{}", face_auth_url).into());
                 }
 
-                return Err(format!("开播失败 (错误码 {}): {}", code, message).into());
+                return Err(format!("开播失败（错误码 {}）：{}", code, message).into());
             }
             60031 => {
                 // Temporary ban. The end time is not in this body; room_init.lock_till is.
@@ -522,7 +522,7 @@ async fn bili_start_live_inner(cfg: &mut Config, area_v2: u64) -> Result<(), Box
             }
             _ => {
                 tracing::error!("Bilibili 开播失败（错误码 {}）：{}", code, message);
-                return Err(format!("开播失败 (错误码 {}): {}", code, message).into());
+                return Err(format!("开播失败（错误码 {}）：{}", code, message).into());
             }
         }
     }
@@ -618,7 +618,7 @@ pub async fn bili_change_live_title(cfg: &Config, title: &str) -> Result<(), Box
                 .into());
             }
 
-            return Err(format!("API调用失败 (code: {}): {}", code, message).into());
+            return Err(format!("API 调用失败（code {}）：{}", code, message).into());
         }
     }
 
@@ -673,7 +673,7 @@ pub async fn bili_stop_live(cfg: &Config) -> Result<(), Box<dyn Error>> {
 fn validate_stop_live_reply(reply: &Value) -> Result<(), Box<dyn Error>> {
     match reply.get("code").and_then(Value::as_i64) {
         Some(0) => Ok(()),
-        Some(code) => Err(format!("B站下播失败 (错误码：{code})").into()),
+        Some(code) => Err(format!("B站下播失败（错误码 {code}）").into()),
         None => Err("B站下播响应缺少状态码".into()),
     }
 }

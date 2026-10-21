@@ -810,7 +810,7 @@ async fn a_source_switch_mid_broadcast_sends_a_switch_and_one_end() {
     let ended = qq.text(2);
     assert!(ended.starts_with("⚪ 本场转播已结束"));
     assert!(
-        ended.contains("本场 某频道 -> 后来切换的频道，共持续 1 小时 0 分钟。"),
+        ended.contains("本场 某频道 → 后来切换的频道，共持续 1 小时 0 分钟。"),
         "{ended}"
     );
     assert!(ended.contains("结束原因：B站警告/切断"), "{ended}");
@@ -932,7 +932,7 @@ fn the_notice_copy_is_the_task_copy() {
         .end(NOW + 27 * 3600, BroadcastEndCause::WarningCut);
     assert_eq!(
         render(LiveEventKey::end(), &ledger.live.broadcast, false, "JP"),
-        "⚪ 本场转播已结束\n本场 某频道 -> Kamito，共持续 1 天 3 小时。\n结束原因：B站警告/切断\n发送节点：JP"
+        "⚪ 本场转播已结束\n本场 某频道 → Kamito，共持续 1 天 3 小时。\n结束原因：B站警告/切断\n发送节点：JP"
     );
 }
 

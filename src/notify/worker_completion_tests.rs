@@ -1290,7 +1290,7 @@ async fn one_broadcast_sends_开播_then_换台_then_one_下播() {
         assert_eq!(mock.messages().len(), 3, "one 下播 for the session");
         assert_eq!(
             ended,
-            "⚪ 本场转播已结束\n本场 First -> Second，共持续 1 分钟。\n结束原因：B站警告/切断\n发送节点：solo"
+            "⚪ 本场转播已结束\n本场 First → Second，共持续 1 分钟。\n结束原因：B站警告/切断\n发送节点：solo"
         );
     })
     .await;

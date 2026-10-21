@@ -20,10 +20,10 @@ use bilistream::plugins::Niconico as NiconicoClient;
 use bilistream::plugins::Twitch as TwitchClient;
 use bilistream::plugins::Youtube as YoutubeClient;
 use bilistream::plugins::{
-    announce_room_lock, bili_change_live_title, bili_start_live, bili_stop_live, bili_update_area,
-    bilibili, check_area_id_with_title, clear_config_updated, clear_manual_restart,
-    clear_manual_stop, current_game_riot_ids, enable_danmaku_commands, ffmpeg, get_aliases,
-    get_area_name, get_bili_live_status, get_bili_room_lock, get_puuid, is_config_updated,
+    announce_room_lock, area_name_or_unknown, bili_change_live_title, bili_start_live,
+    bili_stop_live, bili_update_area, bilibili, check_area_id_with_title, clear_config_updated,
+    clear_manual_restart, clear_manual_stop, current_game_riot_ids, enable_danmaku_commands,
+    ffmpeg, get_aliases, get_bili_live_status, get_bili_room_lock, get_puuid, is_config_updated,
     is_danmaku_commands_enabled, is_danmaku_running, is_ffmpeg_running, niconico_channel_identity,
     niconico_configured, resolve_playable_priority_channel, run_danmaku, send_danmaku,
     set_manual_restart, should_skip_due_to_warning, stop_danmaku, stop_ffmpeg,
@@ -1610,8 +1610,7 @@ fn publish_webui_status(
     bilistream::update_status_cache(bilistream::StatusData {
         bilibili: bili_status,
         youtube: if cfg.youtube.enable_monitor && !cfg.youtube.channel_id.is_empty() {
-            let yt_area_name = get_area_name(cfg.youtube.area_v2)
-                .unwrap_or_else(|| format!("未知分区 (ID: {})", cfg.youtube.area_v2));
+            let yt_area_name = area_name_or_unknown(cfg.youtube.area_v2);
             Some(bilistream::YtStatus {
                 is_live: sources.youtube.is_live,
                 enable_monitor: cfg.youtube.enable_monitor,
@@ -1631,8 +1630,7 @@ fn publish_webui_status(
             None
         },
         twitch: if cfg.twitch.enable_monitor && !cfg.twitch.channel_id.is_empty() {
-            let tw_area_name = get_area_name(cfg.twitch.area_v2)
-                .unwrap_or_else(|| format!("未知分区 (ID: {})", cfg.twitch.area_v2));
+            let tw_area_name = area_name_or_unknown(cfg.twitch.area_v2);
             Some(bilistream::TwStatus {
                 is_live: sources.twitch.is_live,
                 enable_monitor: cfg.twitch.enable_monitor,
@@ -1652,8 +1650,7 @@ fn publish_webui_status(
             None
         },
         niconico: if cfg.niconico.enable_monitor && niconico_configured(&cfg.niconico) {
-            let nico_area_name = get_area_name(cfg.niconico.area_v2)
-                .unwrap_or_else(|| format!("未知分区 (ID: {})", cfg.niconico.area_v2));
+            let nico_area_name = area_name_or_unknown(cfg.niconico.area_v2);
             Some(bilistream::NicoStatus {
                 is_live: sources.niconico.is_live,
                 enable_monitor: cfg.niconico.enable_monitor,
@@ -3615,7 +3612,7 @@ impl LolMonitor {
 async fn update_area(current_area: u64, new_area: u64) -> Result<(), Box<dyn Error>> {
     if current_area != new_area {
         tracing::info!(
-            "分区改变（{}->{})",
+            "分区改变（{} → {}）",
             area_label(current_area),
             area_label(new_area)
         );

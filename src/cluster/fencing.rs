@@ -108,7 +108,7 @@ pub(crate) fn state_monitoring_block_reason(
 ) -> Option<String> {
     if state.active_owner.as_deref() != Some(cfg.cluster.node_id.as_str()) {
         return Some(format!(
-            "本节点已不是集群活跃节点 (当前活跃节点：{})",
+            "本节点已不是集群活跃节点（当前活跃节点：{}）",
             state.active_owner.as_deref().unwrap_or("无")
         ));
     }

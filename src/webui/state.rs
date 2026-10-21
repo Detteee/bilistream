@@ -95,8 +95,7 @@ impl BiliStatus {
         self.area_name = if !live.area_name.is_empty() {
             live.area_name.clone()
         } else {
-            crate::plugins::get_area_name(live.area_id)
-                .unwrap_or_else(|| format!("未知分区 (ID: {})", live.area_id))
+            crate::plugins::area_name_or_unknown(live.area_id)
         };
         self.online = live.is_live.then_some(live.online);
         self.live_start_ts = if live.is_live {
@@ -254,8 +253,7 @@ pub(crate) fn apply_status_cache_config(cached_status: &mut StatusData, cfg: &Co
     cached_status.bilibili.enable_danmaku_command = cfg.bililive.enable_danmaku_command;
 
     if platform_channel_configured(&cfg.youtube.channel_name, &cfg.youtube.channel_id) {
-        let yt_area_name = crate::plugins::get_area_name(cfg.youtube.area_v2)
-            .unwrap_or_else(|| format!("未知分区 (ID: {})", cfg.youtube.area_v2));
+        let yt_area_name = crate::plugins::area_name_or_unknown(cfg.youtube.area_v2);
 
         if cached_status
             .youtube
@@ -297,8 +295,7 @@ pub(crate) fn apply_status_cache_config(cached_status: &mut StatusData, cfg: &Co
     }
 
     if platform_channel_configured(&cfg.twitch.channel_name, &cfg.twitch.channel_id) {
-        let tw_area_name = crate::plugins::get_area_name(cfg.twitch.area_v2)
-            .unwrap_or_else(|| format!("未知分区 (ID: {})", cfg.twitch.area_v2));
+        let tw_area_name = crate::plugins::area_name_or_unknown(cfg.twitch.area_v2);
 
         if cached_status
             .twitch
@@ -373,8 +370,7 @@ pub(crate) fn apply_status_cache_config(cached_status: &mut StatusData, cfg: &Co
     }
     let nico_configured = crate::plugins::niconico_configured(&cfg.niconico);
     if nico_configured {
-        let nico_area_name = crate::plugins::get_area_name(cfg.niconico.area_v2)
-            .unwrap_or_else(|| format!("未知分区 (ID: {})", cfg.niconico.area_v2));
+        let nico_area_name = crate::plugins::area_name_or_unknown(cfg.niconico.area_v2);
         let (nico_channel_id, nico_channel_name) =
             crate::plugins::niconico_channel_identity(&cfg.niconico);
         if cached_status

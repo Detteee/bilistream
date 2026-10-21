@@ -231,7 +231,7 @@ pub fn start_public_status_supervisor() -> PublicStatusSupervisor {
                                 stop_refresh: start_streams_watch(),
                             });
                         }
-                        Err(e) => tracing::error!("公开状态页启动失败 ({}): {}", wanted.addr, e),
+                        Err(e) => tracing::error!("公开状态页启动失败（{}）：{}", wanted.addr, e),
                     }
                 }
                 (Some(_), None) => stop_listener(running.take()),

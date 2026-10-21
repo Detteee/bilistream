@@ -273,8 +273,7 @@ pub async fn switch_stream(
         let stream_title = payload.title.unwrap_or_else(|| "未知标题".to_string());
 
         let mut current_cache = get_status_cache().unwrap_or_default();
-        let nico_area_name = crate::plugins::get_area_name(cfg.niconico.area_v2)
-            .unwrap_or_else(|| format!("未知分区 (ID: {})", cfg.niconico.area_v2));
+        let nico_area_name = crate::plugins::area_name_or_unknown(cfg.niconico.area_v2);
 
         let (nico_channel_id, nico_channel_name) =
             crate::plugins::niconico_channel_identity(&cfg.niconico);
@@ -370,8 +369,7 @@ pub async fn switch_stream(
         let stream_topic = payload.topic_id.unwrap_or_else(|| "未知".to_string());
 
         let mut current_cache = get_status_cache().unwrap_or_default();
-        let tw_area_name = crate::plugins::get_area_name(cfg.twitch.area_v2)
-            .unwrap_or_else(|| format!("未知分区 (ID: {})", cfg.twitch.area_v2));
+        let tw_area_name = crate::plugins::area_name_or_unknown(cfg.twitch.area_v2);
 
         current_cache.twitch = Some(TwStatus {
             is_live,
@@ -453,8 +451,7 @@ pub async fn switch_stream(
     // Update YouTube status cache immediately with stream data from Holodex monitor
     let mut current_cache = get_status_cache().unwrap_or_default();
 
-    let yt_area_name = crate::plugins::get_area_name(cfg.youtube.area_v2)
-        .unwrap_or_else(|| format!("未知分区 (ID: {})", cfg.youtube.area_v2));
+    let yt_area_name = crate::plugins::area_name_or_unknown(cfg.youtube.area_v2);
 
     current_cache.youtube = Some(YtStatus {
         is_live, // From Holodex monitor data

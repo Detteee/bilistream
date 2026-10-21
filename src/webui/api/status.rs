@@ -138,8 +138,7 @@ pub(crate) async fn refresh_youtube_status_cache_with_config(cfg: &Config) -> Re
         .await
         .map_err(|e| e.to_string())?;
 
-    let area_name = crate::plugins::get_area_name(cfg.youtube.area_v2)
-        .unwrap_or_else(|| format!("未知分区 (ID: {})", cfg.youtube.area_v2));
+    let area_name = crate::plugins::area_name_or_unknown(cfg.youtube.area_v2);
 
     crate::config::with_current_config(cfg, || {
         update_status_cache_with(|status| {
@@ -172,8 +171,7 @@ pub(crate) async fn refresh_twitch_status_cache_with_config(cfg: &Config) -> Res
     let (is_live, game, title, _) = crate::plugins::get_twitch_status(&cfg.twitch.channel_id)
         .await
         .map_err(|e| e.to_string())?;
-    let area_name = crate::plugins::get_area_name(cfg.twitch.area_v2)
-        .unwrap_or_else(|| format!("未知分区 (ID: {})", cfg.twitch.area_v2));
+    let area_name = crate::plugins::area_name_or_unknown(cfg.twitch.area_v2);
 
     crate::config::with_current_config(cfg, || {
         update_status_cache_with(|status| {
@@ -212,8 +210,7 @@ pub(crate) async fn refresh_niconico_status_cache_with_config(cfg: &Config) -> R
     } = crate::plugins::get_niconico_status(&cfg.niconico)
         .await
         .map_err(|e| e.to_string())?;
-    let area_name = crate::plugins::get_area_name(cfg.niconico.area_v2)
-        .unwrap_or_else(|| format!("未知分区 (ID: {})", cfg.niconico.area_v2));
+    let area_name = crate::plugins::area_name_or_unknown(cfg.niconico.area_v2);
     let (channel_id, channel_name) = crate::plugins::niconico_channel_identity(&cfg.niconico);
 
     update_status_cache_with(|status| {

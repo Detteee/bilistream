@@ -745,7 +745,7 @@ fn switched_source(broadcast: &Broadcast, seq: u32) -> SourceEntry {
     }
 }
 
-/// `本场 橘ひなの -> Kamito，共持续 1 天 3 小时。` A session that never
+/// `本场 橘ひなの → Kamito，共持续 1 天 3 小时。` A session that never
 /// switched keeps the older `本场从 … 开始` wording.
 fn session_line(broadcast: &Broadcast, length: &str) -> String {
     let clean = |value: &str| super::format::sanitize(value, NAME_CHARS);
@@ -766,12 +766,12 @@ fn session_line(broadcast: &Broadcast, length: &str) -> String {
         0 => format!("本场共持续 {length}。"),
         1 => format!("本场从 {} 开始，共持续 {length}。", names[0]),
         _ if total <= RECENT_SOURCES + 1 => {
-            format!("本场 {}，共持续 {length}。", names.join(" -> "))
+            format!("本场 {}，共持续 {length}。", names.join(" → "))
         }
         _ => {
             let last = names.last().cloned().unwrap_or_default();
             format!(
-                "本场 {} -> …（共 {total} 个频道）-> {last}，共持续 {length}。",
+                "本场 {} → …（共 {total} 个频道）→ {last}，共持续 {length}。",
                 names[0]
             )
         }

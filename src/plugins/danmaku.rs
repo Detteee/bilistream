@@ -499,7 +499,7 @@ fn resolve_area_alias(alias: &str) -> String {
                         if let Some(a) = area_alias.as_str() {
                             if alias_lower == a.to_lowercase() {
                                 tracing::debug!(
-                                    "分区别名 '{}' 匹配到别名 '{}', 返回分区：{}",
+                                    "分区别名 '{}' 匹配到别名 '{}'，返回分区：{}",
                                     alias_trimmed,
                                     a,
                                     name
@@ -1143,10 +1143,9 @@ pub async fn process_danmaku_with_owner(command: &str, is_owner: bool, sender: &
 
         if updated_area_id != area_id {
             tracing::debug!(
-                "按直播标题/游戏关键词修正弹幕分区：{} -> {} (ID: {})",
+                "按直播标题/游戏关键词修正弹幕分区：{} → {}",
                 safe_text(&area_name, 48),
-                safe_text(&updated_area_name, 48),
-                updated_area_id
+                area_label(updated_area_id)
             );
         }
 
@@ -1578,8 +1577,9 @@ pub fn area_label(area_id: u64) -> String {
     }
 }
 
-fn area_name_or_unknown(area_id: u64) -> String {
-    get_area_name(area_id).unwrap_or_else(|| format!("未知分区({})", area_id))
+/// 分区展示名；未收录的分区回退为 `未知分区 (id)`，与 [`area_label`] 的文案保持一致.
+pub fn area_name_or_unknown(area_id: u64) -> String {
+    get_area_name(area_id).unwrap_or_else(|| format!("未知分区 ({area_id})"))
 }
 
 fn get_area_id(area_name: &str) -> Result<u64, Box<dyn std::error::Error>> {

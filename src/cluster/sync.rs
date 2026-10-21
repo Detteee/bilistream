@@ -177,7 +177,7 @@ pub(crate) fn summarize_peer_push_results(
         Ok(synced)
     } else if synced > 0 {
         Err(format!(
-            "{} ({} 成功): {}",
+            "{}（{} 成功）：{}",
             partial_failure_prefix,
             synced,
             errors.join("; ")
@@ -585,7 +585,7 @@ async fn finalize_cluster_node_switch_inner_observed(
         && current_owner.as_deref() != Some(target_node_id)
     {
         return Err(format!(
-            "取消过期集群切换：当前活跃节点为 {}, 请求源/目标为 {}/{}",
+            "取消过期集群切换：当前活跃节点为 {}，请求源/目标为 {}/{}",
             current_owner.as_deref().unwrap_or("none"),
             source_node_id,
             target_node_id
@@ -1271,7 +1271,7 @@ pub(crate) fn validate_node_mode_precondition(
         return Ok(());
     }
     Err(format!(
-        "拒绝过期节点模式更新：当前活跃节点为 {}, 请求期望 {}",
+        "拒绝过期节点模式更新：当前活跃节点为 {}，请求期望 {}",
         current_owner.unwrap_or("none"),
         expected_owner
     ))

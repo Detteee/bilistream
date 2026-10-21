@@ -825,7 +825,7 @@ impl Worker {
                     "{} {}",
                     node,
                     if websub_slowed {
-                        "WebSub 推送正常，上传列表轮询放慢一倍 (转播目标不变)"
+                        "WebSub 推送正常，上传列表轮询放慢一倍（转播目标不变）"
                     } else {
                         "WebSub 推送中断，上传列表轮询恢复原速"
                     }
