@@ -12,7 +12,7 @@ use serde_json::Value;
 
 fn read_areas_json() -> Option<Value> {
     crate::storage::read_document("areas.json")
-        .map_err(|e| tracing::error!("无法读取分区规则: {e}"))
+        .map_err(|e| tracing::error!("无法读取分区规则：{e}"))
         .ok()
 }
 

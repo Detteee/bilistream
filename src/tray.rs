@@ -70,10 +70,10 @@ pub async fn run_tray(port: u16) -> Result<(), Box<dyn std::error::Error>> {
 
     // Auto-open browser on startup
     let url = format!("http://localhost:{}", port);
-    tracing::info!("正在打开浏览器: {}", url);
+    tracing::info!("正在打开浏览器：{}", url);
     if let Err(e) = open::that(&url) {
-        tracing::warn!("无法自动打开浏览器: {}", e);
-        tracing::info!("请手动访问: {}", url);
+        tracing::warn!("无法自动打开浏览器：{}", e);
+        tracing::info!("请手动访问：{}", url);
     } else {
         tracing::info!("浏览器已打开");
     }
@@ -134,10 +134,10 @@ pub async fn run_tray(port: u16) -> Result<(), Box<dyn std::error::Error>> {
 
         // Auto-open browser on startup
         let url = format!("http://localhost:{}", port);
-        tracing::info!("正在打开浏览器: {}", url);
+        tracing::info!("正在打开浏览器：{}", url);
         if let Err(e) = open::that(&url) {
-            tracing::warn!("无法自动打开浏览器: {}", e);
-            tracing::info!("请手动访问: {}", url);
+            tracing::warn!("无法自动打开浏览器：{}", e);
+            tracing::info!("请手动访问：{}", url);
         } else {
             tracing::info!("浏览器已打开");
         }

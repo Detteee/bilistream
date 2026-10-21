@@ -179,9 +179,9 @@ async fn use_youtube_cdn_avatars(streams: &mut [PublicStream], cfg: &crate::conf
                 first
             });
             if first {
-                tracing::warn!("YouTube 频道头像查询失败: {}", error);
+                tracing::warn!("YouTube 频道头像查询失败：{}", error);
             } else {
-                tracing::debug!("YouTube 频道头像查询失败: {}", error);
+                tracing::debug!("YouTube 频道头像查询失败：{}", error);
             }
         }
     }

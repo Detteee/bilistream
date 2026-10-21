@@ -123,7 +123,7 @@ impl QqSink {
             )
             .await;
             tracing::debug!(
-                "QQ 通知发送: mode={} ok={} http={} code={:?} trace={:?}",
+                "QQ 通知发送：mode={} ok={} http={} code={:?} trace={:?}",
                 mode.as_str(),
                 result.ok,
                 result.http_status,

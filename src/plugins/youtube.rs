@@ -734,7 +734,7 @@ pub(crate) async fn get_youtube_area_topic(
     {
         Ok(Ok(streams)) => streams,
         Ok(Err(error)) => {
-            tracing::debug!("弹幕分区补充游戏信息失败: {}", error);
+            tracing::debug!("弹幕分区补充游戏信息失败：{}", error);
             return None;
         }
         Err(_) => {
@@ -855,7 +855,7 @@ async fn get_youtube_status_with(
             if !with_probe_turns(|turns| turns.claim(channel_id, now)) {
                 // Another channel was probed within 2 min: answer from the
                 // index or the last probe, and probe on a later tick.
-                tracing::debug!("yt-dlp 探测 {} 延后: 另一频道 2 分钟内刚探测过", channel_id);
+                tracing::debug!("yt-dlp 探测 {} 延后：另一频道 2 分钟内刚探测过", channel_id);
                 action = MonitorAction::IndexAnswer;
             }
         } else {

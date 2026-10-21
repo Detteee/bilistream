@@ -156,7 +156,7 @@ async fn wait_out_bili_room_lock(room: i32) -> bool {
     let lock = match get_bili_room_lock(room).await {
         Ok(lock) => lock,
         Err(error) => {
-            tracing::warn!("获取B站房间锁定状态失败: {}", error);
+            tracing::warn!("获取B站房间锁定状态失败：{}", error);
             return false;
         }
     };
@@ -1172,7 +1172,7 @@ async fn fetch_bili_live_status_logged(
     match get_bili_live_status(room).await {
         Ok(status) => Ok(status),
         Err(e) => {
-            tracing::error!("获取B站直播状态失败: {}", e);
+            tracing::error!("获取B站直播状态失败：{}", e);
             Err(e)
         }
     }
@@ -1332,7 +1332,7 @@ async fn skip_stream_if_banned_keyword(
 
     if should_warn {
         tracing::error!(
-            "{} 在 {} 的直播标题/分区包含不支持的关键词: {}",
+            "{} 在 {} 的直播标题/分区包含不支持的关键词：{}",
             crate::logging::safe_text(&stream.channel_name, 64),
             platform,
             keyword
@@ -1377,7 +1377,7 @@ fn spawn_cover_update(cfg: &Config, platform: &str, channel_id: &str, stream_id:
         match get_thumbnail(&platform, &channel_id, stream_id.as_deref(), proxy).await {
             Ok(cover_path) if !cover_path.is_empty() => {
                 if let Err(e) = bilibili::bili_change_cover(&cfg, &cover_path).await {
-                    tracing::error!("B站直播间封面替换失败: {}", e);
+                    tracing::error!("B站直播间封面替换失败：{}", e);
                 } else {
                     tracing::info!("B站直播间封面替换成功");
                 }
@@ -1386,7 +1386,7 @@ fn spawn_cover_update(cfg: &Config, platform: &str, channel_id: &str, stream_id:
                 tracing::warn!("跳过封面更新：缩略图下载失败");
             }
             Err(e) => {
-                tracing::error!("获取缩略图失败: {}", e);
+                tracing::error!("获取缩略图失败：{}", e);
             }
         }
     });
@@ -1433,7 +1433,7 @@ async fn load_pass_config() -> Result<bilistream::config::Config, Box<dyn std::e
     let cfg = match load_config().await {
         Ok(cfg) => cfg,
         Err(e) => {
-            tracing::warn!("加载配置失败，短暂重试: {}", e);
+            tracing::warn!("加载配置失败，短暂重试：{}", e);
             tokio::time::sleep(Duration::from_millis(100)).await;
             load_config().await?
         }
@@ -1459,7 +1459,7 @@ async fn wait_out_cluster_block(
     let (_, last_reason) =
         cluster_wait.get_or_insert_with(|| (std::time::Instant::now(), String::new()));
     if *last_reason != reason {
-        tracing::info!("等待集群允许监控: {}", reason);
+        tracing::info!("等待集群允许监控：{}", reason);
         last_reason.clone_from(&reason);
     }
     if is_danmaku_running() {
@@ -1493,7 +1493,7 @@ async fn require_a_configured_source(cfg: &bilistream::config::Config) -> bool {
     }
     tracing::error!("YouTube、Twitch 和 Niconico 配置均为空");
     tracing::error!("请在 WebUI 中配置或手动编辑 config.json 文件");
-    tracing::info!("提示: 打开 Web UI，按设置向导完成配置");
+    tracing::info!("提示：打开 Web UI，按设置向导完成配置");
     wait_config_update_or_timeout(Duration::from_secs(cfg.interval)).await;
     true
 }
@@ -1795,7 +1795,7 @@ async fn align_bili_room(
                 history_area_v2 = Some(align.area_v2);
                 if align.title != align.cfg_title {
                     if let Err(e) = bili_change_live_title(cfg, align.cfg_title).await {
-                        tracing::error!("B站直播标题变更失败: {}", e);
+                        tracing::error!("B站直播标题变更失败：{}", e);
                     }
                 }
                 // 开播 notice (Addendum A) is recorded once the source
@@ -1830,7 +1830,7 @@ async fn align_bili_room(
                         detail: safe_text(message, 160),
                     });
                     if let Err(save_err) = save_config(cfg).await {
-                        tracing::error!("保存配置失败: {}", save_err);
+                        tracing::error!("保存配置失败：{}", save_err);
                     }
                 }
                 tracing::warn!("{stream_log} 本次开播未完成，下轮监控重试");
@@ -1854,7 +1854,7 @@ async fn align_bili_room(
     } else {
         if align.title != align.cfg_title {
             if let Err(e) = bili_change_live_title(cfg, align.cfg_title).await {
-                tracing::error!("B站直播标题变更失败: {}", e);
+                tracing::error!("B站直播标题变更失败：{}", e);
             } else {
                 tracing::info!(
                     "{stream_log} B站直播标题已更新；{} → {}",
@@ -1871,19 +1871,19 @@ async fn align_bili_room(
                     )
                     .await
                     {
-                        tracing::error!("发送弹幕失败: {}", e);
+                        tracing::error!("发送弹幕失败：{}", e);
                     }
                 }
             }
         }
         if align.area_id != align.area_v2 {
             if let Err(e) = update_area(align.area_id, align.area_v2).await {
-                tracing::error!("B站分区更新失败: {}", e);
+                tracing::error!("B站分区更新失败：{}", e);
             } else {
                 history_area_v2 = Some(align.area_v2);
                 tokio::time::sleep(Duration::from_secs(2)).await;
                 if let Err(e) = bili_change_live_title(cfg, align.cfg_title).await {
-                    tracing::error!("B站直播标题变更失败: {}", e);
+                    tracing::error!("B站直播标题变更失败：{}", e);
                 }
             }
         }
@@ -1954,11 +1954,11 @@ async fn rejected_by_keyword(
     let Some(word) = monitor.invalid_word().await else {
         return false;
     };
-    tracing::error!("检测到非法词汇:{}，不转播", word);
+    tracing::error!("检测到非法词汇：{}，不转播", word);
     if bili_is_live {
         match bili_stop_live(cfg).await {
             Ok(()) => bilistream::notify::live_ended(BroadcastEndCause::ContentRejected),
-            Err(error) => tracing::error!("停止 B 站直播失败: {}", error),
+            Err(error) => tracing::error!("停止 B 站直播失败：{}", error),
         }
     }
     true
@@ -2144,7 +2144,7 @@ async fn clear_crop_settings(cfg: &mut bilistream::config::Config) {
     }
     if config_changed {
         if let Err(e) = save_config(cfg).await {
-            tracing::error!("保存配置失败: {}", e);
+            tracing::error!("保存配置失败：{}", e);
         }
     }
 }
@@ -2257,7 +2257,7 @@ async fn announce_stream_end(
             tracing::error!("Failed to send danmaku: {}", e);
         } else {
             // Best effort: the room is already offline.
-            tracing::info!("{session_log} B站房间已停播，结束弹幕未发送: {}", e);
+            tracing::info!("{session_log} B站房间已停播，结束弹幕未发送：{}", e);
         }
     }
 
@@ -2302,7 +2302,7 @@ async fn stop_room_after_source_end(
     }
     match bili_stop_live(cfg).await {
         Ok(()) => bilistream::notify::live_ended(BroadcastEndCause::AutoStop),
-        Err(e) => tracing::error!("自动停播失败: {}", e),
+        Err(e) => tracing::error!("自动停播失败：{}", e),
     }
 }
 
@@ -3690,7 +3690,7 @@ async fn check_collision(
 
                     if is_multi_channel {
                         tracing::debug!(
-                            "检测到多频道转播，跳过撞车检测: {} - {}",
+                            "检测到多频道转播，跳过撞车检测：{} - {}",
                             room_name,
                             title
                         );
@@ -3699,7 +3699,7 @@ async fn check_collision(
 
                     // This appears to be a single-channel stream, flag as collision
                     tracing::debug!(
-                        "检测到撞车: {} ({}) 正在转播 {}",
+                        "检测到撞车：{} ({}) 正在转播 {}",
                         room_name,
                         room_id,
                         target_name
@@ -3707,7 +3707,7 @@ async fn check_collision(
                     return Ok(Some((room_name.clone(), room_id, target_name.to_string())));
                 }
             }
-            Err(e) => tracing::error!("获取防撞直播间 {} 状态失败: {}", room_id, e),
+            Err(e) => tracing::error!("获取防撞直播间 {} 状态失败：{}", room_id, e),
             _ => (),
         }
     }
@@ -3729,7 +3729,7 @@ fn has_multiple_channels_in_title(title: &str) -> Result<bool, Box<dyn std::erro
     let channels_json: serde_json::Value = crate::storage::read_document("channels.json")?;
     if let Err(error) = crate::storage::reject_legacy_channels(&channels_json) {
         // Fixed text naming the key only; never a channel name.
-        tracing::warn!("多频道标题检测已跳过: {error}");
+        tracing::warn!("多频道标题检测已跳过：{error}");
         return Err(error.into());
     }
 

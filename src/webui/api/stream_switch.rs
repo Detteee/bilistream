@@ -147,7 +147,7 @@ pub async fn switch_stream(
     let channels_json: serde_json::Value = crate::storage::read_document("channels.json")
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     if let Err(error) = crate::storage::reject_legacy_channels(&channels_json) {
-        tracing::error!("频道切换被拒绝: {error}");
+        tracing::error!("频道切换被拒绝：{error}");
         return Ok(ApiResponse {
             success: false,
             data: None,

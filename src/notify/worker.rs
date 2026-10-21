@@ -109,7 +109,7 @@ pub async fn supervise(
                 let store = match crate::storage::global() {
                     Ok(store) => store,
                     Err(error) => {
-                        tracing::warn!("QQ 通知无法打开数据库: {}", error);
+                        tracing::warn!("QQ 通知无法打开数据库：{}", error);
                         tokio::time::sleep(Duration::from_secs(30)).await;
                         return false;
                     }
@@ -353,12 +353,12 @@ impl Worker {
         let changed = match signal {
             LiveSignal::Source(info) => match self.ledger.live.source(&info, now) {
                 SourceOutcome::Started(generation) => {
-                    tracing::info!("QQ 开播通知: 第 {} 场直播开始", generation);
+                    tracing::info!("QQ 开播通知：第 {} 场直播开始", generation);
                     true
                 }
                 SourceOutcome::Switched(generation, switch_seq) => {
                     tracing::info!(
-                        "QQ 换台通知: 第 {} 场直播第 {} 次换台",
+                        "QQ 换台通知：第 {} 场直播第 {} 次换台",
                         generation,
                         switch_seq
                     );
@@ -372,7 +372,7 @@ impl Worker {
                     // The operator reads the same 结束原因 wording the notice
                     // uses, never the wire code (`source_ended`).
                     tracing::info!(
-                        "QQ 下播通知: 结束原因 {}",
+                        "QQ 下播通知：结束原因 {}",
                         cause.notice_label(self.ledger.live.broadcast.newest_source())
                     );
                 }
@@ -1169,7 +1169,7 @@ impl Worker {
                 if !self.warned_no_sender {
                     self.warned_no_sender = true;
                     tracing::warn!(
-                        "QQ 通知: {} 条通知在 1 小时内没有节点能够发送，已丢弃",
+                        "QQ 通知：{} 条通知在 1 小时内没有节点能够发送，已丢弃",
                         expired.len()
                     );
                 }
@@ -1272,7 +1272,7 @@ impl Worker {
             } => {
                 let reason = self.mask(&reason);
                 tracing::warn!(
-                    "QQ 通知无法送达: {} (code {:?}, trace {:?})",
+                    "QQ 通知无法送达：{} (code {:?}, trace {:?})",
                     reason,
                     code,
                     trace_id
@@ -1348,7 +1348,7 @@ impl Worker {
                 .record_undelivered(alerts as u32, REASON_NO_CAPABLE_NODE, now);
             if !self.no_capable_node {
                 tracing::warn!(
-                    "QQ 通知: {} 条通知未送达，{}",
+                    "QQ 通知：{} 条通知未送达，{}",
                     alerts,
                     REASON_NO_CAPABLE_NODE
                 );
@@ -1578,7 +1578,7 @@ impl Worker {
         let store = Arc::clone(&self.store);
         let write = move || {
             if let Err(error) = store::save_state(&store, &state) {
-                tracing::debug!("QQ 通知状态保存失败: {}", error);
+                tracing::debug!("QQ 通知状态保存失败：{}", error);
             }
         };
         match tokio::runtime::Handle::try_current() {
@@ -1791,7 +1791,7 @@ impl Worker {
             } => {
                 let reason = self.mask(&reason);
                 if bad_credentials {
-                    tracing::warn!("QQ 通知: {}，等待重新保存 AppID/AppSecret", reason);
+                    tracing::warn!("QQ 通知：{}，等待重新保存 AppID/AppSecret", reason);
                     self.bad_credentials = true;
                 }
                 if fatal || bad_credentials {
@@ -1988,7 +1988,7 @@ impl Worker {
         }
         if !result.ok {
             tracing::debug!(
-                "QQ 指令回复未送达: http={} code={:?}",
+                "QQ 指令回复未送达：http={} code={:?}",
                 result.http_status,
                 result.code
             );
@@ -2072,7 +2072,7 @@ impl Worker {
         let token = match sink.token().await {
             Ok(token) => token,
             Err(error) => {
-                tracing::debug!("绑定成功回复取消: {}", error.reason);
+                tracing::debug!("绑定成功回复取消：{}", error.reason);
                 return;
             }
         };
@@ -2105,7 +2105,7 @@ impl Worker {
         }
         if !result.ok {
             tracing::debug!(
-                "绑定成功回复未送达: http={} code={:?}",
+                "绑定成功回复未送达：http={} code={:?}",
                 result.http_status,
                 result.code
             );

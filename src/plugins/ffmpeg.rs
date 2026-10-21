@@ -2407,7 +2407,7 @@ fn is_harmless_hls_keepalive_warning(lower: &str) -> bool {
 
 fn append_crop_or_copy(cmd: &mut Command, crop: Option<(u32, u32, u32, u32)>) {
     if let Some((width, height, x, y)) = crop {
-        tracing::debug!("应用裁剪滤镜: {}:{}:{}:{}", width, height, x, y);
+        tracing::debug!("应用裁剪滤镜：{}:{}:{}:{}", width, height, x, y);
         cmd.arg("-vf")
             .arg(format!("crop={}:{}:{}:{}", width, height, x, y))
             .arg("-c:v")
@@ -3117,11 +3117,11 @@ pub fn set_high_priority(pid: u32) {
             Ok(output) if output.status.success() => {}
             Ok(output) => {
                 let stderr = String::from_utf8_lossy(&output.stderr);
-                tracing::warn!("设置进程优先级失败: {}", stderr.trim());
-                tracing::info!("提示: 使用 sudo 运行，或设置 CAP_SYS_NICE 能力以获得更好性能");
+                tracing::warn!("设置进程优先级失败：{}", stderr.trim());
+                tracing::info!("提示：使用 sudo 运行，或设置 CAP_SYS_NICE 能力以获得更好性能");
             }
             Err(e) => {
-                tracing::warn!("无法设置进程优先级: {}", e);
+                tracing::warn!("无法设置进程优先级：{}", e);
             }
         }
     }
@@ -3141,10 +3141,10 @@ pub fn set_high_priority(pid: u32) {
             Ok(output) if output.status.success() => {}
             Ok(output) => {
                 let stderr = String::from_utf8_lossy(&output.stderr);
-                tracing::warn!("设置进程优先级失败: {}", stderr.trim());
+                tracing::warn!("设置进程优先级失败：{}", stderr.trim());
             }
             Err(e) => {
-                tracing::warn!("无法设置进程优先级: {}", e);
+                tracing::warn!("无法设置进程优先级：{}", e);
             }
         }
     }
@@ -3162,11 +3162,11 @@ pub fn set_high_priority(pid: u32) {
             Ok(output) if output.status.success() => {}
             Ok(output) => {
                 let stderr = String::from_utf8_lossy(&output.stderr);
-                tracing::warn!("设置进程优先级失败: {}", stderr.trim());
-                tracing::info!("提示: 使用 sudo 运行以获得更好性能");
+                tracing::warn!("设置进程优先级失败：{}", stderr.trim());
+                tracing::info!("提示：使用 sudo 运行以获得更好性能");
             }
             Err(e) => {
-                tracing::warn!("无法设置进程优先级: {}", e);
+                tracing::warn!("无法设置进程优先级：{}", e);
             }
         }
     }

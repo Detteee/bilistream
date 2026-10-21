@@ -436,7 +436,7 @@ pub(crate) async fn collect_local_snapshot(
         }
         .to_string();
         tracing::warn!(
-            "集群本节点故障: {}（外部 API 失败 {} 次，ffmpeg 失败 {} 次），暂停执行并等待自动转移",
+            "集群本节点故障：{}（外部 API 失败 {} 次，ffmpeg 失败 {} 次），暂停执行并等待自动转移",
             reason,
             external_api_failures,
             failed_restarts

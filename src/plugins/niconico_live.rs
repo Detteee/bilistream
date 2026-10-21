@@ -476,10 +476,10 @@ async fn poll_pass(cfg: &Config) {
             }
             Err(e) => {
                 if state.failing {
-                    tracing::debug!("Niconico 直播状态查询失败: {}", e);
+                    tracing::debug!("Niconico 直播状态查询失败：{}", e);
                 } else {
                     tracing::warn!(
-                        "Niconico 直播状态查询失败，列表沿用上次的 Niconico 状态: {}",
+                        "Niconico 直播状态查询失败，列表沿用上次的 Niconico 状态：{}",
                         e
                     );
                 }
@@ -650,7 +650,7 @@ pub fn start_niconico_live_worker() -> Option<NiconicoLiveWorker> {
         loop {
             match load_config().await.map_err(|e| e.to_string()) {
                 Ok(cfg) => poll_pass(&cfg).await,
-                Err(e) => tracing::debug!("Niconico 直播状态查询读取配置失败: {}", e),
+                Err(e) => tracing::debug!("Niconico 直播状态查询读取配置失败：{}", e),
             }
             tokio::select! {
                 _ = WAKE.notified() => {}

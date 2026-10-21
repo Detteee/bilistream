@@ -189,7 +189,7 @@ pub(crate) fn record(videos: &[YtVideo]) {
                 }
             });
             if let Err(e) = result {
-                tracing::debug!("{} 保存失败: {}", FILE_NAME, e);
+                tracing::debug!("{} 保存失败：{}", FILE_NAME, e);
             }
         });
     }

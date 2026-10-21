@@ -224,7 +224,7 @@ pub fn start_public_status_supervisor() -> PublicStatusSupervisor {
                     stop_listener(running.take());
                     match spawn_listener(wanted.addr).await {
                         Ok(stop) => {
-                            tracing::info!("🌐 公开状态页已启动: http://{}", wanted.addr);
+                            tracing::info!("🌐 公开状态页已启动：http://{}", wanted.addr);
                             running = Some(RunningListener {
                                 addr: wanted.addr,
                                 stop_server: stop,
@@ -280,7 +280,7 @@ fn desired_listener_for_config(cfg: &crate::config::Config) -> Option<DesiredLis
         return None;
     }
     if let Err(e) = public.validate() {
-        tracing::warn!("公开状态页配置无效，未启动: {}", e);
+        tracing::warn!("公开状态页配置无效，未启动：{}", e);
         return None;
     }
 
@@ -304,7 +304,7 @@ async fn spawn_listener(
             .await;
 
         if let Err(e) = served {
-            tracing::error!("公开状态页监听结束: {}", e);
+            tracing::error!("公开状态页监听结束：{}", e);
         }
     });
 

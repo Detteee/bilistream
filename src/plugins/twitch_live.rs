@@ -317,10 +317,10 @@ async fn poll_pass(cfg: &Config) {
         }
         Err(e) => {
             if state.failing {
-                tracing::debug!("Twitch 直播状态查询失败: {}", e);
+                tracing::debug!("Twitch 直播状态查询失败：{}", e);
             } else {
                 tracing::warn!(
-                    "Twitch 直播状态查询失败，列表沿用 Holodex 的 Twitch 状态: {}",
+                    "Twitch 直播状态查询失败，列表沿用 Holodex 的 Twitch 状态：{}",
                     e
                 );
             }
@@ -446,7 +446,7 @@ pub fn start_twitch_live_worker() -> Option<TwitchLiveWorker> {
             // Box<dyn Error> is not Send: reduce it before the next await.
             match load_config().await.map_err(|e| e.to_string()) {
                 Ok(cfg) => poll_pass(&cfg).await,
-                Err(e) => tracing::debug!("Twitch 直播状态查询读取配置失败: {}", e),
+                Err(e) => tracing::debug!("Twitch 直播状态查询读取配置失败：{}", e),
             }
             tokio::select! {
                 _ = WAKE.notified() => {}

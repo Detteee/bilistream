@@ -203,7 +203,7 @@ pub async fn resolve_priority_channel_liveness(cfg: &Config) -> PriorityChannelL
                 };
             }
             Ok(_) => {}
-            Err(e) => tracing::warn!("优先频道监控: YouTube 状态检查失败: {}", e),
+            Err(e) => tracing::warn!("优先频道监控：YouTube 状态检查失败：{}", e),
         }
     }
 
@@ -218,7 +218,7 @@ pub async fn resolve_priority_channel_liveness(cfg: &Config) -> PriorityChannelL
                 };
             }
             Ok(_) => {}
-            Err(e) => tracing::warn!("优先频道监控: Twitch 状态检查失败: {}", e),
+            Err(e) => tracing::warn!("优先频道监控：Twitch 状态检查失败：{}", e),
         }
     }
 
@@ -241,7 +241,7 @@ fn playable_liveness(
 
     let Some(m3u8_url) = m3u8_url.filter(|url| !url.is_empty()) else {
         tracing::info!(
-            "优先频道监控: {} 显示开播但拿不到可播放的流地址，暂不切换",
+            "优先频道监控：{} 显示开播但拿不到可播放的流地址，暂不切换",
             platform.label()
         );
         return None;
@@ -298,7 +298,7 @@ pub async fn resolve_playable_priority_channel(cfg: &Config) -> PriorityChannelL
                     }
                 }
             }
-            Err(e) => tracing::warn!("优先频道监控: YouTube 流地址获取失败: {}", e),
+            Err(e) => tracing::warn!("优先频道监控：YouTube 流地址获取失败：{}", e),
         }
     }
 
@@ -330,9 +330,9 @@ pub async fn resolve_playable_priority_channel(cfg: &Config) -> PriorityChannelL
                         }
                     }
                 }
-                Err(e) => tracing::warn!("优先频道监控: Twitch 流地址获取失败: {}", e),
+                Err(e) => tracing::warn!("优先频道监控：Twitch 流地址获取失败：{}", e),
             },
-            Err(e) => tracing::warn!("优先频道监控: Twitch 客户端初始化失败: {}", e),
+            Err(e) => tracing::warn!("优先频道监控：Twitch 客户端初始化失败：{}", e),
         }
     }
 

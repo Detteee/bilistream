@@ -644,7 +644,7 @@ pub async fn download_update(
         }));
     }
 
-    tracing::info!("开始下载更新: {}", download_url);
+    tracing::info!("开始下载更新：{}", download_url);
 
     // Spawn update task in background
     tokio::spawn(async move {
@@ -667,13 +667,13 @@ pub async fn download_update(
                             "failed",
                             "安装完成，但自动重启失败，请手动重启",
                         );
-                        tracing::error!("更新后重启调度失败: {}", e);
+                        tracing::error!("更新后重启调度失败：{}", e);
                     }
                 }
             }
             Err(e) => {
                 updater::set_update_status("failed", format!("更新失败: {e}"));
-                tracing::error!("更新安装失败: {}", e);
+                tracing::error!("更新安装失败：{}", e);
             }
         }
     });

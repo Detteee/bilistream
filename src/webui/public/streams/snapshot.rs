@@ -112,7 +112,7 @@ async fn rebuild_public_streams() -> bool {
     {
         Ok(list) => list,
         Err(e) => {
-            tracing::debug!("公开状态页读取直播列表失败: {}", e);
+            tracing::debug!("公开状态页读取直播列表失败：{}", e);
             return false;
         }
     };

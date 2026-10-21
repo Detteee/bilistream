@@ -517,7 +517,7 @@ async fn fetch_playlist(
         Ok(Some(response)) => PlaylistOutcome::Entries(playlist_entries(&channel_id, response)),
         Ok(None) => PlaylistOutcome::NotFound,
         Err(e) => {
-            tracing::debug!("YouTube 上传列表 {} 读取失败: {}", channel_id, e);
+            tracing::debug!("YouTube 上传列表 {} 读取失败：{}", channel_id, e);
             PlaylistOutcome::Failed
         }
     };
@@ -860,7 +860,7 @@ impl Worker {
             self.by_hour = by_hour;
             match interval.filter(|_| on && by_hour) {
                 Some(interval) => tracing::info!(
-                    "{} YouTube 上传列表按开播时段轮询: 本时段每频道 {}",
+                    "{} YouTube 上传列表按开播时段轮询：本时段每频道 {}",
                     node,
                     human_elapsed(interval)
                 ),
@@ -903,7 +903,7 @@ impl Worker {
             self.playlist_on = on;
             match active {
                 Some(interval) => tracing::info!(
-                    "{} YouTube 上传列表轮询开启: 本时段每频道 {}{}",
+                    "{} YouTube 上传列表轮询开启：本时段每频道 {}{}",
                     node,
                     human_elapsed(interval),
                     if degraded { " (RSS 不可用)" } else { "" }
@@ -913,13 +913,13 @@ impl Worker {
         } else if on && fit_changed {
             match (fit, active) {
                 (Fit::Short(factor), Some(interval)) => tracing::info!(
-                    "{} YouTube 配额需留给索引与转播目标，上传列表轮询慢于计划 {} 倍: 本时段每频道 {}",
+                    "{} YouTube 配额需留给索引与转播目标，上传列表轮询慢于计划 {} 倍：本时段每频道 {}",
                     node,
                     factor,
                     human_elapsed(interval)
                 ),
                 (_, Some(interval)) => tracing::info!(
-                    "{} YouTube 上传列表轮询恢复计划: 本时段每频道 {}",
+                    "{} YouTube 上传列表轮询恢复计划：本时段每频道 {}",
                     node,
                     human_elapsed(interval)
                 ),
@@ -971,7 +971,7 @@ impl Worker {
         if self.target_id.as_deref() != target.as_deref() {
             if let Some(ref id) = target {
                 tracing::info!(
-                    "{} YouTube 转播目标 {} 上传列表轮询: 每 {}",
+                    "{} YouTube 转播目标 {} 上传列表轮询：每 {}",
                     node,
                     safe_text(id, 64),
                     human_elapsed(target_poll_interval(stretch))
@@ -1190,7 +1190,7 @@ fn note_discovery_failure(
         );
     } else {
         tracing::debug!(
-            "{} YouTube {}仍失败: {}",
+            "{} YouTube {}仍失败：{}",
             node,
             operation,
             safe_diagnostic(error)

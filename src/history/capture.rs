@@ -34,7 +34,7 @@ fn capture(name: &str, redacted: Value) {
     }
     if let Some(root) = root() {
         if let Err(error) = write_to(&root, name, &redacted) {
-            tracing::debug!("统计采样写入失败: {error}");
+            tracing::debug!("统计采样写入失败：{error}");
         }
     }
 }

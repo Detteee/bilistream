@@ -445,7 +445,7 @@ fn load_pool() -> KeyPool {
 
 fn save_pool(saved: &SavedPool) {
     if let Err(error) = crate::storage::write_document(POOL_FILE, saved) {
-        tracing::warn!("保存 YouTube API 配额用量失败: {error}");
+        tracing::warn!("保存 YouTube API 配额用量失败：{error}");
     }
 }
 
@@ -927,7 +927,7 @@ pub async fn apply_youtube_overlay_within(
             result
         }
         Err(e) => {
-            tracing::warn!("YouTube Data API 校正失败，沿用 Holodex 状态: {}", e);
+            tracing::warn!("YouTube Data API 校正失败，沿用 Holodex 状态：{}", e);
             streams
         }
     }

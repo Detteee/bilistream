@@ -258,7 +258,7 @@ impl Hub {
             "denied" => {
                 self.subs.get(&channel)?;
                 tracing::warn!(
-                    "{} WebSub 订阅被拒绝: {}",
+                    "{} WebSub 订阅被拒绝：{}",
                     crate::logging::node_tag(self.report_node.as_deref().unwrap_or("unknown")),
                     crate::logging::safe_text(&channel, 64)
                 );
@@ -386,7 +386,7 @@ async fn push_handler(headers: HeaderMap, body: Bytes) -> Response {
                         tracing::info!("{}", push_line(&node, &item.entry, now, found));
                     } else {
                         tracing::debug!(
-                            "{} WebSub 更新推送: {} channel={}",
+                            "{} WebSub 更新推送：{} channel={}",
                             crate::logging::node_tag(&node),
                             crate::logging::safe_text(&item.entry.video_id, 64),
                             crate::logging::safe_text(&item.entry.channel_id, 64)
@@ -569,7 +569,7 @@ async fn send_hub_requests(proxy: Option<&str>, callback: String, jobs: Vec<(boo
     let client = match pooled_client(proxy) {
         Ok(client) => client,
         Err(e) => {
-            tracing::warn!("WebSub 无法创建 HTTP 客户端: {}", e);
+            tracing::warn!("WebSub 无法创建 HTTP 客户端：{}", e);
             return;
         }
     };
@@ -589,7 +589,7 @@ async fn send_hub_requests(proxy: Option<&str>, callback: String, jobs: Vec<(boo
         for (subscribe, id, result) in results {
             let Err(e) = result else { continue };
             let mode = if subscribe { "订阅" } else { "退订" };
-            tracing::debug!("WebSub {} {} 失败: {}", mode, id, e);
+            tracing::debug!("WebSub {} {} 失败：{}", mode, id, e);
             if subscribe {
                 hub.subs.insert(
                     id,
@@ -672,10 +672,10 @@ impl Worker {
         };
         match bound {
             Ok(listener) => {
-                tracing::info!("WebSub 回调监听: {}{}", addr, CALLBACK_PATH);
+                tracing::info!("WebSub 回调监听：{}{}", addr, CALLBACK_PATH);
                 let task = tokio::spawn(async move {
                     if let Err(e) = axum::serve(listener, callback_router()).await {
-                        tracing::warn!("WebSub 回调监听退出: {}", e);
+                        tracing::warn!("WebSub 回调监听退出：{}", e);
                     }
                 });
                 self.listener = Some(Listener { port, task });
@@ -799,7 +799,7 @@ impl Worker {
         if counts != self.counts {
             self.counts = counts;
             tracing::info!(
-                "{} WebSub 订阅: 已验证 {} / 等待 {} / 失败 {}",
+                "{} WebSub 订阅：已验证 {} / 等待 {} / 失败 {}",
                 crate::logging::node_tag(&node),
                 counts.0,
                 counts.1,

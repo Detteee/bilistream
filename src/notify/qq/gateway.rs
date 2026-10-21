@@ -362,9 +362,9 @@ pub async fn run(params: GatewayParams, events: mpsc::Sender<GatewayEvent>) {
                 bad_credentials: ended.bad_credentials,
             })
             .await;
-        tracing::debug!("QQ 网关会话结束: {}", ended.reason);
+        tracing::debug!("QQ 网关会话结束：{}", ended.reason);
         if fatal {
-            tracing::warn!("QQ 网关已停止: {}", ended.reason);
+            tracing::warn!("QQ 网关已停止：{}", ended.reason);
             return;
         }
         if started.elapsed() > Duration::from_secs(120) {

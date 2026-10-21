@@ -573,7 +573,7 @@ async fn read_feed_request(
                 FeedFailure::Transport
             };
             tracing::debug!(
-                "{} YouTube RSS {} 读取失败: {}",
+                "{} YouTube RSS {} 读取失败：{}",
                 node,
                 safe_text(channel_id, 64),
                 safe_diagnostic(&e.without_url().to_string())
@@ -607,7 +607,7 @@ async fn read_feed_response(response: reqwest::Response, node: &str, channel_id:
     }
     if !status.is_success() {
         tracing::debug!(
-            "{} YouTube RSS {} 读取失败: {}",
+            "{} YouTube RSS {} 读取失败：{}",
             node,
             safe_text(channel_id, 64),
             status
@@ -625,7 +625,7 @@ async fn read_feed_response(response: reqwest::Response, node: &str, channel_id:
         .into(),
         Err(e) => {
             tracing::debug!(
-                "{} YouTube RSS {} 读取失败: {}",
+                "{} YouTube RSS {} 读取失败：{}",
                 node,
                 safe_text(channel_id, 64),
                 safe_diagnostic(&e.to_string())

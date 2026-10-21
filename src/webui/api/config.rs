@@ -628,12 +628,12 @@ fn schedule_settings_sync(monitored: bool, settings: bool) -> String {
         };
         if monitored && cfg.cluster.enabled && cfg.cluster.sync_monitored_channels {
             if let Err(error) = push_monitored_config_to_peers(&cfg).await {
-                tracing::warn!("节点配置同步失败: {error}");
+                tracing::warn!("节点配置同步失败：{error}");
             }
         }
         if settings && cfg.cluster.enabled {
             if let Err(error) = crate::cluster::push_cluster_settings_to_peers(&cfg).await {
-                tracing::warn!("集群设置同步失败: {error}");
+                tracing::warn!("集群设置同步失败：{error}");
             }
         }
     });

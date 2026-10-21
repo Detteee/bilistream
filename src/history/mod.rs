@@ -261,7 +261,7 @@ pub async fn start() {
             match result {
                 Ok(Ok(())) => {}
                 Ok(Err(error)) => {
-                    tracing::warn!("统计数据库无法打开，统计已停用: {error}");
+                    tracing::warn!("统计数据库无法打开，统计已停用：{error}");
                     set_state(&thread_shared, "error", Some(error.to_string()));
                 }
                 Err(_) => {
@@ -507,7 +507,7 @@ pub(crate) fn run_writer(
             }
             if t >= last_maint + 60 {
                 if let Err(error) = maintain::tick(&w.conn, t as i64, &retention) {
-                    tracing::debug!("统计维护失败: {error}");
+                    tracing::debug!("统计维护失败：{error}");
                 }
                 last_maint = t;
             }

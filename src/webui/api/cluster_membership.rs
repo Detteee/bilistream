@@ -478,7 +478,7 @@ async fn abort(runtime: &Runtime, id: &str, message: String, candidate: Option<S
     })
     .await;
     if let Err(error) = result {
-        tracing::warn!("成员操作取消记录失败: {error}");
+        tracing::warn!("成员操作取消记录失败：{error}");
     }
 }
 

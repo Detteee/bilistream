@@ -692,7 +692,7 @@ async fn finalize_cluster_node_switch_inner_observed(
             }
             if observer.is_none() {
                 tracing::warn!(
-                    "源节点 {} 无法连接且已超过自隔离时限，未经确认继续交接: {}",
+                    "源节点 {} 无法连接且已超过自隔离时限，未经确认继续交接：{}",
                     safe_text(source_node_id, 64),
                     safe_diagnostic(&e.to_string())
                 );
@@ -988,7 +988,7 @@ pub(crate) async fn retry_unconfirmed_demotion(cfg: &Config) {
             }
         }
         Err(e) => tracing::debug!(
-            "源节点 {} 仍未确认停止: {}",
+            "源节点 {} 仍未确认停止：{}",
             safe_text(&source, 64),
             safe_diagnostic(&e.to_string())
         ),

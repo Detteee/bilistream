@@ -415,7 +415,7 @@ fn spawn_monitor_loop(
                         loop {
                             match run_bilistream(&log_level).await {
                                 Ok(()) => break,
-                                Err(error) => tracing::error!("监控循环错误: {error}"),
+                                Err(error) => tracing::error!("监控循环错误：{error}"),
                             }
                             tokio::time::sleep(Duration::from_secs(5)).await;
                         }
@@ -460,7 +460,7 @@ async fn run_tray_app(
     } else {
         tracing::info!("启动 Bilistream 系统托盘模式");
     }
-    tracing::info!("   Web UI 端口: {}", port);
+    tracing::info!("   Web UI 端口：{}", port);
 
     let backend = BackendRuntime::start(port, ffmpeg_log_level, state).await?;
     let result = tokio::select! {
@@ -563,7 +563,7 @@ pub async fn cli_main() -> Result<(), Box<dyn std::error::Error>> {
     let is_first_run = match readiness {
         Ok(first) => first,
         Err(error) => {
-            tracing::error!("数据存储无法解锁: {error}");
+            tracing::error!("数据存储无法解锁：{error}");
             false
         }
     };

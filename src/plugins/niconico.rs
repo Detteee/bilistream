@@ -618,7 +618,7 @@ async fn get_niconico_status_mode(
                 video_id: None,
             }),
             Err(e) => {
-                tracing::warn!("Niconico 频道直播页查询失败: {}", e);
+                tracing::warn!("Niconico 频道直播页查询失败：{}", e);
                 Err(e)
             }
         };

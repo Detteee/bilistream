@@ -167,7 +167,7 @@ pub async fn download_and_install_update(
     download_url: &str,
     _progress_callback: Option<Box<dyn Fn(u64, u64) + Send>>,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
-    tracing::info!("开始下载更新: {}", download_url);
+    tracing::info!("开始下载更新：{}", download_url);
 
     let client = reqwest::Client::builder()
         .user_agent("bilistream")
@@ -205,12 +205,12 @@ pub async fn download_and_install_update(
     // Download with progress
     use std::io::Write;
 
-    tracing::info!("下载中... (大小: {} MB)", total_size / 1024 / 1024);
+    tracing::info!("下载中... (大小：{} MB)", total_size / 1024 / 1024);
     let bytes = crate::plugins::http::response_bytes_limited(response, 256 * 1024 * 1024).await?;
     file.write_all(&bytes)?;
     let downloaded = bytes.len() as u64;
 
-    tracing::info!("下载完成: {} bytes", downloaded);
+    tracing::info!("下载完成：{} bytes", downloaded);
 
     file.sync_all()?;
     drop(file);

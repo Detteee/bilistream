@@ -130,7 +130,7 @@ async fn save_index(dir: &Path, index: &CacheIndex) {
         return;
     };
     if let Err(e) = tokio::fs::write(index_path(dir), body).await {
-        tracing::debug!("缩略图索引写入失败: {}", e);
+        tracing::debug!("缩略图索引写入失败：{}", e);
     }
 }
 

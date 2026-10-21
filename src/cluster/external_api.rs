@@ -58,7 +58,7 @@ pub(crate) async fn run_external_api_checks() {
             )
             .await;
             if let Err(error) = &result {
-                tracing::debug!("集群外部 API 健康检查失败: {}", error);
+                tracing::debug!("集群外部 API 健康检查失败：{}", error);
             }
             // A late response for a replaced room/config cannot affect its
             // successor. Only this sampler feeds the window, once per attempt.

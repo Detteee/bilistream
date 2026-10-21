@@ -154,7 +154,7 @@ async fn poll(shared: Arc<Shared>) {
                         let rows = rows.into_iter().filter_map(observation).collect();
                         shared.publish(now_secs(), rows);
                     }
-                    Err(error) => tracing::debug!("QQ 关注频道开播信号获取失败: {error}"),
+                    Err(error) => tracing::debug!("QQ 关注频道开播信号获取失败：{error}"),
                 }
             }
         }

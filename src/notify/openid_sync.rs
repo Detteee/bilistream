@@ -545,10 +545,10 @@ const FORWARD_ROUTE: &str = "notify_credentials_save";
 pub(crate) fn log_forward_failure(node: &str, kind: &str, status: Option<u16>) {
     match status {
         Some(status) => tracing::warn!(
-            "QQ 通知设置转发到节点 {node} 未保存: route={FORWARD_ROUTE} kind={kind} status={status}"
+            "QQ 通知设置转发到节点 {node} 未保存：route={FORWARD_ROUTE} kind={kind} status={status}"
         ),
         None => {
-            tracing::warn!("QQ 通知设置转发到节点 {node} 未保存: route={FORWARD_ROUTE} kind={kind}")
+            tracing::warn!("QQ 通知设置转发到节点 {node} 未保存：route={FORWARD_ROUTE} kind={kind}")
         }
     }
 }
@@ -880,7 +880,7 @@ pub fn spawn_push(store: Arc<Store>, local: String) {
             })
         };
         if let Err(error) = seeded.await {
-            tracing::warn!("QQ 关注列表迁移检查失败: {error}");
+            tracing::warn!("QQ 关注列表迁移检查失败：{error}");
         }
         PUSH_COALESCER
             .drive(|| {

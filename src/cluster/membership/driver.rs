@@ -193,7 +193,7 @@ impl Runtime {
                 set.remove(&key);
             }
             if let Err(error) = result {
-                tracing::warn!("成员操作 {id} 暂停: {error}");
+                tracing::warn!("成员操作 {id} 暂停：{error}");
                 let message = error.to_string();
                 let _ = this.blocking(move |m| m.note(id, message)).await;
             }
@@ -1280,7 +1280,7 @@ pub fn start_recovery_worker() -> RecoveryWorker {
             if let Ok(runtime) = Runtime::process() {
                 if runtime.membership.identity().is_ok() {
                     if let Err(error) = runtime.recover().await {
-                        tracing::debug!("成员操作恢复检查失败: {error}");
+                        tracing::debug!("成员操作恢复检查失败：{error}");
                     }
                 }
             }

@@ -204,9 +204,9 @@ async fn holodex_inputs(kind: ListKind, cfg: &Config) -> Option<u64> {
 
 fn note_failure(state: &mut ListState, message: String) {
     if state.failing {
-        tracing::debug!("Holodex 列表刷新失败，沿用上次结果: {}", message);
+        tracing::debug!("Holodex 列表刷新失败，沿用上次结果：{}", message);
     } else {
-        tracing::warn!("Holodex 列表刷新失败，沿用上次结果: {}", message);
+        tracing::warn!("Holodex 列表刷新失败，沿用上次结果：{}", message);
     }
     state.failing = true;
     state.last_error = Some(message);
@@ -394,7 +394,7 @@ async fn worker_pass(woken: bool) {
     let cfg = match load_config().await.map_err(|e| e.to_string()) {
         Ok(cfg) => cfg,
         Err(e) => {
-            tracing::debug!("Holodex 列表读取配置失败: {}", e);
+            tracing::debug!("Holodex 列表读取配置失败：{}", e);
             return;
         }
     };
@@ -415,7 +415,7 @@ async fn worker_pass(woken: bool) {
             inputs.is_some_and(|inputs| holodex_due(attempt, inputs, false, usable_yt, now));
         if rebuild_due(woken, fetch_due, built_at, now) {
             if let Err(e) = build(kind, false).await {
-                tracing::debug!("Holodex 列表 {} 重建失败: {}", kind.source(), e);
+                tracing::debug!("Holodex 列表 {} 重建失败：{}", kind.source(), e);
             }
         }
     }

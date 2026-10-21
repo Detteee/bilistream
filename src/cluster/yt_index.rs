@@ -377,7 +377,7 @@ impl Worker {
             );
         } else {
             tracing::debug!(
-                "{} 读取节点 {} 的 YouTube 索引仍失败: {}",
+                "{} 读取节点 {} 的 YouTube 索引仍失败：{}",
                 self.node_tag(),
                 safe_text(owner, 64),
                 safe_diagnostic(error)
@@ -412,25 +412,25 @@ impl Worker {
             (before, after) if before == after => {}
             (_, Source::ThisNode) => {
                 tracing::info!(
-                    "{} YouTube 索引: 本节点负责集群的 YouTube 查询",
+                    "{} YouTube 索引：本节点负责集群的 YouTube 查询",
                     self.node_tag()
                 );
             }
             (_, Source::Node(node)) => tracing::info!(
-                "{} YouTube 索引: 使用节点 {} 的索引",
+                "{} YouTube 索引：使用节点 {} 的索引",
                 self.node_tag(),
                 safe_text(node, 64)
             ),
             (Source::Node(node), Source::Local) => {
                 tracing::warn!(
-                    "{} YouTube 索引: 节点 {} 的索引不可用，回退本地查询",
+                    "{} YouTube 索引：节点 {} 的索引不可用，回退本地查询",
                     self.node_tag(),
                     safe_text(node, 64)
                 );
             }
             (_, Source::Local) => {
                 tracing::info!(
-                    "{} YouTube 索引: 本节点不再负责集群的 YouTube 查询",
+                    "{} YouTube 索引：本节点不再负责集群的 YouTube 查询",
                     self.node_tag()
                 );
             }

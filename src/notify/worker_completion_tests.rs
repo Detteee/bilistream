@@ -1337,11 +1337,11 @@ async fn the_live_end_log_names_the_cause_in_chinese() {
     .await;
     let text = logs.text();
     assert!(
-        text.contains("QQ 下播通知: 结束原因 示例频道下播"),
+        text.contains("QQ 下播通知：结束原因 示例频道下播"),
         "a source end names the channel: {text}"
     );
     assert!(
-        text.contains("QQ 下播通知: 结束原因 主动停播"),
+        text.contains("QQ 下播通知：结束原因 主动停播"),
         "a manual stop uses its label: {text}"
     );
     assert!(!text.contains("source_ended"), "{text}");

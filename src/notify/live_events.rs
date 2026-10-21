@@ -1223,7 +1223,7 @@ pub async fn drive(
                 }
             }
             tracing::debug!(
-                "QQ {}通知: channel={} http={} code={:?}",
+                "QQ {}通知：channel={} http={} code={:?}",
                 kind.label(),
                 channel.as_str(),
                 result.http_status,

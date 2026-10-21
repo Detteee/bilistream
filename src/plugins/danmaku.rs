@@ -489,7 +489,7 @@ fn resolve_area_alias(alias: &str) -> String {
 
                 // First check if the input matches the area name itself
                 if alias_lower == name_lower {
-                    tracing::debug!("分区别名 '{}' 匹配到分区名称: {}", alias_trimmed, name);
+                    tracing::debug!("分区别名 '{}' 匹配到分区名称：{}", alias_trimmed, name);
                     return name.to_string();
                 }
 
@@ -499,7 +499,7 @@ fn resolve_area_alias(alias: &str) -> String {
                         if let Some(a) = area_alias.as_str() {
                             if alias_lower == a.to_lowercase() {
                                 tracing::debug!(
-                                    "分区别名 '{}' 匹配到别名 '{}', 返回分区: {}",
+                                    "分区别名 '{}' 匹配到别名 '{}', 返回分区：{}",
                                     alias_trimmed,
                                     a,
                                     name
@@ -870,7 +870,7 @@ pub async fn process_danmaku_with_owner(command: &str, is_owner: bool, sender: &
     if !command.starts_with(" :") {
         return;
     }
-    // tracing::info!("弹幕:{}", &command[2..]);
+    // tracing::info!("弹幕：{}", &command[2..]);
     let command = command.replace(" ", "").replace("　", "");
     let normalized_danmaku = command.replace("％", "%");
 
@@ -878,7 +878,7 @@ pub async fn process_danmaku_with_owner(command: &str, is_owner: bool, sender: &
         Ok(cfg) => cfg,
         Err(e) => {
             tracing::error!(
-                "加载配置失败，忽略弹幕命令: {}",
+                "加载配置失败，忽略弹幕命令：{}",
                 safe_diagnostic(&e.to_string())
             );
             return;
@@ -927,7 +927,7 @@ pub async fn process_danmaku_with_owner(command: &str, is_owner: bool, sender: &
         return;
     }
 
-    // tracing::info!("转播命令收到: {}", normalized_danmaku);
+    // tracing::info!("转播命令收到：{}", normalized_danmaku);
     let danmaku_command = normalized_danmaku.replace(" :", "");
     let mut outcome = DanmakuTargetLog {
         node: cfg.cluster.node_id.clone(),
@@ -939,7 +939,7 @@ pub async fn process_danmaku_with_owner(command: &str, is_owner: bool, sender: &
 
     // Replace full-width ％ with half-width %
     let parts: Vec<&str> = danmaku_command.split('%').collect();
-    // tracing::info!("弹幕:{:?}", parts);
+    // tracing::info!("弹幕：{:?}", parts);
     if parts.len() < 5 {
         outcome.reject("弹幕命令格式错误");
         let _ = bilibili::send_danmaku(&cfg, "错误：弹幕命令格式错误").await;
@@ -1143,7 +1143,7 @@ pub async fn process_danmaku_with_owner(command: &str, is_owner: bool, sender: &
 
         if updated_area_id != area_id {
             tracing::debug!(
-                "按直播标题/游戏关键词修正弹幕分区: {} -> {} (ID: {})",
+                "按直播标题/游戏关键词修正弹幕分区：{} -> {} (ID: {})",
                 safe_text(&area_name, 48),
                 safe_text(&updated_area_name, 48),
                 updated_area_id
@@ -1229,7 +1229,7 @@ pub fn run_danmaku() {
             let rt = match tokio::runtime::Runtime::new() {
                 Ok(rt) => rt,
                 Err(e) => {
-                    tracing::error!("创建弹幕客户端运行时失败: {}", e);
+                    tracing::error!("创建弹幕客户端运行时失败：{}", e);
                     return;
                 }
             };
@@ -1239,7 +1239,7 @@ pub fn run_danmaku() {
                     let cfg = match load_config().await {
                         Ok(cfg) => cfg,
                         Err(e) => {
-                            tracing::error!("加载弹幕客户端配置失败: {}", e);
+                            tracing::error!("加载弹幕客户端配置失败：{}", e);
                             return;
                         }
                     };
@@ -1268,7 +1268,7 @@ pub fn run_danmaku() {
                     )
                     .await
                     {
-                        tracing::error!("弹幕客户端错误: {}", e);
+                        tracing::error!("弹幕客户端错误：{}", e);
                     }
                 })
                 .await;
@@ -1279,7 +1279,7 @@ pub fn run_danmaku() {
             rt.shutdown_timeout(Duration::from_secs(1));
         });
     if let Err(error) = spawned {
-        tracing::error!("创建弹幕客户端线程失败: {}", error);
+        tracing::error!("创建弹幕客户端线程失败：{}", error);
     }
 }
 

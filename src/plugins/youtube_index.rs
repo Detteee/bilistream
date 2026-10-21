@@ -320,7 +320,7 @@ impl Store {
             return;
         }
         tracing::info!(
-            "YouTube 索引: 本机记录过去一小时成功的 videos.list 批次 {} 个，跟踪 {} 个视频，刷新间隔 {} 倍",
+            "YouTube 索引：本机记录过去一小时成功的 videos.list 批次 {} 个，跟踪 {} 个视频，刷新间隔 {} 倍",
             self.units,
             self.entries.len(),
             self.stretch()
@@ -360,7 +360,7 @@ impl Store {
             );
         } else {
             tracing::debug!(
-                "{} YouTube 索引刷新仍失败: {}",
+                "{} YouTube 索引刷新仍失败：{}",
                 self.node_tag(),
                 safe_diagnostic(error)
             );
@@ -424,10 +424,10 @@ pub(crate) async fn refresh(keys: &[String], proxy: Option<&str>) -> bool {
     let due = with_store(|store| {
         if stretch != store.stretch() {
             if stretch == 1 {
-                tracing::info!("YouTube 索引: 配额足够索引预留，刷新间隔恢复正常");
+                tracing::info!("YouTube 索引：配额足够索引预留，刷新间隔恢复正常");
             } else {
                 tracing::info!(
-                    "YouTube 索引: 配额不足以覆盖索引预留，刷新间隔放大 {} 倍",
+                    "YouTube 索引：配额不足以覆盖索引预留，刷新间隔放大 {} 倍",
                     stretch
                 );
             }
@@ -565,7 +565,7 @@ pub fn start_store_refresh_worker() -> Option<StoreRefreshWorker> {
             // Box<dyn Error> is not Send: reduce it before the next await.
             match load_config().await.map_err(|e| e.to_string()) {
                 Ok(cfg) => refresh_tick(&cfg).await,
-                Err(e) => tracing::debug!("YouTube 索引刷新读取配置失败: {}", e),
+                Err(e) => tracing::debug!("YouTube 索引刷新读取配置失败：{}", e),
             }
             tokio::time::sleep(REFRESH_TICK).await;
         }
