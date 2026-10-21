@@ -74,6 +74,20 @@ pub struct Edges {
     quorum: Option<bool>,
 }
 
+/// What makes a node's health a new fact. A down node keeps the reason it went
+/// down for: `heartbeat_timeout` and `api_unreachable` are two probes describing
+/// one outage, and letting them alternate would emit a transition every tick.
+fn transition(state: crate::events::NodeState, reason: &str) -> (crate::events::NodeState, &str) {
+    (
+        state,
+        if state == crate::events::NodeState::Down {
+            ""
+        } else {
+            reason
+        },
+    )
+}
+
 impl Edges {
     /// Carry a failure observed during the execution handoff into this new
     /// recorder term. Node levels still start as initial observations.
@@ -128,7 +142,12 @@ impl Edges {
                 .or_insert((NodeState::Unknown, "waiting_for_heartbeat".into()));
         }
         for (id, (state, reason)) in &current {
-            if self.nodes.get(id) != Some(&(*state, reason.clone())) {
+            if self
+                .nodes
+                .get(id)
+                .map(|(state, reason)| transition(*state, reason))
+                != Some(transition(*state, reason))
+            {
                 events.push(Fact::NodeState {
                     node_id: id.clone(),
                     state: *state,
@@ -334,6 +353,37 @@ mod tests {
         a.self_check = Some((SelfCheckState::Unreachable, 3));
         let d = digest(vec![a]);
         assert!(conditions(&d, &HashSet::new()).contains_key("cluster.self_check_failing:a"));
+    }
+
+    #[test]
+    fn a_down_node_ignores_a_second_probe_reporting_the_same_outage() {
+        let mut edges = Edges::default();
+        let down =
+            |reason: &str| digest(vec![slot("a", true, "healthy"), slot("b", false, reason)]);
+        let first = edges.observe(&down("heartbeat_timeout"), &HashSet::new(), false);
+        assert!(first.iter().any(|fact| matches!(
+            fact,
+            crate::events::EventKind::NodeState { node_id, .. } if node_id == "b"
+        )));
+        assert!(
+            edges
+                .observe(&down("api_unreachable"), &HashSet::new(), false)
+                .is_empty(),
+            "the other probe's name for the same outage is not a transition"
+        );
+        assert!(edges
+            .observe(&down("heartbeat_timeout"), &HashSet::new(), false)
+            .is_empty());
+        // Recovery is still a fact.
+        let up = digest(vec![slot("a", true, "healthy"), slot("b", true, "healthy")]);
+        assert!(edges
+            .observe(&up, &HashSet::new(), false)
+            .iter()
+            .any(|fact| matches!(
+                fact,
+                crate::events::EventKind::NodeState { node_id, state, .. }
+                    if node_id == "b" && *state == crate::events::NodeState::Up
+            )));
     }
 
     #[test]

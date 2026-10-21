@@ -585,8 +585,13 @@ impl Writer {
                     "SELECT id,state,reason,minority FROM node_segments WHERE observer=?1 AND subject=?2 AND ended_at IS NULL ORDER BY id DESC LIMIT 1",
                     params![self.node, node_id], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?)),
                 ).optional()?;
+                // A down node keeps the reason it went down for: two probes
+                // (`heartbeat_timeout`, `api_unreachable`) describe one outage,
+                // and alternating between them would open a segment per tick.
                 let same = previous.as_ref().is_some_and(|(_, s, r, m)| {
-                    s == state.as_str() && r == reason && *m == *minority
+                    s == state.as_str()
+                        && (matches!(state, crate::events::NodeState::Down) || r == reason)
+                        && *m == *minority
                 }) && !*initial;
                 if same {
                     self.conn.execute(

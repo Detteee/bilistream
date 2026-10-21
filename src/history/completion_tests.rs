@@ -614,6 +614,51 @@ fn pinned_reader_bounds_wal_across_a_complete_maintenance_tick() {
 }
 
 #[test]
+fn a_down_node_keeps_one_segment_while_probes_disagree() {
+    let (mut w, _path) = writer_node("probe-flap", "jp");
+    let node = |at: i64, state: crate::events::NodeState, reason: &str| {
+        ev(
+            at,
+            EventKind::NodeState {
+                node_id: "ca".into(),
+                state,
+                reason: reason.into(),
+                initial: false,
+                minority: false,
+            },
+        )
+    };
+    w.apply(&node(
+        1_000,
+        crate::events::NodeState::Down,
+        "heartbeat_timeout",
+    ))
+    .unwrap();
+    w.apply(&node(
+        1_030,
+        crate::events::NodeState::Down,
+        "api_unreachable",
+    ))
+    .unwrap();
+    w.apply(&node(
+        1_060,
+        crate::events::NodeState::Down,
+        "heartbeat_timeout",
+    ))
+    .unwrap();
+    assert_eq!(count(&w, "events"), 1, "one outage is one event");
+    assert_eq!(
+        count(&w, "node_segments"),
+        1,
+        "the open segment keeps its reason"
+    );
+    w.apply(&node(1_090, crate::events::NodeState::Up, "healthy"))
+        .unwrap();
+    assert_eq!(count(&w, "events"), 2, "recovery is still its own event");
+    assert_eq!(count(&w, "node_segments"), 2);
+}
+
+#[test]
 #[ignore = "exports sanitized real writer/query responses for compiled-browser acceptance"]
 fn export_browser_history_fixture() {
     let (mut w, path) = writer_node("browser-fixture", "ca");
