@@ -68,14 +68,14 @@ test('historyQuery encodes string ids and round-trips them', () => {
   }
 });
 
-test('mock string ids: list → detail → paging, compared with String()', () => {
+test('mock string ids: list → detail, compared with String()', () => {
   const list = call('sessions', { ...range, limit: 500 }, 'populated').items;
   assert.ok(list.length > 4);
   assert.ok(list.every(s => typeof s.id === 'string' && /^[\w-]+:[0-9a-f]{8}:\d+$/.test(s.id)));
   const target = list[3];
   const detail = call('sessions', { id: target.id }, 'populated');
   assert.equal(String(detail.items[0].id), String(target.id));
-  assert.equal(typeof detail.prev_id, 'string');
+  assert.ok(!('prev_id' in detail) && !('next_id' in detail), '本场详情 keeps the whole 场 on one page, so no neighbour ids ride on a session');
   const ev = call('events', { ...range, limit: 5 }, 'populated');
   assert.ok(ev.items.every(e => typeof e.id === 'string'));
   assert.ok(ev.items.filter(e => e.session_id != null).every(e => typeof e.session_id === 'string'));

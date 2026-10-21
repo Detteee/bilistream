@@ -14,8 +14,8 @@ import {
   DASH, orDash, formatCount, formatHours, formatPercent, formatAbsolute, formatRelative, formatRange,
   formatDelta, resolutionLabel, bucketFor, presetRange, retentionLine, coverageLine, stripCells, sparkPath,
   ringArcs, biliTotals, biliStateLabel, rangeAudience, watchedSourceLabel, sessionDuration, formatSessionDuration,
-  expectedResolution, customRange, missingNodeText, streamHeat, spectrumColor, audienceBroadcasts, platformKey, platformName, reasonLabel,
-  formatMonthDay, formatClockShort, localHourOffset, sessionEnd, neighbourLabel,
+  expectedResolution, customRange, missingNodeText, streamHeat, spectrumColor, broadcastGroups, platformKey, platformName, reasonLabel,
+  formatMonthDay, formatClockShort, localHourOffset, sessionEnd,
   mergeRetention, EVENTS_EMPTY, isolatedPointIndices, cleanNotice,
 } from './analytics-format.js';
 import { createHistoryClient, historyStateNotice, localHistoryScope } from './analytics-history.js';
@@ -40,7 +40,7 @@ let refreshController = null;
 let detailController = null;
 let eventsController = null;
 const charts = new Map();
-const view = { status: null, sessions: [], summary: null, range: null, eventsCursor: null, detailId: null };
+const view = { status: null, sessions: [], summary: null, range: null, eventsCursor: null };
 
 const prefs = {
   range: readPref('analyticsRange', { preset: '7d' }),
@@ -292,7 +292,7 @@ function renderStrips(sessions, r, coverageFrom) {
       const c = el('span', 'analytics-strip-cell');
       c.dataset.state = cell.state;
       const hit = g.list.find(s => s.started_at < cell.end && (s.ended_at ?? r.to) > cell.start);
-      if (hit) c.addEventListener('click', () => openDetail(hit.id));
+      if (hit) c.addEventListener('click', () => openSessionDetail(hit.id));
       strip.append(c);
     }
     const sum = el('span', 'analytics-strip-sum', formatPercent(uptime));
@@ -375,7 +375,7 @@ function audienceTiles(t, { sessions = null, summarizedSub = '' } = {}) {
     tile.append(el('span', 'analytics-stat-name', name), valueWithUnit('analytics-stat-value', value, unit), el('span', 'analytics-stat-sub', sub || ''));
     tiles.append(tile);
   };
-  add('在线峰值', orDash(t.online_peak), '人', '在线（有上限）');
+  add('在线峰值', orDash(t.online_peak), '人', '');
   const watchedSub = [watchedSourceLabel(t.watched_source), pendingSub].filter(Boolean).join(' · ');
   add('看过人数', orDash(t.watched), '人', watchedSub || summarizedSub);
   add('弹幕', orDash(t.danmu), '条', pendingSub);
@@ -386,11 +386,11 @@ function audienceTiles(t, { sessions = null, summarizedSub = '' } = {}) {
 function selectedBroadcast() {
   const id = $('analytics-aud-session')?.value;
   if (!id) return null;
-  return audienceBroadcasts(view.sessions).find(b => b.id === id) || null;
+  return broadcastGroups(view.sessions).find(b => b.id === id) || null;
 }
 function renderAudience(stats, r) {
   const select = $('analytics-aud-session');
-  const broadcasts = audienceBroadcasts(view.sessions);
+  const broadcasts = broadcastGroups(view.sessions);
   const keep = select.value;
   select.replaceChildren(new Option('全部场次（本范围）', ''));
   for (const b of broadcasts) {
@@ -415,9 +415,9 @@ function renderAudience(stats, r) {
   if (stats?.ts?.length && (online || watched)) {
     const caption = `${formatRange(r.from, r.to)} · ${resolutionLabel(stats.resolution || expectedResolution(r.from, r.to, view.status?.retention))}`;
     children.push(chartFigure('audience', caption, stats, [
-      { key: 'online', label: '在线（有上限）', tone: '--brand' },
+      { key: 'online', label: '在线', tone: '--brand' },
       { key: 'watched', label: '看过（累计）', tone: '--teal' },
-    ], r.to - r.from, `在线峰值 ${orDash(totals.online_peak)}（有上限），看过人数 ${orDash(totals.watched)}。`));
+    ], r.to - r.from, `在线峰值 ${orDash(totals.online_peak)}，看过人数 ${orDash(totals.watched)}。`));
   } else if (totals.state === 'none' || !Number.isFinite(totals.online_peak)) {
     children.push(el('p', 'empty-state', '此时间范围内没有 B 站观众数据。'));
   }
@@ -439,10 +439,11 @@ function cssVar(name) {
 function mix(color, alpha) {
   return `color-mix(in srgb, ${color} ${Math.round(alpha * 100)}%, transparent)`;
 }
-function chartFigure(id, caption, stats, series, span, summary) {
+function chartFigure(id, caption, stats, series, span, summary, marks = []) {
   const fig = el('figure', 'analytics-chart analytics-section');
   const cap = el('figcaption', 'analytics-caption', caption);
   cap.id = `analytics-${id}-cap`;
+  cap.append(chartLegend(series, marks));
   const host = el('div', 'analytics-uplot');
   host.id = `analytics-${id}-chart`;
   host.tabIndex = 0;
@@ -453,10 +454,54 @@ function chartFigure(id, caption, stats, series, span, summary) {
   host.setAttribute('aria-describedby', sr.id);
   const live = el('p', 'sr-only');
   live.setAttribute('aria-live', 'polite');
-  host._pending = { id, stats, series, span, live };
+  host._pending = { id, stats, series, span, live, marks };
   const rows = stats.ts.map((t, i) => [formatAbsolute(t), ...series.map(s => orDash(stats.series?.[s.key]?.mean?.[i]))]);
   fig.append(cap, host, sr, live, dataTable(['时间', ...series.map(s => s.label)], rows.length > 500 ? rows.filter((_, i) => i % Math.ceil(rows.length / 500) === 0) : rows));
   return fig;
+}
+// A 段 switch is a gap in the samples, so mark it with one dashed warn line.
+// The word lives in the figure legend, not on every line: a label per mark
+// collides with the series as soon as the night had more than one switch.
+function drawInterrupts(u, marks) {
+  if (!marks?.length) return;
+  const { ctx, bbox } = u;
+  const top = bbox.top;
+  const bottom = bbox.top + bbox.height;
+  const left = bbox.left;
+  const right = bbox.left + bbox.width;
+  const color = cssVar('--warn') || '#d69a00';
+  ctx.save();
+  ctx.strokeStyle = color;
+  ctx.fillStyle = color;
+  ctx.lineWidth = 1.5;
+  ctx.setLineDash([4, 3]);
+  for (const t of marks) {
+    const x = Math.round(u.valToPos(t, 'x')) + 0.5;
+    if (!Number.isFinite(x) || x < left || x > right) continue;
+    ctx.beginPath();
+    ctx.moveTo(x, top);
+    ctx.lineTo(x, bottom);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+// Every figure names its series once, in the caption row: the line colour is
+// the only cue inside the plot, and a 场 switch adds one dashed 中断 entry.
+function chartLegend(series, marks) {
+  const legend = el('span', 'analytics-chart-legend');
+  for (const s of series) {
+    const item = el('span', 'analytics-legend-item');
+    const swatch = el('span', s.band ? 'analytics-legend-line analytics-legend-band' : 'analytics-legend-line');
+    swatch.style.background = cssVar(s.tone) || cssVar('--brand');
+    item.append(swatch, el('span', '', s.label));
+    legend.append(item);
+  }
+  if (marks?.length) {
+    const item = el('span', 'analytics-legend-item');
+    item.append(el('span', 'analytics-legend-mark'), el('span', '', '中断'));
+    legend.append(item);
+  }
+  return legend;
 }
 function mountPendingCharts(container) {
   if (!container) return;
@@ -464,7 +509,7 @@ function mountPendingCharts(container) {
     if (host._pending) mountChart(host, host._pending);
   }
 }
-function uplotOptions(series, span, width) {
+function uplotOptions(series, span, width, marks) {
   const font = `11px ${cssVar('--font-sans') || 'sans-serif'}`;
   const axis = { stroke: cssVar('--text-mute'), grid: { stroke: cssVar('--line'), width: 1 }, ticks: { stroke: cssVar('--line') }, font };
   const timeFmt = (u, splits) => splits.map(s => (span <= DAY ? formatClockShort(s) : formatMonthDay(s)));
@@ -490,18 +535,19 @@ function uplotOptions(series, span, width) {
   return {
     width, height: 180, legend: { show: false }, cursor: { drag: { x: true, y: false } },
     scales, axes, series: uSeries, bands,
+    hooks: { draw: [u => drawInterrupts(u, marks)] },
   };
 }
 function mountChart(host, spec) {
   charts.get(host)?.chart.destroy();
-  const { stats, series, span, live } = spec;
+  const { stats, series, span, live, marks } = spec;
   const data = [stats.ts];
   for (const s of series) {
     const col = stats.series?.[s.key] || {};
     data.push(col.mean || stats.ts.map(() => null));
     if (s.band) data.push(col.min || stats.ts.map(() => null), col.max || stats.ts.map(() => null));
   }
-  const chart = new uPlot(uplotOptions(series, span, Math.max(240, host.clientWidth || 480)), data, host);
+  const chart = new uPlot(uplotOptions(series, span, Math.max(240, host.clientWidth || 480), marks), data, host);
   for (const canvas of host.querySelectorAll('canvas')) canvas.setAttribute('aria-hidden', 'true');
   let frame = 0;
   const resize = new ResizeObserver(() => {
@@ -775,8 +821,8 @@ function eventRow(ev) {
   if (ev.node && moduleEl('nodes') && !moduleEl('nodes').hidden) li.append(el('span', 'cluster-badge', ev.node));
   if (ev.session_id != null) {
     li.tabIndex = 0;
-    li.addEventListener('click', () => openDetail(ev.session_id));
-    li.addEventListener('keydown', e => { if (e.key === 'Enter') openDetail(ev.session_id); });
+    li.addEventListener('click', () => openSessionDetail(ev.session_id));
+    li.addEventListener('keydown', e => { if (e.key === 'Enter') openSessionDetail(ev.session_id); });
   }
   return li;
 }
@@ -811,67 +857,125 @@ function renderEvents(data, append = false) {
   markLoaded('events');
 }
 
-// ---------- 单场详情 ----------
-async function openDetail(id) {
+// ---------- 本场详情 ----------
+// A 场 is one Bilibili live and a 段 is one channel stretch inside it. The
+// dialog shows the whole 场: audience totals belong to the live, and the
+// per-channel samples are concatenated into one chart with a yellow 中断 mark
+// at each switch, so A→B→A reads as one 场 with two breaks instead of three
+// pages that hide the shape of the night.
+function openBroadcast(group) {
+  if (!group?.segments?.length) return;
+  const dialog = $('analytics-detail');
+  if (!dialog.open) dialog.showModal?.();
+  $('analytics-detail-title').focus();
+  showBroadcast(group);
+}
+
+function openSessionDetail(id) {
+  const group = broadcastOfSession(id);
+  if (group) return openBroadcast(group);
+  // Older than the loaded range: read that one session and show it alone.
   detailController?.abort();
   const controller = detailController = new AbortController();
   const dialog = $('analytics-detail');
-  view.detailId = id;
+  if (!dialog.open) dialog.showModal?.();
   const body = $('analytics-detail-body');
   destroyChartsIn(body);
   body.replaceChildren(el('div', 'empty-state', '正在加载…'));
-  if (!dialog.open) dialog.showModal?.();
-  $('analytics-detail-title').focus();
+  history('sessions', { id, ...scopeParam() }, { signal: controller.signal })
+    .then(res => {
+      if (!mounted || controller !== detailController) return;
+      const [group] = broadcastGroups(res?.items || []);
+      if (group) showBroadcast(group);
+      else body.replaceChildren(el('div', 'empty-state', '未找到该场转播。'));
+    })
+    .catch(error => {
+      if (!mounted || controller !== detailController || error?.name === 'AbortError') return;
+      body.replaceChildren(el('div', 'empty-state', `加载失败：${errorText(error)}`));
+    });
+}
+
+// The 场 that carries this session id, if the range is loaded.
+function broadcastOfSession(id) {
+  for (const group of broadcastGroups(view.sessions)) {
+    if (group.segments.some(seg => seg.members.some(m => String(m.id) === String(id)))) return group;
+  }
+  return null;
+}
+
+function groupSpan(group) {
+  const end = group.ended_at == null ? Date.now() / 1000 : group.ended_at;
+  return Math.max(0, end - group.started_at);
+}
+
+// The 中断 timestamps: every switch starts a new 段, so each later 段 is one mark.
+function segmentMarks(group) {
+  return group.segments.slice(1).map(seg => seg.started_at).filter(t => Number.isFinite(t));
+}
+
+async function showBroadcast(group) {
+  detailController?.abort();
+  const controller = detailController = new AbortController();
+  const body = $('analytics-detail-body');
+  destroyChartsIn(body);
+  $('analytics-detail-title').textContent = '本场详情';
+  const segments = group.segments;
+  const many = segments.length > 1;
+  const last = segments[segments.length - 1];
+  const end = last.end;
+  const nodes = [...new Set(segments.flatMap(seg => seg.nodes))];
+  const restarts = segments.reduce((n, seg) => n + (Number(seg.restarts) || 0), 0);
+  const chain = segments.map(seg => seg.channelName || DASH).join(' → ');
+  const meta = el('dl', 'cluster-node-meta');
+  for (const [label, value, detail = '', tone = ''] of [
+    ['频道', chain, many ? `${segments.length} 段 · ${segments.length - 1} 次中断` : ''],
+    ['节点', nodes.join(' → ') || DASH],
+    ['时间', `${formatAbsolute(group.started_at)} ～ ${group.ended_at != null ? formatAbsolute(group.ended_at) : '进行中'}`],
+    ['时长', formatSessionDuration(groupSpan(group))],
+    ['重启', orDash(restarts)],
+    ['结束原因', end.label, end.detail, end.tone],
+  ]) {
+    const row = el('div', 'cluster-node-meta-row');
+    const dd = el('dd', 'cluster-node-meta-value', value);
+    if (tone) dd.dataset.tone = tone;
+    if (detail) dd.append(el('small', '', detail));
+    row.append(el('dt', 'cluster-node-meta-label', label), dd);
+    meta.append(row);
+  }
+  const charts = el('div', 'analytics-detail-charts');
+  body.replaceChildren(
+    meta,
+    el('h3', 'analytics-caption analytics-section', '观众 · 本场累计'),
+    audienceTiles(group.bili),
+    el('h3', 'analytics-caption analytics-section', '在线与推流'),
+    charts,
+  );
   try {
-    const [res, stats] = await Promise.all([
-      history('sessions', { id, ...scopeParam() }, { signal: controller.signal }),
-      history('stats', { session: id, metrics: 'bitrate,fps,speed,online,watched', max_points: Math.min(2000, Math.max(240, body.clientWidth || 600)), ...scopeParam() }, { signal: controller.signal }),
-    ]);
-    if (!mounted || controller !== detailController || String(view.detailId) !== String(id)) return;
-    const s = res?.items?.[0];
-    if (!s) { body.replaceChildren(el('div', 'empty-state', '未找到该场转播。')); return; }
-    const now = Date.now() / 1000;
-    $('analytics-detail-title').textContent = s.title || '单场详情';
-    const meta = el('dl', 'cluster-node-meta');
-    const end = sessionEnd(s);
-    for (const [label, value, detail = '', tone = ''] of [
-      ['频道', `${s.channel_name || s.channel_id || DASH} · ${platformName(s.platform)}`], ['节点', s.node || DASH],
-      ['时间', `${formatAbsolute(s.started_at)} ～ ${s.ended_at ? formatAbsolute(s.ended_at) : '进行中'}`],
-      ['时长', formatSessionDuration(sessionDuration(s, now))], ['重启', orDash(s.restarts)],
-      ['结束原因', end.label, end.detail, end.tone],
-    ]) {
-      const row = el('div', 'cluster-node-meta-row');
-      const dd = el('dd', 'cluster-node-meta-value', value);
-      if (tone) dd.dataset.tone = tone;
-      if (detail) dd.append(el('small', '', detail));
-      row.append(el('dt', 'cluster-node-meta-label', label), dd);
-      meta.append(row);
-    }
-    const children = [meta, el('h3', 'analytics-caption analytics-section', '观众'), audienceTiles(biliTotals(s.bili))];
+    // One query for every 段: the route resolves the member sessions itself
+    // and takes the span from them, so the series arrive already stitched.
+    const stats = await history('stats', {
+      session: segments.flatMap(seg => seg.eids.split(',')).join(','),
+      metrics: 'bitrate,fps,speed,online,watched',
+      max_points: Math.min(2000, Math.max(240, body.clientWidth || 600)), ...scopeParam(),
+    }, { signal: controller.signal });
+    if (!mounted || controller !== detailController) return;
     if (stats?.ts?.length) {
-      const span = sessionDuration(s, now) || DAY;
-      children.push(chartFigure('detail-aud', `在线 / 看过 · ${resolutionLabel(stats.resolution)}`, stats, [
-        { key: 'online', label: '在线（有上限）', tone: '--brand' }, { key: 'watched', label: '看过（累计）', tone: '--teal' },
-      ], span, '本场在线人数与看过人数。'));
-      children.push(chartFigure('detail-q', `推流质量 · ${resolutionLabel(stats.resolution)}`, stats, [
+      const span = groupSpan(group) || DAY;
+      const marks = segmentMarks(group);
+      charts.append(chartFigure('detail-aud', resolutionLabel(stats.resolution), stats, [
+        { key: 'online', label: '在线', tone: '--brand' }, { key: 'watched', label: '看过（累计）', tone: '--teal' },
+      ], span, '本场在线人数与看过人数；黄色虚线是频道中断。', marks));
+      charts.append(chartFigure('detail-q', resolutionLabel(stats.resolution), stats, [
         { key: 'bitrate', label: '码率 (kbps)', tone: '--brand', band: true }, { key: 'fps', label: '帧率', tone: '--teal' },
-      ], span, '本场推流码率与帧率。'));
+      ], span, '本场推流码率与帧率；黄色虚线是频道中断。', marks));
+      mountPendingCharts(charts);
+    } else {
+      charts.append(el('small', 'settings-help-text', '本场没有推流采样。'));
     }
-    children.push(el('small', 'settings-help-text', AUDIENCE_HINT));
-    body.replaceChildren(...children);
-    mountPendingCharts(body);
-    const prev = $('analytics-detail-prev');
-    const next = $('analytics-detail-next');
-    prev.disabled = res.prev_id == null;
-    next.disabled = res.next_id == null;
-    prev.onclick = () => openDetail(res.prev_id);
-    next.onclick = () => openDetail(res.next_id);
-    const titleOf = sid => view.sessions.find(x => String(x.id) === String(sid))?.title;
-    prev.setAttribute('aria-label', neighbourLabel('上一场', titleOf(res.prev_id)));
-    next.setAttribute('aria-label', neighbourLabel('下一场', titleOf(res.next_id)));
+    charts.append(el('small', 'settings-help-text', AUDIENCE_HINT));
   } catch (error) {
     if (!mounted || controller !== detailController || error?.name === 'AbortError') return;
-    body.replaceChildren(el('div', 'empty-state', `加载失败：${errorText(error)}`));
+    charts.append(el('div', 'empty-state', `采样加载失败：${errorText(error)}`));
   }
 }
 
@@ -1127,7 +1231,7 @@ function bindControls() {
   // Keyboard path to 单场详情 (W2, W10): a real button next to the select.
   $('analytics-aud-detail').addEventListener('click', () => {
     const broadcast = selectedBroadcast();
-    if (broadcast) openDetail(broadcast.sessionId);
+    if (broadcast) openBroadcast(broadcast, 0);
   });
   $('analytics-event-filter').addEventListener('change', async () => {
     eventsController?.abort();
@@ -1161,15 +1265,15 @@ function bindControls() {
   const dialog = $('analytics-detail');
   $('analytics-detail-close').addEventListener('click', () => dialog.close());
   dialog.addEventListener('close', () => {
+    // `close()` queues this event, so a reopen in the same task (programmatic
+    // close → open) would otherwise tear down the 场 that just started.
+    if (dialog.open) return;
     detailController?.abort();
     detailController = null;
-    view.detailId = null;
     destroyChartsIn($('analytics-detail-body'));
   });
   dialog.addEventListener('keydown', event => {
     if (event.target.closest?.('.analytics-uplot')) return;
-    if (event.key === 'ArrowLeft' && !$('analytics-detail-prev').disabled) $('analytics-detail-prev').click();
-    if (event.key === 'ArrowRight' && !$('analytics-detail-next').disabled) $('analytics-detail-next').click();
   });
 }
 

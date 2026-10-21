@@ -58,6 +58,9 @@ pub(crate) struct Query {
     pub subject: Option<String>,
     #[serde(default)]
     pub metrics: Vec<String>,
+    /// Session ids of the chart. A channel segment inside one Bilibili live
+    /// can be relayed by several sessions (interruptions, restarts), so the
+    /// value is a comma list; `parse` normalises it.
     #[serde(default)]
     pub session: Option<String>,
     #[serde(default)]
@@ -65,9 +68,6 @@ pub(crate) struct Query {
     /// `raw` or `1m`, chosen once by the coordinating node.
     #[serde(default)]
     pub tier: Option<String>,
-    /// Neighbour lookup around a session `(started_at, eid)`.
-    #[serde(default)]
-    pub around: Option<(i64, String)>,
     /// Design §11: the requested range was cut to `rollup_days`. Set by
     /// `parse` only; never sent to or read from a peer.
     #[serde(skip)]
@@ -174,6 +174,12 @@ pub(crate) fn parse(
             .map(|v| v.trim().to_string())
             .filter(|v| !v.is_empty() && v.len() <= 200)
     };
+    let ids = |key: &str| {
+        params
+            .get(key)
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty() && v.len() <= 800)
+    };
     Ok(Query {
         from,
         to,
@@ -182,17 +188,16 @@ pub(crate) fn parse(
         calendar: params.get("calendar").is_some_and(|v| v == "1"),
         channel: text("channel"),
         platform,
-        id: text("id"),
+        id: id_list(&ids("id")),
         limit,
         cursor,
         kinds: list(params, "kind"),
         severities: list(params, "severity"),
         subject: text("subject"),
         metrics,
-        session: text("session"),
+        session: id_list(&ids("session")),
         max_points,
         tier: None,
-        around: None,
         clamped_to_days,
         query_from: None,
         retained_from: None,
@@ -213,9 +218,30 @@ pub(crate) fn clamp_peer(q: &mut Query, rollup_days: u64) -> Option<u64> {
     })
 }
 
+/// `id` and `session` both take a comma list of session ids: a channel
+/// segment inside one Bilibili live may be relayed by several sessions
+/// (interruptions, restarts). Normalise so the SQL `json_each` lookup sees
+/// exactly the ids, deduped and bounded.
+fn id_list(raw: &Option<String>) -> Option<String> {
+    let mut ids: Vec<&str> = Vec::new();
+    for id in raw.as_deref()?.split(',') {
+        let id = id.trim();
+        if !id.is_empty() && !ids.contains(&id) && ids.len() < 32 {
+            ids.push(id);
+        }
+    }
+    (!ids.is_empty()).then(|| ids.join(","))
+}
+
+/// `json_each` needs a real JSON array, so a comma list becomes one before it
+/// reaches SQL. Building it here keeps escaping in serde instead of SQL.
+fn id_json(list: &str) -> String {
+    serde_json::to_string(&list.split(',').collect::<Vec<_>>()).unwrap_or_else(|_| "[]".into())
+}
+
 /// Design §11: the signed peer route accepts only a query the coordinating
-/// node could have built with `parse` (plus `tier`/`around`). Anything else
-/// is a 400 before the database is opened.
+/// node could have built with `parse` (plus `tier`). Anything else is a 400
+/// before the database is opened.
 pub(crate) fn validate_peer(q: &Query, now: i64) -> Result<(), BadRequest> {
     let bad = |m: &str| Err(BadRequest(m.into()));
     if q.from >= q.to || q.to > now + 600 || q.to.checked_sub(q.from).is_none() {
@@ -252,8 +278,15 @@ pub(crate) fn validate_peer(q: &Query, now: i64) -> Result<(), BadRequest> {
         return bad("filters");
     }
     let long = |v: &Option<String>| v.as_ref().is_some_and(|v| v.is_empty() || v.len() > 200);
-    if long(&q.channel) || long(&q.id) || long(&q.subject) || long(&q.session) {
+    if long(&q.channel) || long(&q.subject) {
         return bad("text");
+    }
+    let long_ids = |v: &Option<String>| v.as_ref().is_some_and(|v| v.is_empty() || v.len() > 800);
+    if long_ids(&q.id) {
+        return bad("id");
+    }
+    if long_ids(&q.session) {
+        return bad("session");
     }
     let long_list = |v: &[String]| v.iter().any(|s| s.is_empty() || s.len() > 200);
     if long_list(&q.kinds) || long_list(&q.severities) {
@@ -263,7 +296,7 @@ pub(crate) fn validate_peer(q: &Query, now: i64) -> Result<(), BadRequest> {
         c.as_ref()
             .is_some_and(|(_, eid)| eid.is_empty() || eid.len() > 200)
     };
-    if bad_cursor(&q.cursor) || bad_cursor(&q.around) {
+    if bad_cursor(&q.cursor) {
         return bad("cursor");
     }
     Ok(())
@@ -342,21 +375,11 @@ pub(crate) struct SessionItem {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub(crate) struct SessionsPage {
     pub items: Vec<SessionItem>,
-    pub prev_id: Option<String>,
-    pub next_id: Option<String>,
     pub next_cursor: Option<String>,
     pub missing_nodes: Vec<super::MissingNode>,
-    /// Peer-internal: neighbours around `Query::around`, and has-more.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub neighbours: Option<Neighbours>,
+    /// Peer-internal: this page was cut by `limit`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub more: bool,
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-pub(crate) struct Neighbours {
-    pub prev: Option<(i64, String)>,
-    pub next: Option<(i64, String)>,
 }
 
 struct Row {
@@ -781,50 +804,21 @@ fn item(conn: &Connection, row: Row, now: i64) -> rusqlite::Result<SessionItem> 
     })
 }
 
-fn neighbour(
-    conn: &Connection,
-    at: i64,
-    eid: &str,
-    older: bool,
-) -> rusqlite::Result<Option<(i64, String)>> {
-    let sql = if older {
-        "SELECT started_at,eid FROM sessions WHERE pruned=0 AND (started_at<?1 OR (started_at=?1 AND eid<?2)) ORDER BY started_at DESC, eid DESC LIMIT 1"
-    } else {
-        "SELECT started_at,eid FROM sessions WHERE pruned=0 AND (started_at>?1 OR (started_at=?1 AND eid>?2)) ORDER BY started_at, eid LIMIT 1"
-    };
-    conn.query_row(sql, params![at, eid], |r| Ok((r.get(0)?, r.get(1)?)))
-        .optional()
-}
-
 pub(crate) fn sessions(conn: &Connection, q: &Query, now: i64) -> rusqlite::Result<SessionsPage> {
-    if let Some((at, eid)) = &q.around {
+    if let Some(ids) = &q.id {
+        let mut stmt = conn.prepare_cached(&format!(
+            "SELECT {SESSION_COLS} FROM sessions
+             WHERE pruned=0 AND eid IN (SELECT value FROM json_each(?1))"
+        ))?;
+        let rows = stmt
+            .query_map([id_json(ids)], row)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let mut items = Vec::new();
+        for r in rows {
+            items.push(item(conn, r, now)?);
+        }
         return Ok(SessionsPage {
-            neighbours: Some(Neighbours {
-                prev: neighbour(conn, *at, eid, true)?,
-                next: neighbour(conn, *at, eid, false)?,
-            }),
-            ..Default::default()
-        });
-    }
-    if let Some(id) = &q.id {
-        let found = conn
-            .query_row(
-                &format!("SELECT {SESSION_COLS} FROM sessions WHERE eid=?1 AND pruned=0"),
-                [id],
-                row,
-            )
-            .optional()?;
-        let Some(found) = found else {
-            return Ok(SessionsPage::default());
-        };
-        let (at, eid) = (found.started_at, found.eid.clone());
-        let prev = neighbour(conn, at, &eid, true)?;
-        let next = neighbour(conn, at, &eid, false)?;
-        return Ok(SessionsPage {
-            items: vec![item(conn, found, now)?],
-            prev_id: prev.as_ref().map(|p| p.1.clone()),
-            next_id: next.as_ref().map(|n| n.1.clone()),
-            neighbours: Some(Neighbours { prev, next }),
+            items,
             ..Default::default()
         });
     }
@@ -873,22 +867,8 @@ pub(crate) fn sessions(conn: &Connection, q: &Query, now: i64) -> rusqlite::Resu
 pub(crate) fn merge_sessions(pages: Vec<SessionsPage>, limit: usize) -> SessionsPage {
     let mut by_eid: BTreeMap<String, SessionItem> = BTreeMap::new();
     let mut more = false;
-    let mut prev: Option<(i64, String)> = None;
-    let mut next: Option<(i64, String)> = None;
     for page in pages {
         more |= page.more;
-        if let Some(n) = page.neighbours {
-            if let Some(p) = n.prev {
-                if prev.as_ref().is_none_or(|cur| p > *cur) {
-                    prev = Some(p);
-                }
-            }
-            if let Some(x) = n.next {
-                if next.as_ref().is_none_or(|cur| x < *cur) {
-                    next = Some(x);
-                }
-            }
-        }
         for item in page.items {
             by_eid.entry(item.eid.clone()).or_insert(item);
         }
@@ -902,8 +882,6 @@ pub(crate) fn merge_sessions(pages: Vec<SessionsPage>, limit: usize) -> Sessions
         .flatten();
     SessionsPage {
         items,
-        prev_id: prev.map(|p| p.1),
-        next_id: next.map(|n| n.1),
         next_cursor,
         ..Default::default()
     }
@@ -1352,11 +1330,20 @@ pub(crate) fn stats(
         let mut stmt = conn.prepare_cached(&format!(
             "SELECT metric,({col}-?5)/?6 AS slot,min(min),max(max),sum(sum),sum(count)
              FROM {table} WHERE metric IN ({metrics}) AND {col}>=?1 AND {col}<?2 AND (?3 IS NULL OR node=?3)
-             AND (?4 IS NULL OR session_id=(SELECT id FROM sessions WHERE eid=?4 AND pruned=0))
+             AND (?4 IS NULL OR session_id IN (
+                   SELECT id FROM sessions WHERE pruned=0 AND eid IN (SELECT value FROM json_each(?4))
+                 ))
              GROUP BY metric,slot"
         ))?;
         let rows = stmt.query_map(
-            params![from, to, node, q.session, out.start, out.step],
+            params![
+                from,
+                to,
+                node,
+                q.session.as_deref().map(id_json),
+                out.start,
+                out.step
+            ],
             |r| {
                 Ok((
                     r.get::<_, i64>(0)?,

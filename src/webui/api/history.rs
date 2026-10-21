@@ -669,26 +669,8 @@ async fn answer_inner(
                 query: q.clone(),
             };
             let (parts, mut missing_nodes) = run(req, scope.clone()).await.map_err(internal)?;
-            let mut pages: Vec<SessionsPage> = decode(parts, &mut missing_nodes);
-            if q.id.is_some() && *scope == Scope::Cluster {
-                let target = pages.iter().flat_map(|p| p.items.iter()).next().cloned();
-                if let Some(target) = target {
-                    let mut around = q.clone();
-                    around.id = None;
-                    around.around = Some((target.started_at, target.eid.clone()));
-                    let req = PeerRequest {
-                        name: name.into(),
-                        query: around,
-                    };
-                    let (more, mut m2) = run(req, scope.clone()).await.map_err(internal)?;
-                    pages.extend(decode::<SessionsPage>(more, &mut m2));
-                }
-            }
+            let pages: Vec<SessionsPage> = decode(parts, &mut missing_nodes);
             let mut page = query::merge_sessions(pages, limit);
-            if q.id.is_none() {
-                page.prev_id = None;
-                page.next_id = None;
-            }
             page.missing_nodes = missing_nodes;
             Ok(serde_json::to_value(page).unwrap_or(Value::Null))
         }
@@ -706,29 +688,42 @@ async fn answer_inner(
         }
         "stats" => {
             let mut missing_nodes = Vec::new();
-            if let Some(id) = q.session.clone() {
-                // Resolve the session first; its node owns the samples.
+            if let Some(ids) = q.session.clone() {
+                // Resolve the members first; their nodes own the samples.
                 let mut lookup = q.clone();
-                lookup.id = Some(id);
+                lookup.id = Some(ids);
                 lookup.session = None;
+                lookup.limit = 500;
                 let req = PeerRequest {
                     name: "sessions".into(),
                     query: lookup,
                 };
                 let (parts, mut m) = run(req, scope.clone()).await.map_err(internal)?;
                 let pages: Vec<SessionsPage> = decode(parts, &mut m);
-                let Some(s) = pages.into_iter().flat_map(|p| p.items).next() else {
+                let members: Vec<_> = pages.into_iter().flat_map(|p| p.items).collect();
+                if members.is_empty() {
                     return Ok(
                         json!({ "resolution": "raw", "ts": [], "series": {}, "missing_nodes": m }),
                     );
-                };
-                q.from = s.started_at;
-                q.to = s.ended_at.unwrap_or(now).max(s.started_at + 1);
-                *scope = if s.node == node {
-                    Scope::Local
-                } else {
-                    Scope::Node(s.node.clone())
-                };
+                }
+                q.from = members.iter().map(|s| s.started_at).min().unwrap_or(q.from);
+                q.to = members
+                    .iter()
+                    .map(|s| s.ended_at.unwrap_or(now).max(s.started_at + 1))
+                    .max()
+                    .unwrap_or(q.to);
+                // A segment that failed over spans two nodes; asking only the
+                // last one would drop the samples before the handover.
+                let mut nodes: std::collections::BTreeSet<&str> =
+                    members.iter().map(|s| s.node.as_str()).collect();
+                if nodes.len() == 1 {
+                    let only = nodes.pop_first().unwrap_or_default();
+                    *scope = if only == node {
+                        Scope::Local
+                    } else {
+                        Scope::Node(only.to_string())
+                    };
+                }
                 missing_nodes.extend(m);
             }
             q.tier = Some(query::choose_tier(q.from, q.to, now, retention.raw_days).into());

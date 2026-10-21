@@ -397,10 +397,12 @@ export function spectrumColor(t) {
   return `rgb(${channel(0)} ${channel(1)} ${channel(2)})`;
 }
 
-// One 观众场次 per Bilibili live (`live:…`) or, when that id was never stored,
-// per YouTube/Twitch/Niconico broadcast (`src:…`). ffmpeg pushes that share
-// an id collapse. Totals from one live are not added together.
-export function audienceBroadcasts(sessions) {
+// One 场 per Bilibili live (`live:…`) or, when that id was never stored, per
+// YouTube/Twitch/Niconico broadcast (`src:…`). A 场 can switch source channel
+// mid-live, so it splits into 段: contiguous stretches of one channel in relay
+// order. A channel that comes back later starts a new 段 — that is the unit an
+// operator sees in the strip and pages through in 本场详情.
+export function broadcastGroups(sessions) {
   const groups = new Map();
   for (const session of Array.isArray(sessions) ? sessions : []) {
     if (!session || typeof session !== 'object') continue;
@@ -415,16 +417,53 @@ export function audienceBroadcasts(sessions) {
     // channel (priority switch), so name every channel it carried, once, in
     // relay order. The video ids would then read as if one channel played them.
     const channels = [...new Set(members.map(s => s.channel_name || s.channel_id).filter(Boolean))];
+    const spans = [];
+    for (const member of members) {
+      const last = spans[spans.length - 1];
+      if (last && last.platform === member.platform && last.channel_id === member.channel_id) {
+        last.members.push(member);
+      } else {
+        spans.push({ platform: member.platform, channel_id: member.channel_id, members: [member] });
+      }
+    }
     out.push({
       id,
-      sessionId: String(members[0].id),
       started_at: members[0].started_at,
+      ended_at: Math.max(...members.map(s => (isNum(s.ended_at) ? s.ended_at : 0))) || null,
       channels,
+      segments: spans.map(segmentView),
       bili: broadcastAudience(members),
     });
   }
   out.sort((a, b) => (b.started_at || 0) - (a.started_at || 0));
   return out;
+}
+
+// One 段: the sessions that relayed this channel back to back. Durations and
+// runs add up, because an interruption restarts ffmpeg inside the same 段.
+function segmentView(span, index) {
+  const { members } = span;
+  const named = members.find(s => s.channel_name) || members[0];
+  const ended = members.map(s => s.ended_at).filter(isNum);
+  const last = members[members.length - 1];
+  const total = key => members.reduce((n, s) => n + (Number(s[key]) || 0), 0);
+  return {
+    index,
+    platform: span.platform,
+    channelId: span.channel_id,
+    channelName: named?.channel_name || named?.channel_id || '',
+    members,
+    eids: members.map(s => String(s.id)).join(','),
+    started_at: members[0].started_at,
+    ended_at: ended.length === members.length ? Math.max(...ended) : null,
+    nodes: [...new Set(members.map(s => s.node).filter(Boolean))],
+    runs: total('runs'),
+    restarts: total('restarts'),
+    failures: total('failures'),
+    stuck: total('stuck'),
+    interruptions: members.length - 1,
+    end: sessionEnd(last),
+  };
 }
 
 function broadcastAudience(members) {
@@ -495,11 +534,6 @@ export function sessionEnd(session) {
   if (session?.end_cut_off === true) return { label: CUT_OFF_END_LABEL, tone: 'danger', detail };
   if (session?.end_warning_stop === true) return { label: WARNING_STOP_END_LABEL, tone: 'warn', detail };
   return { label: endReasonLabel(session?.end_reason), tone: '', detail: '' };
-}
-
-// ◀/▶ accessible name (W10): 「上一场：{标题}」, falling back to the bare word.
-export function neighbourLabel(word, title) {
-  return typeof title === 'string' && title.trim() ? `${word}：${title.trim()}` : word;
 }
 
 // ---------- 统计 follow-up (W15 / W16, string ids) ----------

@@ -72,7 +72,30 @@ function allSessions(now) {
       id++;
     }
   }
-  return out.reverse();
+  out.reverse();
+  splitSwitchedLive(out);
+  return out;
+}
+
+// One Bilibili live carried two channels (a priority switch mid-live), so
+// 本场详情 has a 场 with two 段 and a 中断 mark between them. The split keeps
+// both halves inside the original window: total relay time, failures and
+// counts are unchanged, only the channel of the second half differs.
+function splitSwitchedLive(sessions) {
+  // Newest finished relay with room for two halves, so the 场 lands inside the
+  // default 7-day range the 统计 view opens with.
+  const at = sessions.findIndex(s => s.ended_at && s.ended_at - s.started_at >= 2 * 3600);
+  if (at < 0) return;
+  const whole = sessions[at];
+  const mid = whole.started_at + Math.floor((whole.ended_at - whole.started_at) / 2);
+  const other = CHANNELS[(whole.n + 1) % CHANNELS.length];
+  const first = { ...whole, ended_at: mid, duration_secs: mid - whole.started_at, end_reason: 'source_ended', broadcast_id: `live:${whole.n}` };
+  const second = {
+    ...whole, id: sid(whole.node, 900 + whole.n), n: 900 + whole.n, eid: `local-${900 + whole.n}`,
+    ...other, title: `${other.channel_name} | 示例直播 ${whole.n}`, started_at: mid,
+    duration_secs: whole.ended_at - mid, end_reason: 'source_ended', broadcast_id: `live:${whole.n}`,
+  };
+  sessions.splice(at, 1, first, second);
 }
 
 // sessions[].bili as the backend stores it (design §9): StopLiveData totals go
@@ -168,13 +191,13 @@ function sessionsResponse(q, now, partial) {
   const missing_nodes = partial ? MISSING : [];
   if (q.id) {
     const i = all.findIndex(s => String(s.id) === q.id);
-    return { items: i < 0 ? [] : [all[i]], prev_id: all[i + 1]?.id ?? null, next_id: all[i - 1]?.id ?? null, next_cursor: null, missing_nodes };
+    return { items: i < 0 ? [] : [all[i]], next_cursor: null, missing_nodes };
   }
   let list = all.filter(s => overlaps(s, q.from, q.to));
   if (q.platform) list = list.filter(s => s.platform === q.platform);
   if (q.channel) list = list.filter(s => s.channel_id === q.channel);
   const paged = page(list, q, 50);
-  return paged && { ...paged, prev_id: null, next_id: null, missing_nodes };
+  return paged && { ...paged, missing_nodes };
 }
 
 function eventsResponse(q, now, partial) {
@@ -201,9 +224,13 @@ function eventsResponse(q, now, partial) {
 function statsResponse(q, now, partial) {
   let { from, to } = q;
   if (q.session) {
-    const s = allSessions(now).find(x => String(x.id) === q.session);
-    if (!s) return { resolution: 'raw', ts: [], series: {}, missing_nodes: partial ? MISSING : [] };
-    from = s.started_at; to = s.ended_at ?? now;
+    // `session` is a comma list: one 段 may be relayed by several sessions
+    // (interruptions, restarts), and its samples must cover the whole 段.
+    const ids = String(q.session).split(',');
+    const members = allSessions(now).filter(x => ids.includes(String(x.id)));
+    if (!members.length) return { resolution: 'raw', ts: [], series: {}, missing_nodes: partial ? MISSING : [] };
+    from = Math.min(...members.map(m => m.started_at));
+    to = Math.max(...members.map(m => m.ended_at ?? now));
   }
   const resolution = to - from <= 3 * DAY && from >= now - RETENTION.raw_days * DAY ? 'raw' : '1m';
   const points = Math.max(2, Math.min(2000, Math.trunc(Number(q.max_points)) || 1000));
@@ -277,7 +304,7 @@ export function historyRoute(path, params, mode, ok, nowSec = Math.floor(Date.no
   } : data);
   if (empty) {
     if (name === 'summary') return [200, ok(emptySummary())];
-    if (name === 'sessions' || name === 'events') return [200, ok({ items: [], next_cursor: null, prev_id: null, next_id: null, missing_nodes: [] })];
+    if (name === 'sessions' || name === 'events') return [200, ok({ items: [], next_cursor: null, missing_nodes: [] })];
     if (name === 'stats') return [200, ok({ resolution: 'raw', ts: [], series: {}, missing_nodes: [] })];
   }
   if (name === 'summary') return [200, ok(summary(q, nowSec, partial))];

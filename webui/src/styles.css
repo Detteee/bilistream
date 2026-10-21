@@ -3519,8 +3519,6 @@ html.light-theme .analytics {
 .analytics .analytics-chunk-error .panel__body { display: grid; gap: var(--sp-3); justify-items: start; }
 .analytics .analytics-reload-btn { min-height: 44px; }
 .analytics .analytics-module-retry { min-height: 44px; margin-top: var(--sp-2); }
-.analytics .analytics-detail-nav { display: flex; flex-wrap: wrap; gap: var(--sp-2); justify-content: space-between; }
-.analytics .analytics-detail-nav button { min-height: 44px; }
 .analytics .analytics-detail-dialog .analytics-stats { margin-block: var(--sp-3); }
 .analytics .analytics-detail-dialog {
   width: min(760px, calc(100vw - 2 * var(--sp-4)));
@@ -3546,36 +3544,40 @@ html.light-theme .analytics {
 }
 .analytics .analytics-detail-dialog .cluster-node-meta-value[data-tone="danger"] { color: var(--danger); }
 .analytics .analytics-detail-dialog .cluster-node-meta-value[data-tone="warn"] { color: var(--warn); }
-.analytics .analytics-detail-dialog .analytics-detail-nav { padding: 0 var(--sp-4) var(--sp-4); }
-/* 场/段 (10-22): 段 tabs sit between the dialog header and the body, so the
-   channel chain of one Bilibili live is visible without leaving the dialog. */
-.analytics .analytics-detail-segments {
+/* 场/段 (10-22): the dialog keeps the whole 场 on one page — 段 switches show
+   up as yellow 中断 marks inside the charts, not as a tab strip — so only the
+   header needs to stay on one line at 320px. */
+.analytics .analytics-detail-dialog .panel__head { flex-wrap: nowrap; align-items: center; }
+.analytics .analytics-detail-dialog .panel__title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The heading takes focus so the dialog is announced; a ring around a heading
+   reads as a text field, and the dialog itself already shows the context. */
+.analytics .analytics-detail-dialog .panel__title:focus { outline: none; }
+/* The ≤560 rule makes every analytics action row full-width; inside the dialog
+   that squeezes the title, so keep the close button on the head line. */
+.analytics .analytics-detail-dialog .panel__actions { width: auto; margin-left: auto; flex-wrap: nowrap; }
+.analytics .analytics-detail-charts { display: grid; gap: var(--sp-3); }
+/* 段 switches show as dashed warn lines in the plot; the caption carries the
+   one legend entry instead of a label on every line. */
+.analytics .analytics-chart figcaption.analytics-caption {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--sp-2);
-  padding: var(--sp-3) var(--sp-4) 0;
+  align-items: center;
+  gap: var(--sp-1) var(--sp-3);
 }
-.analytics .analytics-segment {
-  display: inline-flex;
-  align-items: baseline;
-  gap: var(--sp-2);
-  min-height: 44px;
-  padding: var(--sp-1) var(--sp-3);
-  border: 1px solid var(--line);
-  border-radius: var(--r-sm);
-  background: var(--surface-3);
+.analytics .analytics-chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-1) var(--sp-3);
+  margin-left: auto;
   color: var(--text-mute);
-  font: inherit;
-  cursor: pointer;
+  font-size: var(--fs-sm);
+  font-weight: 400;
 }
-.analytics .analytics-segment small { color: var(--text-mute); font-variant-numeric: tabular-nums; }
-.analytics .analytics-segment[data-active="true"] {
-  border-color: var(--brand);
-  background: color-mix(in srgb, var(--brand) 14%, var(--surface-3));
-  color: var(--text);
-}
-.analytics .analytics-segment:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
-.analytics .analytics-detail-charts { display: grid; gap: var(--sp-3); }
+.analytics .analytics-legend-item { display: inline-flex; align-items: center; gap: var(--sp-1); white-space: nowrap; }
+.analytics .analytics-legend-line { width: 14px; height: 2px; border-radius: 1px; }
+.analytics .analytics-legend-band { height: 8px; opacity: 0.45; }
+.analytics .analytics-legend-mark { width: 14px; height: 0; border-top: 2px dashed var(--warn); }
 .analytics .analytics-detail-open { min-height: 44px; }
 .warning-hold-row .info-row-view {
   flex-wrap: wrap;

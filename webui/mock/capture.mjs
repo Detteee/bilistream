@@ -461,6 +461,82 @@ async function main() {
       await evaluate("document.documentElement.classList.add('light-theme')");
       await evaluate("document.getElementById('tab-overview').click()");
     }
+    // 场/段: one Bilibili live carried two channels (history-fixtures
+    // splitSwitchedLive). 本场详情 shows that live as one 场 — one stitched
+    // chart pair with a yellow 中断 mark at the switch, no per-段 paging.
+    await evaluate("document.getElementById('tab-analytics').click()");
+    await waitFor("document.querySelectorAll('#analytics-aud-session option').length > 3");
+    const broadcastChecks = JSON.parse(await evaluate(`(async () => {
+      const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
+      const until = async (check, name) => { for (let n = 0; n < 240; n++) { if (check()) return; await pause(50); } throw new Error('analytics did not settle at ' + name); };
+      const select = document.getElementById('analytics-aud-session');
+      const dialog = document.getElementById('analytics-detail');
+      const body = document.getElementById('analytics-detail-body');
+      const rows = () => [...body.querySelectorAll('.cluster-node-meta-row')].map(r => r.textContent.replace(/\s+/g, ' ').trim());
+      const yellow = () => {
+        const canvas = body.querySelector('.analytics-uplot canvas');
+        if (!canvas) return -1;
+        const ctx = canvas.getContext('2d');
+        const { data } = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        let n = 0;
+        // The 中断 mark uses --warn (theme yellow/amber): red-dominant, with a
+        // clear gap to blue. Brand blue and teal lines fail that test.
+        for (let i = 0; i < data.length; i += 4) {
+          const [r, g, b, a] = [data[i], data[i + 1], data[i + 2], data[i + 3]];
+          if (a > 0 && r > 120 && r >= g && g > b && r - b > 40) n++;
+        }
+        return n;
+      };
+      const state = () => ({
+        open: dialog.open,
+        charts: body.querySelectorAll('.analytics-uplot').length,
+        rows: rows(),
+        marks: yellow(),
+        tabStrip: !!document.getElementById('analytics-detail-segments'),
+        paging: !!document.getElementById('analytics-detail-prev') || !!document.getElementById('analytics-detail-next'),
+      });
+      const pick = text => {
+        const option = [...select.options].find(o => o.textContent.includes(text));
+        select.value = option.value;
+        select.dispatchEvent(new Event('change', { bubbles: true }));
+      };
+      const open = () => document.getElementById('analytics-aud-detail').click();
+      // A 场 that carried one channel has no 中断 to mark.
+      pick('示例频道 003');
+      open();
+      await until(() => dialog.open && rows().length > 0, 'single open');
+      await until(() => body.querySelectorAll('.analytics-uplot').length === 2, 'single charts');
+      const alone = state();
+      document.getElementById('analytics-detail-close').click();
+      // A 场 that switched channel stays one page: one chart pair, marked once.
+      pick('示例频道 002 示例频道 001');
+      open();
+      await until(() => dialog.open && rows().length > 0, 'broadcast open');
+      await until(() => body.querySelectorAll('.analytics-uplot').length === 2, 'broadcast charts');
+      const both = state();
+      // Both 段 must arrive from one stitched query, not one request per 段.
+      const stats = performance.getEntriesByType('resource')
+        .map(entry => decodeURIComponent(entry.name))
+        .filter(url => url.includes('/api/history/stats'));
+      return JSON.stringify({ alone, both, stats });
+    })()`));
+    assert.equal(broadcastChecks.alone.open, true);
+    assert.equal(broadcastChecks.alone.charts, 2, 'both charts mount for a single-段 场');
+    assert.equal(broadcastChecks.alone.tabStrip, false, 'the 段 tab strip is gone');
+    assert.equal(broadcastChecks.alone.paging, false, 'the 段 paging buttons are gone');
+    assert.equal(broadcastChecks.alone.marks, 0, 'a 场 without a switch draws no 中断 mark');
+    assert.equal(broadcastChecks.both.charts, 2, 'a switched 场 still renders one chart pair');
+    assert.ok(broadcastChecks.both.rows.some(row => row.includes('示例频道 002 → 示例频道 001')), `the 频道 row chains every 段: ${broadcastChecks.both.rows[0]}`);
+    assert.ok(broadcastChecks.both.rows.some(row => row.includes('2 段 · 1 次中断')), `the 段 count rides on the 频道 row: ${broadcastChecks.both.rows[0]}`);
+    assert.ok(broadcastChecks.both.marks > 20, `the 中断 mark draws on the canvas: ${broadcastChecks.both.marks} px`);
+    assert.ok(broadcastChecks.stats.some(url => url.includes('session=') && url.includes(',')), 'both 段 arrive from one stitched stats query');
+    if (process.argv[2]) {
+      await capture(join(captureDir, 'analytics-detail.png'));
+      await command('browsingContext.setViewport', { context, viewport: { width: 390, height: 844 }, devicePixelRatio: 1 });
+      await capture(join(captureDir, 'analytics-detail-mobile.png'));
+      await command('browsingContext.setViewport', { context, viewport: { width: 1440, height: 1320 }, devicePixelRatio: 1 });
+      await evaluate("document.getElementById('analytics-detail-close').click(); document.getElementById('tab-overview').click()");
+    }
     await command('browsingContext.setViewport', { context, viewport: { width: 1440, height: 1320 }, devicePixelRatio: 1 });
     // A same-version package must not reload the old page during installation.
     const updateChecks = JSON.parse(await evaluate(`(async () => {

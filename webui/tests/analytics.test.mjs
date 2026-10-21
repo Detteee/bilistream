@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import {
   DASH, stopLiveDataToBili, biliTotals, aggregateAudience, sessionDuration, expectedResolution, customRange,
-  missingNodeText, streamHeat, spectrumColor, audienceBroadcasts, biliStateLabel, rangeAudience, watchedSourceLabel, orDash, STOP_LIVE_DATA_FIELDS,
+  missingNodeText, streamHeat, spectrumColor, broadcastGroups, biliStateLabel, rangeAudience, watchedSourceLabel, orDash, STOP_LIVE_DATA_FIELDS,
   cleanNotice,
 } from '../src/js/analytics-format.js';
 import {
@@ -156,7 +156,7 @@ test('calendar heat is a 0–24 hour spectrum, not a relative more/less step', (
 });
 
 test('audience sessions group ffmpeg pushes by Bilibili live or source id', () => {
-  const broadcasts = audienceBroadcasts([
+  const broadcasts = broadcastGroups([
     { id: 'a', broadcast_id: 'live:aa', started_at: 10, channel_name: '频道', platform: 'YT', source_id: 'vid1', bili: { state: 'ok', watched: 100, danmu: 4, add_fans: 1, online_peak: 20 } },
     { id: 'b', broadcast_id: 'live:aa', started_at: 50, channel_name: '频道', platform: 'YT', source_id: 'vid1', bili: { state: 'ok', watched: 100, danmu: 4, add_fans: 1, online_peak: 40 } },
     { id: 'c', broadcast_id: 'src:TW:99', started_at: 80, channel_name: '其他', platform: 'TW', source_id: '99', bili: { state: 'pending', online_peak: 5, watched: 3, watched_source: 'sample' } },
@@ -168,7 +168,8 @@ test('audience sessions group ffmpeg pushes by Bilibili live or source id', () =
   assert.equal(broadcasts[0].bili.watched, 7);
   assert.equal(broadcasts[0].bili.danmu, null);
   assert.equal(broadcasts[1].id, 'live:aa');
-  assert.equal(broadcasts[1].sessionId, 'a');
+  assert.equal(broadcasts[1].segments.length, 1, 'one channel, one 段');
+  assert.equal(broadcasts[1].segments[0].eids, 'a,b', 'both sessions chart together');
   assert.equal(broadcasts[1].bili.watched, 100);
   assert.equal(broadcasts[1].bili.online_peak, 40);
   assert.deepEqual(broadcasts[1].channels, ['频道']);
@@ -178,14 +179,17 @@ test('a broadcast that switched channel names every channel it carried', () => {
   // Priority switch mid-live: the B站 live id stays, the source channel and
   // video change. The option label must name both channels, not one channel
   // with both video ids.
-  const [b] = audienceBroadcasts([
+  const [b] = broadcastGroups([
     { id: 'a', broadcast_id: 'live:aa', started_at: 10, channel_name: '频道甲', channel_id: 'UC1', source_id: 'vid1', bili: { state: 'ok', watched: 5 } },
     { id: 'b', broadcast_id: 'live:aa', started_at: 60, channel_name: '频道乙', channel_id: 'UC2', source_id: 'vid2', bili: { state: 'ok', watched: 9 } },
     { id: 'c', broadcast_id: 'live:aa', started_at: 90, channel_name: '频道甲', channel_id: 'UC1', source_id: 'vid3', bili: { state: 'ok', watched: 9 } },
   ]);
   assert.deepEqual(b.channels, ['频道甲', '频道乙'], 'each channel once, in relay order');
   assert.equal(b.id, 'live:aa');
-  const [nameless] = audienceBroadcasts([
+  assert.deepEqual(b.segments.map(s => s.channelName), ['频道甲', '频道乙', '频道甲'],
+    'A→B→A is three 段, so 场 and 段 never mean the same thing');
+  assert.deepEqual(b.segments.map(s => s.eids), ['a', 'b', 'c']);
+  const [nameless] = broadcastGroups([
     { id: 'x', broadcast_id: 'live:bb', started_at: 5, channel_name: '', channel_id: 'UC9', bili: { state: 'none' } },
   ]);
   assert.deepEqual(nameless.channels, ['UC9'], 'a nameless session falls back to its channel id');
@@ -315,7 +319,7 @@ test('admin markup: tabs are 总览…统计 then 通知, each with its view and
 });
 
 // ---------- design review rev 2 ----------
-import { endReasonLabel, neighbourLabel } from '../src/js/analytics-format.js';
+import { endReasonLabel } from '../src/js/analytics-format.js';
 
 test('B4: 结束原因 maps codes to zh-CN; unknown → 其他, never the raw code', async () => {
   assert.equal(endReasonLabel('source_ended'), '正常结束（源已下播）');
@@ -328,7 +332,8 @@ test('B4: 结束原因 maps codes to zh-CN; unknown → 其他, never the raw co
   for (const raw of ['failed', 'weird_code', 'toString', '__proto__', 'SOURCE_ENDED']) assert.equal(endReasonLabel(raw), '其他');
   assert.equal(endReasonLabel(null), DASH, 'still open');
   const view = await readFile(new URL('../src/js/analytics.js', import.meta.url), 'utf8');
-  assert.match(view, /const end = sessionEnd\(s\);/);
+  assert.match(view, /const last = segments\[segments\.length - 1\];/);
+  assert.match(view, /const end = last\.end;/);
   assert.match(view, /\['结束原因', end\.label, end\.detail, end\.tone\]/);
   assert.match(view, /el\('dt', 'cluster-node-meta-label', label\)/);
   assert.match(view, /el\('dd', 'cluster-node-meta-value', value\)/);
@@ -339,14 +344,23 @@ test('B4: 结束原因 maps codes to zh-CN; unknown → 其他, never the raw co
   assert.match(css, /\.analytics-detail-dialog \.cluster-node-meta-value small \{[^}]*color: var\(--text-mute\);/);
 });
 
-test('B3: ◀/▶ aria-labels carry the neighbour title', async () => {
-  assert.equal(neighbourLabel('上一场', '示例直播 3'), '上一场：示例直播 3');
-  assert.equal(neighbourLabel('下一场', ' 示例直播 5 '), '下一场：示例直播 5');
-  assert.equal(neighbourLabel('上一场', undefined), '上一场');
-  assert.equal(neighbourLabel('下一场', ''), '下一场');
+test('B3: 段 switches are 中断 marks in one 场 chart, not paging', async () => {
   const view = await readFile(new URL('../src/js/analytics.js', import.meta.url), 'utf8');
-  assert.match(view, /neighbourLabel\('上一场', titleOf\(res\.prev_id\)\)/);
-  assert.match(view, /neighbourLabel\('下一场', titleOf\(res\.next_id\)\)/);
+  const html = await readFile(new URL('../src/index.html', import.meta.url), 'utf8');
+  const format = await readFile(new URL('../src/js/analytics-format.js', import.meta.url), 'utf8');
+  // One 场, one page: the switch shows as a dashed warn line inside the plot.
+  assert.match(view, /function segmentMarks\(group\) \{/);
+  assert.match(view, /return group\.segments\.slice\(1\)\.map\(seg => seg\.started_at\)/);
+  assert.match(view, /hooks: \{ draw: \[u => drawInterrupts\(u, marks\)\] \}/);
+  assert.match(view, /ctx\.setLineDash\(\[4, 3\]\)/);
+  assert.match(view, /cssVar\('--warn'\)/);
+  // The word 中断 is a legend entry, never painted per line.
+  assert.doesNotMatch(view, /fillText\('中断'/);
+  assert.match(view, /el\('span', 'analytics-legend-mark'\), el\('span', '', '中断'\)/);
+  // Paging and the tab strip are gone for good.
+  assert.doesNotMatch(view, /analytics-detail-prev|analytics-detail-next|analytics-segment|renderSegmentTabs/);
+  assert.doesNotMatch(html, /analytics-detail-prev|analytics-detail-next|analytics-detail-segments/);
+  assert.doesNotMatch(format, /neighbourLabel/);
 });
 
 test('B1: 查看本场详情 button beside the 观众 select opens the selected session', async () => {
@@ -355,7 +369,7 @@ test('B1: 查看本场详情 button beside the 观众 select opens the selected 
   const css = await readFile(new URL('../src/styles.css', import.meta.url), 'utf8');
   assert.match(css, /\.analytics \.analytics-detail-open \{ min-height: 44px; \}/);
   const view = await readFile(new URL('../src/js/analytics.js', import.meta.url), 'utf8');
-  assert.match(view, /\$\('analytics-aud-detail'\)\.addEventListener\('click', \(\) => \{\s*const broadcast = selectedBroadcast\(\);\s*if \(broadcast\) openDetail\(broadcast\.sessionId\);/);
+  assert.match(view, /\$\('analytics-aud-detail'\)\.addEventListener\('click', \(\) => \{\s*const broadcast = selectedBroadcast\(\);\s*if \(broadcast\) openBroadcast\(broadcast, 0\);/);
 });
 
 test('B2: 查看日志 and dialog 关闭 get 44px targets at ≤560px', async () => {
