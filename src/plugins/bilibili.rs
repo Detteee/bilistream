@@ -539,7 +539,7 @@ async fn bili_start_live_inner(cfg: &mut Config, area_v2: u64) -> Result<(), Box
                     // Save the updated config through the shared atomic path.
                     save_config(cfg).await?;
 
-                    // tracing::info!("Updated RTMP information in config");
+                    // tracing::info!("已更新配置中的 RTMP 推流信息");
                 }
             }
         }

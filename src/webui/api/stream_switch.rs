@@ -125,11 +125,14 @@ pub async fn switch_stream(
     let mut cfg = match load_config().await {
         Ok(c) => c,
         Err(e) => {
-            tracing::error!("Failed to load config: {}", e);
+            tracing::error!(
+                "配置读取失败：{}",
+                crate::logging::safe_diagnostic(&e.to_string())
+            );
             return Ok(ApiResponse {
                 success: false,
                 data: None,
-                message: Some(format!("Failed to load config: {}", e)),
+                message: Some(format!("配置读取失败：{}", e)),
             });
         }
     };
@@ -238,11 +241,14 @@ pub async fn switch_stream(
         }
 
         if let Err(e) = crate::config::save_config(&mut cfg).await {
-            tracing::error!("Failed to save config: {}", e);
+            tracing::error!(
+                "监听目标配置保存失败：{}",
+                crate::logging::safe_diagnostic(&e.to_string())
+            );
             return Ok(ApiResponse {
                 success: false,
                 data: None,
-                message: Some(format!("Failed to save config: {}", e)),
+                message: Some(format!("配置保存失败：{}", e)),
             });
         }
 
@@ -333,11 +339,14 @@ pub async fn switch_stream(
         }
 
         if let Err(e) = crate::config::save_config(&mut cfg).await {
-            tracing::error!("Failed to save config: {}", e);
+            tracing::error!(
+                "监听目标配置保存失败：{}",
+                crate::logging::safe_diagnostic(&e.to_string())
+            );
             return Ok(ApiResponse {
                 success: false,
                 data: None,
-                message: Some(format!("Failed to save config: {}", e)),
+                message: Some(format!("配置保存失败：{}", e)),
             });
         }
 
@@ -412,11 +421,14 @@ pub async fn switch_stream(
 
     // Save config as JSON
     if let Err(e) = crate::config::save_config(&mut cfg).await {
-        tracing::error!("Failed to save config: {}", e);
+        tracing::error!(
+            "监听目标配置保存失败：{}",
+            crate::logging::safe_diagnostic(&e.to_string())
+        );
         return Ok(ApiResponse {
             success: false,
             data: None,
-            message: Some(format!("Failed to save config: {}", e)),
+            message: Some(format!("配置保存失败：{}", e)),
         });
     }
 

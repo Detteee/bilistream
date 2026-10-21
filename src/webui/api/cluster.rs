@@ -38,18 +38,24 @@ pub(crate) fn schedule_active_monitor_state_sync_after_toggle_change(cfg: &Confi
         let cfg = match load_config().await {
             Ok(cfg) => cfg,
             Err(e) => {
-                tracing::warn!("Cluster monitor toggle background sync skipped: {}", e);
+                tracing::warn!(
+                    "监听开关未能同步到集群，配置读取失败：{}",
+                    crate::logging::safe_diagnostic(&e.to_string())
+                );
                 return;
             }
         };
 
         match push_active_monitor_state_to_peers(&cfg).await {
             Ok(count) if count > 0 => {
-                tracing::info!("Cluster monitor toggles synced to {} peer nodes", count);
+                tracing::info!("监听开关已同步到 {} 个节点", count);
             }
             Ok(_) => {}
             Err(e) => {
-                tracing::warn!("Cluster monitor toggle background sync failed: {}", e);
+                tracing::warn!(
+                    "监听开关同步到集群失败：{}",
+                    crate::logging::safe_diagnostic(&e.to_string())
+                );
             }
         }
     });
@@ -265,7 +271,10 @@ pub async fn cluster_set_auto_failover(
 
     if should_propagate && cfg.cluster.enabled {
         if let Err(e) = crate::cluster::push_cluster_settings_to_peers(&cfg).await {
-            tracing::warn!("Cluster auto-failover sync failed: {}", e);
+            tracing::warn!(
+                "集群自动交接设置同步失败：{}",
+                crate::logging::safe_diagnostic(&e.to_string())
+            );
         }
     }
 
@@ -703,7 +712,10 @@ pub async fn cluster_sync_config(
     apply_monitored_config(payload.monitored_config)
         .await
         .map_err(|e| {
-            tracing::error!("Cluster config sync failed: {}", e);
+            tracing::error!(
+                "集群配置同步失败：{}",
+                crate::logging::safe_diagnostic(&e.to_string())
+            );
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
 

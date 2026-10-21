@@ -197,7 +197,7 @@ pub fn get_puuid(channel_name: &str) -> Result<String, Box<dyn std::error::Error
                 .unwrap_or_default());
         }
     }
-    tracing::error!("PUUID not found for channel: {}", channel_name);
+    tracing::error!("未取到频道 {} 的 PUUID", safe_text(channel_name, 64));
     Ok(String::new())
 }
 

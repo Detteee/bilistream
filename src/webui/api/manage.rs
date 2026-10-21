@@ -92,9 +92,9 @@ pub(crate) fn schedule_managed_document_sync_after_change(file_name: &str) -> St
             Ok(cfg) => cfg,
             Err(e) => {
                 tracing::warn!(
-                    "Skipped cluster sync after {} change because config failed to load: {}",
+                    "{} 变更后未能同步集群，配置读取失败：{}",
                     file_name,
-                    e
+                    crate::logging::safe_diagnostic(&e.to_string())
                 );
                 return;
             }
@@ -103,7 +103,7 @@ pub(crate) fn schedule_managed_document_sync_after_change(file_name: &str) -> St
         refresh_status_cache_config_from(&cfg);
         let sync_message = sync_monitored_config_after_change(&cfg).await;
         if !sync_message.is_empty() {
-            tracing::info!("{} change{}", file_name, sync_message);
+            tracing::info!("{} 变更{}", file_name, sync_message);
         }
     });
 

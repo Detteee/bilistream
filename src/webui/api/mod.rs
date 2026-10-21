@@ -76,7 +76,10 @@ fn config_save_status(error: Box<dyn std::error::Error>) -> StatusCode {
     {
         StatusCode::CONFLICT
     } else {
-        tracing::error!("Configuration save failed: {error}");
+        tracing::error!(
+            "配置保存失败：{}",
+            crate::logging::safe_diagnostic(&error.to_string())
+        );
         StatusCode::INTERNAL_SERVER_ERROR
     }
 }

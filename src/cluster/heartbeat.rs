@@ -755,7 +755,7 @@ pub(crate) async fn send_heartbeats(cfg: &Config, local: ClusterNodeSnapshot) {
     let body = match encode_heartbeat(&request) {
         Ok(bytes) => bytes,
         Err(error) => {
-            tracing::warn!("Could not encode local cluster heartbeat: {error}");
+            tracing::warn!("集群心跳编码失败，本次跳过：{error}");
             return;
         }
     };

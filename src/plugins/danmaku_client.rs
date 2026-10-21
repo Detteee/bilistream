@@ -1627,7 +1627,7 @@ pub async fn run_native_danmaku_client(
         };
         match result {
             Ok(_) => {
-                info!("Danmaku client disconnected normally");
+                info!("弹幕连接正常结束，准备重连");
                 reconnect_attempts = 0; // Reset counter on successful connection
 
                 // Check if this was an intentional stop
@@ -1637,7 +1637,7 @@ pub async fn run_native_danmaku_client(
                 }
 
                 // Otherwise it was unexpected - try to reconnect
-                warn!("Unexpected disconnection, attempting to reconnect...");
+                warn!("弹幕连接意外断开，2 秒后重连");
                 tokio::select! {
                     _ = crate::plugins::danmaku::wait_danmaku_stop_signal() => {
                         info!("收到停止信号，退出弹幕客户端");
@@ -1649,18 +1649,19 @@ pub async fn run_native_danmaku_client(
             Err(e) => {
                 reconnect_attempts += 1;
                 error!(
-                    "Danmaku client error (attempt {}): {}",
-                    reconnect_attempts, e
+                    "弹幕连接异常（第 {} 次）：{}",
+                    reconnect_attempts,
+                    safe_diagnostic(&e.to_string())
                 );
 
                 if reconnect_attempts >= max_reconnect_attempts {
-                    error!("Max reconnection attempts reached, giving up");
+                    error!("弹幕重连次数已达上限，放弃本场连接");
                     break;
                 }
 
                 // Exponential backoff with jitter
                 let delay = std::cmp::min(5 * reconnect_attempts, 60);
-                info!("Reconnecting in {} seconds...", delay);
+                info!("{} 秒后重连弹幕", delay);
                 tokio::select! {
                     _ = crate::plugins::danmaku::wait_danmaku_stop_signal() => {
                         info!("收到停止信号，退出弹幕客户端");

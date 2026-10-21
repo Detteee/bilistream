@@ -1897,7 +1897,7 @@ fn missing_live_key_logs_no_value_and_session_totals_stay_null() {
         super::note_live_key_unavailable("getinfo_failed");
     });
     let text = logs.text();
-    assert_eq!(text.matches("live_key unavailable").count(), 3, "{text}");
+    assert_eq!(text.matches("未取到 live_key").count(), 3, "{text}");
     assert!(!text.contains("redacted") && !text.contains("up_session") && !text.contains("{"));
     // The session keeps no key and has NULL StopLiveData totals.
     let (mut w, _) = writer("no-key-null");

@@ -276,7 +276,7 @@ fn holodex_channel_image(url: &str) -> bool {
 
 fn with_holodex_images<T>(f: impl FnOnce(&mut Option<Instant>) -> T) -> T {
     let mut guard = HOLODEX_IMAGES_DOWN_UNTIL.lock().unwrap_or_else(|poisoned| {
-        tracing::warn!("Recovering poisoned Holodex channel-image outage flag");
+        tracing::warn!("检测到 Poisoned 锁，已强制恢复 Holodex 封面故障标记");
         poisoned.into_inner()
     });
     f(&mut guard)

@@ -255,7 +255,10 @@ pub async fn restart_server_process() -> Result<ApiResponse<()>, StatusCode> {
     let restart_command = match crate::webui::restart::restart_command_line() {
         Ok(command) => command,
         Err(e) => {
-            tracing::error!("Failed to build server restart command: {}", e);
+            tracing::error!(
+                "重启命令生成失败：{}",
+                crate::logging::safe_diagnostic(&e.to_string())
+            );
             return Ok(ApiResponse {
                 success: false,
                 data: None,
@@ -269,7 +272,10 @@ pub async fn restart_server_process() -> Result<ApiResponse<()>, StatusCode> {
         restart_command.as_str(),
         std::process::id(),
     ) {
-        tracing::error!("Failed to schedule screen restart: {}", e);
+        tracing::error!(
+            "screen 重启命令发送失败：{}",
+            crate::logging::safe_diagnostic(&e.to_string())
+        );
         return Ok(ApiResponse {
             success: false,
             data: None,

@@ -30,7 +30,7 @@ static HANDOFF_MEMBERSHIP_STORE: Mutex<Option<Arc<crate::storage::Store>>> = Mut
 #[cfg(test)]
 pub(crate) fn set_handoff_membership_store(store: Option<Arc<crate::storage::Store>>) {
     *HANDOFF_MEMBERSHIP_STORE.lock().unwrap_or_else(|poisoned| {
-        tracing::warn!("Recovering poisoned handoff membership store lock");
+        tracing::warn!("检测到 Poisoned 锁，已强制恢复交接成员表");
         poisoned.into_inner()
     }) = store;
 }
@@ -219,7 +219,7 @@ pub async fn sync_monitored_config_after_change(cfg: &Config) -> String {
     match push_monitored_config_to_peers(cfg).await {
         Ok(count) => format!("；已同步到 {} 个节点", count),
         Err(e) => {
-            tracing::warn!("Cluster monitored config auto-sync failed: {}", e);
+            tracing::warn!("监听目标未能同步到集群：{}", safe_diagnostic(&e));
             format!("；集群同步失败：{}", e)
         }
     }
@@ -619,7 +619,7 @@ async fn finalize_cluster_node_switch_inner_observed(
                 );
             } else {
                 tracing::warn!(
-                    "Failed to export active source config from {}; using local synced config and cached active state: {}",
+                    "无法导出活跃节点 {} 的配置，改用本地同步配置与缓存状态：{}",
                     safe_text(source_node_id, 64),
                     error
                 );
@@ -1014,7 +1014,7 @@ async fn apply_node_mode_with_retry_classified(
                 if observer.is_some() {
                     observe_handoff(observer, HandoffProgress::FailedRequest(e.clone()));
                     tracing::debug!(
-                        "Cluster node mode transfer {} attempt {}/{} failed for {}: {}",
+                        "集群节点模式交接失败（{} 第 {}/{} 次）：{}，{}",
                         phase,
                         attempt,
                         max_attempts,
@@ -1023,7 +1023,7 @@ async fn apply_node_mode_with_retry_classified(
                     );
                 } else {
                     tracing::warn!(
-                        "Cluster node mode transfer {} attempt {}/{} failed for {}: {}",
+                        "集群节点模式交接失败（{} 第 {}/{} 次）：{}，{}",
                         phase,
                         attempt,
                         max_attempts,
@@ -1310,14 +1310,10 @@ pub(crate) async fn adopt_auto_failover_from_peer_view(
 
     updated.cluster.auto_failover = peer_auto_failover;
     if let Err(e) = save_config(&mut updated).await {
-        tracing::warn!(
-            "Failed to adopt cluster auto_failover from peer {}: {}",
-            peer_node_id,
-            e
-        );
+        tracing::warn!("无法采纳节点 {} 的自动交接设置：{}", peer_node_id, e);
     } else {
         tracing::info!(
-            "Adopted cluster auto_failover={} from active owner {}",
+            "已采纳活跃节点 {} 的自动交接设置：auto_failover={}",
             peer_auto_failover,
             peer_node_id
         );

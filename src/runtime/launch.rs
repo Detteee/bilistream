@@ -333,12 +333,18 @@ impl BackendRuntime {
             if let Err(error) =
                 bilistream::webui::server::serve_prepared(listener, state, auth).await
             {
-                tracing::error!("Web UI server error: {error}");
+                tracing::error!(
+                    "Web UI 服务异常退出：{}",
+                    bilistream::logging::safe_diagnostic(&error.to_string())
+                );
             }
         });
         let dependencies = tokio::spawn(async {
             if let Err(error) = bilistream::deps::ensure_all_dependencies().await {
-                tracing::error!("Dependency setup failed: {error}");
+                tracing::error!(
+                    "依赖安装失败：{}",
+                    bilistream::logging::safe_diagnostic(&error.to_string())
+                );
             }
         });
         Ok(Self {
@@ -355,7 +361,10 @@ impl BackendRuntime {
         self.dependencies.abort();
         if let Some(monitor) = self.monitor.take() {
             if let Err(error) = tokio::task::spawn_blocking(move || monitor.join()).await {
-                tracing::error!("Monitor shutdown failed: {error}");
+                tracing::error!(
+                    "监控线程退出失败：{}",
+                    bilistream::logging::safe_diagnostic(&error.to_string())
+                );
             }
         }
         self.server.abort();

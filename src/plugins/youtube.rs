@@ -811,7 +811,7 @@ async fn get_youtube_status_with(
                 (view, status)
             }
             Err(e) => {
-                tracing::error!("Holodex API failed: {}, using yt-dlp", e);
+                tracing::error!("Holodex 接口失败，改用 yt-dlp：{e}");
                 (IndexView::Unavailable, YoutubeChannelStatus::default())
             }
         },
@@ -1091,8 +1091,7 @@ async fn get_status_with_yt_dlp(
         });
     } else if let Some((m3u8_url, has_multiple)) = first_m3u8_url_from_stdout(&stdout) {
         if has_multiple {
-            tracing::warn!("Multiple m3u8 URLs found (likely separate video and audio streams)");
-            tracing::warn!("Using first URL: {}", m3u8_url);
+            tracing::warn!("发现多个 m3u8 地址，可能是分离的音视频流；改用第一个");
         }
         return Ok(SourceStatus {
             is_live: true,
@@ -1154,7 +1153,7 @@ pub async fn get_youtube_live_title(channel_id: &str) -> Result<Option<String>, 
                 Ok(Some(title)) => return Ok(Some(title)),
                 Ok(None) => {}
                 Err(_) => {
-                    tracing::warn!("Holodex API failed, falling back to yt-dlp");
+                    tracing::warn!("Holodex 标题查询失败，改用 yt-dlp");
                 }
             }
         }

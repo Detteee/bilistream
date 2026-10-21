@@ -16,7 +16,7 @@ pub(crate) fn cluster_heartbeat_timeout(cfg: &Config) -> Duration {
 
 pub(crate) fn recover_read_lock<'a, T>(lock: &'a RwLock<T>, name: &str) -> RwLockReadGuard<'a, T> {
     lock.read().unwrap_or_else(|poisoned| {
-        tracing::warn!("Recovering poisoned {name} read lock");
+        tracing::warn!("检测到 Poisoned 读锁，已强制恢复 ({name})");
         poisoned.into_inner()
     })
 }
@@ -26,7 +26,7 @@ pub(crate) fn recover_write_lock<'a, T>(
     name: &str,
 ) -> RwLockWriteGuard<'a, T> {
     lock.write().unwrap_or_else(|poisoned| {
-        tracing::warn!("Recovering poisoned {name} write lock");
+        tracing::warn!("检测到 Poisoned 写锁，已强制恢复 ({name})");
         poisoned.into_inner()
     })
 }

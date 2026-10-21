@@ -64,7 +64,10 @@ pub async fn auth_status() -> Json<serde_json::Value> {
                     }
                 }));
             }
-            tracing::warn!("Holodex JWT sync skipped: {}", e);
+            tracing::warn!(
+                "Holodex 登录状态同步失败，已跳过：{}",
+                crate::logging::safe_diagnostic(&e.to_string())
+            );
             (jwt, false)
         }
     };

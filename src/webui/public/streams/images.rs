@@ -65,7 +65,7 @@ static CDN_AVATARS: Mutex<Option<CdnAvatars>> = Mutex::new(None);
 
 fn with_cdn_avatars<T>(f: impl FnOnce(&mut CdnAvatars) -> T) -> T {
     let mut guard = CDN_AVATARS.lock().unwrap_or_else(|poisoned| {
-        tracing::warn!("Recovering poisoned YouTube channel-avatar cache");
+        tracing::warn!("检测到 Poisoned 锁，已强制恢复 YouTube 频道头像缓存");
         poisoned.into_inner()
     });
     f(guard.get_or_insert_with(|| CdnAvatars {

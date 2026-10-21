@@ -1558,7 +1558,7 @@ fn snapshot_bitrate_history() -> (Vec<f32>, Vec<f32>) {
     let display = match FFMPEG_STATS_DISPLAY.lock() {
         Ok(display) => display,
         Err(poisoned) => {
-            tracing::warn!("Recovering poisoned ffmpeg stats display");
+            tracing::warn!("检测到 Poisoned 锁，已强制恢复 ffmpeg 统计显示");
             poisoned.into_inner()
         }
     };

@@ -385,7 +385,7 @@ fn executable_parent_dir(exe: &Path) -> Result<PathBuf, Box<dyn Error>> {
 
 fn recover_lock<T>(lock: LockResult<T>, name: &str) -> T {
     lock.unwrap_or_else(|poisoned| {
-        tracing::warn!("Recovering poisoned {}", name);
+        tracing::warn!("检测到 Poisoned 锁，已强制恢复 ({})", name);
         poisoned.into_inner()
     })
 }

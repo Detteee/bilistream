@@ -69,7 +69,7 @@ impl Shared {
 /// a warning for these process-wide maps.
 fn lock_or_recover<'a, T>(lock: &'a Mutex<T>, name: &str) -> std::sync::MutexGuard<'a, T> {
     lock.lock().unwrap_or_else(|poisoned| {
-        tracing::warn!("Recovering poisoned {name}");
+        tracing::warn!("检测到 Poisoned 锁，已强制恢复 ({name})");
         poisoned.into_inner()
     })
 }

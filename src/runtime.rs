@@ -99,7 +99,7 @@ fn remember_banned_notice(
 
 fn recover_mutex_lock<'a, T>(lock: &'a Mutex<T>, name: &str) -> MutexGuard<'a, T> {
     lock.lock().unwrap_or_else(|poisoned| {
-        tracing::warn!("Recovering poisoned {name} mutex");
+        tracing::warn!("检测到 Poisoned 锁，已强制恢复 ({name})");
         poisoned.into_inner()
     })
 }
@@ -1280,7 +1280,10 @@ async fn skip_stream_if_previously_warned(
             )
             .await
             {
-                tracing::error!("Failed to send danmaku: {}", e);
+                tracing::error!(
+                    "警告跳过提示弹幕发送失败：{}",
+                    safe_diagnostic(&e.to_string())
+                );
             }
         }
     }
@@ -1345,7 +1348,10 @@ async fn skip_stream_if_banned_keyword(
         )
         .await
         {
-            tracing::error!("Failed to send danmaku: {}", e);
+            tracing::error!(
+                "违禁词提示弹幕发送失败：{}",
+                safe_diagnostic(&e.to_string())
+            );
         }
         if cfg.bililive.enable_danmaku_command {
             if !is_danmaku_commands_enabled() {
@@ -1353,7 +1359,7 @@ async fn skip_stream_if_banned_keyword(
             }
             tokio::time::sleep(Duration::from_secs(2)).await;
             if let Err(e) = send_danmaku(cfg, "可使用弹幕指令进行换台").await {
-                tracing::error!("Failed to send danmaku: {}", e);
+                tracing::error!("换台提示弹幕发送失败：{}", safe_diagnostic(&e.to_string()));
             }
         }
     }
@@ -2271,7 +2277,7 @@ async fn announce_stream_end(
     };
     if let Err(e) = send_result {
         if bili_live {
-            tracing::error!("Failed to send danmaku: {}", e);
+            tracing::error!("下播弹幕发送失败：{}", safe_diagnostic(&e.to_string()));
         } else {
             // Best effort: the room is already offline.
             tracing::info!("{session_log} B站房间已停播，结束弹幕未发送：{}", e);
@@ -3167,7 +3173,10 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                         )
                         .await
                         {
-                            tracing::error!("Failed to send danmaku: {}", e);
+                            tracing::error!(
+                                "流中断提示弹幕发送失败：{}",
+                                safe_diagnostic(&e.to_string())
+                            );
                         }
                     }
                 }
@@ -3326,7 +3335,7 @@ async fn monitor_priority_channel_background(
             Ok(cfg) => cfg,
             Err(error) => {
                 tracing::warn!(
-                    "{context} 优先频道监控配置加载失败；{}",
+                    "{context} 优先频道监控配置加载失败：{}",
                     safe_diagnostic(&error)
                 );
                 tokio::time::sleep(Duration::from_secs(10)).await;
@@ -3848,7 +3857,7 @@ async fn handle_collisions(
                 )
                 .await
                 {
-                    tracing::error!("Failed to send danmaku: {}", e);
+                    tracing::error!("撞车提示弹幕发送失败：{}", safe_diagnostic(&e.to_string()));
                 }
                 if yt_room_name != tw_room_name {
                     tokio::time::sleep(Duration::from_secs(2)).await;
@@ -3858,7 +3867,10 @@ async fn handle_collisions(
                     )
                     .await
                     {
-                        tracing::error!("Failed to send danmaku: {}", e);
+                        tracing::error!(
+                            "撞车提示弹幕发送失败：{}",
+                            safe_diagnostic(&e.to_string())
+                        );
                     }
                 }
                 tokio::time::sleep(Duration::from_secs(2)).await;
@@ -3869,7 +3881,10 @@ async fn handle_collisions(
                     tokio::time::sleep(Duration::from_secs(2)).await;
                     if let Err(e) = send_danmaku(&cfg, "撞车：可使用弹幕指令进行换台").await
                     {
-                        tracing::error!("Failed to send danmaku: {}", e);
+                        tracing::error!(
+                            "撞车换台提示弹幕发送失败：{}",
+                            safe_diagnostic(&e.to_string())
+                        );
                     }
                 }
                 tokio::time::sleep(Duration::from_secs(30)).await;
@@ -3925,7 +3940,7 @@ async fn handle_collisions(
                 )
                 .await
                 {
-                    tracing::error!("Failed to send danmaku: {}", e);
+                    tracing::error!("撞车提示弹幕发送失败：{}", safe_diagnostic(&e.to_string()));
                 }
                 tokio::time::sleep(Duration::from_secs(2)).await;
                 if cfg.bililive.enable_danmaku_command && !is_danmaku_commands_enabled() {
@@ -3935,7 +3950,10 @@ async fn handle_collisions(
                     tokio::time::sleep(Duration::from_secs(2)).await;
                     if let Err(e) = send_danmaku(&cfg, "撞车：可使用弹幕指令进行换台").await
                     {
-                        tracing::error!("Failed to send danmaku: {}", e);
+                        tracing::error!(
+                            "撞车换台提示弹幕发送失败：{}",
+                            safe_diagnostic(&e.to_string())
+                        );
                     }
                 }
                 tokio::time::sleep(Duration::from_secs(30)).await;

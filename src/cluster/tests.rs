@@ -468,7 +468,7 @@ pub(crate) struct ClusterStateGuard {
 impl ClusterStateGuard {
     pub(crate) fn new() -> Self {
         let lock = CLUSTER_STATE_TEST_LOCK.lock().unwrap_or_else(|poisoned| {
-            tracing::warn!("Recovering poisoned cluster state test lock");
+            tracing::warn!("检测到 Poisoned 锁，已强制恢复集群状态测试锁");
             poisoned.into_inner()
         });
         let snapshot = cluster_state_read().clone();

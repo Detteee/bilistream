@@ -64,12 +64,18 @@ pub(crate) async fn refresh_status_snapshot() -> Result<u64, String> {
     refresh_status_cache_config_from(&cfg);
 
     if let Err(e) = refresh_bilibili_status_cache_with_config(&cfg).await {
-        tracing::warn!("WebUI Bilibili status refresh failed: {}", e);
+        tracing::warn!(
+            "[B站] 状态刷新失败：{}",
+            crate::logging::safe_diagnostic(&e.to_string())
+        );
     }
 
     if cfg.youtube.enable_monitor && !cfg.youtube.channel_id.is_empty() {
         if let Err(e) = refresh_youtube_status_cache_with_config(&cfg).await {
-            tracing::warn!("WebUI YouTube status refresh failed: {}", e);
+            tracing::warn!(
+                "[YT] 状态刷新失败：{}",
+                crate::logging::safe_diagnostic(&e.to_string())
+            );
         }
     } else if !platform_channel_configured(&cfg.youtube.channel_name, &cfg.youtube.channel_id) {
         crate::config::with_current_config(&cfg, || {
@@ -79,7 +85,10 @@ pub(crate) async fn refresh_status_snapshot() -> Result<u64, String> {
 
     if cfg.twitch.enable_monitor && !cfg.twitch.channel_id.is_empty() {
         if let Err(e) = refresh_twitch_status_cache_with_config(&cfg).await {
-            tracing::warn!("WebUI Twitch status refresh failed: {}", e);
+            tracing::warn!(
+                "[TW] 状态刷新失败：{}",
+                crate::logging::safe_diagnostic(&e.to_string())
+            );
         }
     } else if !platform_channel_configured(&cfg.twitch.channel_name, &cfg.twitch.channel_id) {
         crate::config::with_current_config(&cfg, || {
@@ -89,7 +98,10 @@ pub(crate) async fn refresh_status_snapshot() -> Result<u64, String> {
 
     if cfg.niconico.enable_monitor && crate::plugins::niconico_configured(&cfg.niconico) {
         if let Err(e) = refresh_niconico_status_cache_with_config(&cfg).await {
-            tracing::warn!("WebUI Niconico status refresh failed: {}", e);
+            tracing::warn!(
+                "[NC] 状态刷新失败：{}",
+                crate::logging::safe_diagnostic(&e.to_string())
+            );
         }
     } else if !crate::plugins::niconico_configured(&cfg.niconico) {
         update_status_cache_with(|status| status.niconico = None);
@@ -97,7 +109,10 @@ pub(crate) async fn refresh_status_snapshot() -> Result<u64, String> {
 
     if cfg.priority_channel.enabled && !cfg.priority_channel.channel_name.is_empty() {
         if let Err(e) = refresh_priority_channel_status_cache_with_config(&cfg).await {
-            tracing::warn!("WebUI priority channel status refresh failed: {}", e);
+            tracing::warn!(
+                "优先频道状态刷新失败：{}",
+                crate::logging::safe_diagnostic(&e.to_string())
+            );
         }
     }
 
@@ -345,7 +360,10 @@ pub async fn get_status() -> impl IntoResponse {
                 // Only log error if it's not a "file not found" error (expected on first run)
                 let is_not_found = e.to_string().contains("No such file");
                 if !is_not_found {
-                    tracing::error!("Failed to load config: {}", e);
+                    tracing::error!(
+                        "配置加载失败：{}",
+                        crate::logging::safe_diagnostic(&e.to_string())
+                    );
                 }
 
                 let error_msg = if e.to_string().contains("Permission denied") {

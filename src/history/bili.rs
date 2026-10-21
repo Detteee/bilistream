@@ -201,7 +201,7 @@ fn getinfo_key_for_observation(
 }
 
 pub(crate) fn note_live_key_unavailable(reason: &str) {
-    tracing::info!("live_key unavailable ({reason})");
+    tracing::info!("未取到 live_key (reason={reason})");
 }
 
 pub(crate) fn room_key_or_note(reply: &serde_json::Value) -> Option<String> {

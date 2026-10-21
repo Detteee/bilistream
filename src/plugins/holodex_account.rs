@@ -78,7 +78,10 @@ pub(crate) async fn apply_holodex_jwt_sync(
     }
     if should_save {
         if let Err(e) = crate::config::save_config(cfg).await {
-            tracing::warn!("Failed to save Holodex JWT state: {}", e);
+            tracing::warn!(
+                "Holodex 登录状态保存失败：{}",
+                crate::logging::safe_diagnostic(&e.to_string())
+            );
         }
     }
 

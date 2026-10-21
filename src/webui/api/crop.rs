@@ -89,7 +89,10 @@ pub async fn capture_frame(
                 }
                 Ok(output) => {
                     let stderr = String::from_utf8_lossy(&output.stderr);
-                    tracing::error!("yt-dlp failed: {}", stderr);
+                    tracing::error!(
+                        "yt-dlp 取流失败：{}",
+                        crate::logging::safe_diagnostic(&stderr)
+                    );
 
                     // Check if it's a "not live" error
                     let message = if stderr.contains("will begin in")
@@ -111,7 +114,10 @@ pub async fn capture_frame(
                     });
                 }
                 Err(e) => {
-                    tracing::error!("Failed to execute yt-dlp: {}", e);
+                    tracing::error!(
+                        "yt-dlp 启动失败：{}",
+                        crate::logging::safe_diagnostic(&e.to_string())
+                    );
                     return Json(ApiResponse {
                         success: false,
                         data: None,
