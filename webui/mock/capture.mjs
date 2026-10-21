@@ -468,7 +468,7 @@ async function main() {
     await waitFor("document.querySelectorAll('#analytics-aud-session option').length > 3");
     const broadcastChecks = JSON.parse(await evaluate(`(async () => {
       const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
-      const until = async (check, name) => { for (let n = 0; n < 240; n++) { if (check()) return; await pause(50); } throw new Error('analytics did not settle at ' + name); };
+      const until = async (check, name) => { for (let n = 0; n < 240; n++) { if (check()) return; await pause(50); } throw new Error('analytics did not settle at ' + (typeof name === 'function' ? name() : name)); };
       const select = document.getElementById('analytics-aud-session');
       const dialog = document.getElementById('analytics-detail');
       const body = document.getElementById('analytics-detail-body');
@@ -501,7 +501,7 @@ async function main() {
         select.dispatchEvent(new Event('change', { bubbles: true }));
       };
       const open = () => document.getElementById('analytics-aud-detail').click();
-      // A 场 that carried one channel has no 中断 to mark.
+      // A 场 that kept one channel but restarted on another node: one 段, still marked.
       pick('示例频道 003');
       open();
       await until(() => dialog.open && rows().length > 0, 'single open');
@@ -524,7 +524,9 @@ async function main() {
     assert.equal(broadcastChecks.alone.charts, 2, 'both charts mount for a single-段 场');
     assert.equal(broadcastChecks.alone.tabStrip, false, 'the 段 tab strip is gone');
     assert.equal(broadcastChecks.alone.paging, false, 'the 段 paging buttons are gone');
-    assert.equal(broadcastChecks.alone.marks, 0, 'a 场 without a switch draws no 中断 mark');
+    assert.ok(broadcastChecks.alone.rows.some(row => row.includes('2 次中断')), 'a restart-only 场 counts its 中断 without a 段');
+    assert.ok(!broadcastChecks.alone.rows.some(row => row.includes('段')), 'one channel means no 段 count');
+    assert.ok(broadcastChecks.alone.marks > 20, 'the 中断 mark draws even without a channel switch');
     assert.equal(broadcastChecks.both.charts, 2, 'a switched 场 still renders one chart pair');
     assert.ok(broadcastChecks.both.rows.some(row => row.includes('示例频道 002 → 示例频道 001')), `the 频道 row chains every 段: ${broadcastChecks.both.rows[0]}`);
     assert.ok(broadcastChecks.both.rows.some(row => row.includes('2 段 · 1 次中断')), `the 段 count rides on the 频道 row: ${broadcastChecks.both.rows[0]}`);
