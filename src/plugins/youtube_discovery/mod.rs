@@ -722,6 +722,10 @@ impl Worker {
         }
     }
 
+    fn node_tag(&self) -> String {
+        crate::logging::node_tag(&self.node_label())
+    }
+
     async fn read_feeds(
         &mut self,
         roster: &[String],
@@ -806,7 +810,7 @@ impl Worker {
         now: Instant,
         target: Option<String>,
     ) {
-        let node = self.node_label();
+        let node = self.node_tag();
         let target_reserved = target.is_some();
         set_target_reserved(target_reserved);
         let usable = usable_key_count(keys);
@@ -818,8 +822,8 @@ impl Worker {
             self.websub_slowed = websub_slowed;
             if on {
                 tracing::info!(
-                    node = %node,
-                    "{}",
+                    "{} {}",
+                    node,
                     if websub_slowed {
                         "WebSub 推送正常，上传列表轮询放慢一倍 (转播目标不变)"
                     } else {
@@ -856,11 +860,13 @@ impl Worker {
             self.by_hour = by_hour;
             match interval.filter(|_| on && by_hour) {
                 Some(interval) => tracing::info!(
-                    node = %node,
-                    "YouTube 上传列表按开播时段轮询: 本时段每频道 {}",
+                    "{} YouTube 上传列表按开播时段轮询: 本时段每频道 {}",
+                    node,
                     human_elapsed(interval)
                 ),
-                None if !by_hour => tracing::info!(node = %node, "YouTube 上传列表恢复均匀轮询"),
+                None if !by_hour => {
+                    tracing::info!("{} YouTube 上传列表恢复均匀轮询", node)
+                }
                 None => {}
             }
         }
@@ -897,28 +903,28 @@ impl Worker {
             self.playlist_on = on;
             match active {
                 Some(interval) => tracing::info!(
-                    node = %node,
-                    "YouTube 上传列表轮询开启: 本时段每频道 {}{}",
+                    "{} YouTube 上传列表轮询开启: 本时段每频道 {}{}",
+                    node,
                     human_elapsed(interval),
                     if degraded { " (RSS 不可用)" } else { "" }
                 ),
-                None => tracing::info!(node = %node, "YouTube 上传列表轮询关闭"),
+                None => tracing::info!("{} YouTube 上传列表轮询关闭", node),
             }
         } else if on && fit_changed {
             match (fit, active) {
                 (Fit::Short(factor), Some(interval)) => tracing::info!(
-                    node = %node,
-                    "YouTube 配额需留给索引与转播目标，上传列表轮询慢于计划 {} 倍: 本时段每频道 {}",
+                    "{} YouTube 配额需留给索引与转播目标，上传列表轮询慢于计划 {} 倍: 本时段每频道 {}",
+                    node,
                     factor,
                     human_elapsed(interval)
                 ),
                 (_, Some(interval)) => tracing::info!(
-                    node = %node,
-                    "YouTube 上传列表轮询恢复计划: 本时段每频道 {}",
+                    "{} YouTube 上传列表轮询恢复计划: 本时段每频道 {}",
+                    node,
                     human_elapsed(interval)
                 ),
                 (_, None) => {
-                    tracing::info!(node = %node, "YouTube 配额只够索引与转播目标，上传列表轮询暂停")
+                    tracing::info!("{} YouTube 配额只够索引与转播目标，上传列表轮询暂停", node)
                 }
             }
         }
@@ -965,8 +971,8 @@ impl Worker {
         if self.target_id.as_deref() != target.as_deref() {
             if let Some(ref id) = target {
                 tracing::info!(
-                    node = %node,
-                    "YouTube 转播目标 {} 上传列表轮询: 每 {}",
+                    "{} YouTube 转播目标 {} 上传列表轮询: 每 {}",
+                    node,
                     safe_text(id, 64),
                     human_elapsed(target_poll_interval(stretch))
                 );
@@ -1019,7 +1025,11 @@ impl Worker {
                     self.playlist_seen.insert(id, entries);
                 }
                 PlaylistOutcome::NotFound => {
-                    tracing::info!(node = %node, "YouTube 频道 {} 没有上传列表，停止轮询", safe_text(&id, 64));
+                    tracing::info!(
+                        "{} YouTube 频道 {} 没有上传列表，停止轮询",
+                        node,
+                        safe_text(&id, 64)
+                    );
                     self.no_playlist.insert(id);
                 }
                 PlaylistOutcome::Failed => {}
@@ -1141,7 +1151,7 @@ impl Worker {
                 let since = item.start_actual.as_deref().and_then(seconds_since);
                 tracing::info!(
                     "{} 发现直播 {} channel={} ({}) via {}，开播距今 {}",
-                    self.node_label(),
+                    self.node_tag(),
                     safe_text(&item.id, 64),
                     safe_text(&item.channel.id, 64),
                     safe_text(&item.channel.name, 36),
@@ -1169,6 +1179,7 @@ fn note_discovery_failure(
     error: &str,
     now: Instant,
 ) {
+    let node = crate::logging::node_tag(node);
     if let Some(summary) = report.failure(now, 1) {
         tracing::warn!(
             "{} YouTube {}失败；{}，等待现有重试；原因={}",
@@ -1191,7 +1202,7 @@ fn note_discovery_success(report: &mut FailureReport, node: &str, operation: &st
     if let Some(summary) = report.success(now) {
         tracing::info!(
             "{} YouTube {}已恢复；此前失败={}次 持续={}",
-            node,
+            crate::logging::node_tag(node),
             operation,
             summary.failures,
             human_elapsed(summary.elapsed)
@@ -1314,7 +1325,7 @@ mod tests {
         assert_eq!(text.matches("WARN [yt-discovery]").count(), 3, "{text}");
         assert_eq!(text.matches("直播发现分类查询已恢复").count(), 1);
         assert!(text.contains("此前失败=12次"));
-        assert!(text.contains("ny YouTube RSS 客户端创建失败"));
+        assert!(text.contains("[ny] YouTube RSS 客户端创建失败"));
         assert!(!text.contains("synthetic-discovery-key"));
     }
 

@@ -1976,7 +1976,7 @@ mod tests {
         assert!(output.contains(" WARN [danmaku]"));
         assert!(output.contains("换台命令未启用"));
         assert!(!output.contains("监听目标已更新"));
-        assert!(output.contains("弹幕 %转播%"));
+        assert!(output.contains("[弹幕 转播]"));
         assert!(output.contains("（示例用户001）"), "{output}");
         assert!(!client.enable_commands.load(Ordering::Relaxed));
     }

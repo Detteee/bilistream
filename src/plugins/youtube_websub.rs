@@ -142,7 +142,7 @@ fn push_line(
         );
     let mut line = format!(
         "{} WebSub 推送 {} channel={} ({})，发布距今 {}",
-        crate::logging::safe_text(node, 64),
+        crate::logging::node_tag(node),
         crate::logging::safe_text(&entry.video_id, 64),
         crate::logging::safe_text(&entry.channel_id, 64),
         crate::logging::safe_text(&entry.channel_name, 36),
@@ -259,7 +259,7 @@ impl Hub {
                 self.subs.get(&channel)?;
                 tracing::warn!(
                     "{} WebSub 订阅被拒绝: {}",
-                    self.report_node.as_deref().unwrap_or("unknown"),
+                    crate::logging::node_tag(self.report_node.as_deref().unwrap_or("unknown")),
                     crate::logging::safe_text(&channel, 64)
                 );
                 self.subs.insert(
@@ -387,7 +387,7 @@ async fn push_handler(headers: HeaderMap, body: Bytes) -> Response {
                     } else {
                         tracing::debug!(
                             "{} WebSub 更新推送: {} channel={}",
-                            node,
+                            crate::logging::node_tag(&node),
                             crate::logging::safe_text(&item.entry.video_id, 64),
                             crate::logging::safe_text(&item.entry.channel_id, 64)
                         );
@@ -800,7 +800,7 @@ impl Worker {
             self.counts = counts;
             tracing::info!(
                 "{} WebSub 订阅: 已验证 {} / 等待 {} / 失败 {}",
-                node,
+                crate::logging::node_tag(&node),
                 counts.0,
                 counts.1,
                 counts.2
@@ -940,7 +940,7 @@ mod tests {
         };
         assert_eq!(
             push_line("ca", &entry(Some("2026-09-28T03:08:30+00:00")), now, None),
-            "ca WebSub 推送 example0001 channel=UC_example_001 (示例频道001)，发布距今 1分30秒"
+            "[ca] WebSub 推送 example0001 channel=UC_example_001 (示例频道001)，发布距今 1分30秒"
         );
         assert_eq!(
             push_line(
@@ -949,13 +949,16 @@ mod tests {
                 now,
                 Some(("playlist", Duration::from_secs(40)))
             ),
-            "ca WebSub 推送 example0001 channel=UC_example_001 (示例频道001)，发布距今 1分30秒，playlist 已于 40秒前发现"
+            "[ca] WebSub 推送 example0001 channel=UC_example_001 (示例频道001)，发布距今 1分30秒，playlist 已于 40秒前发现"
         );
         assert!(push_line("ca", &entry(None), now, None).ends_with("发布距今 未知"));
         assert!(push_line("ca", &entry(Some("soon")), now, None).ends_with("发布距今 未知"));
+        // A long node id is shortened inside its tag, never splitting the tag.
         let full_node_id = "n".repeat(64);
-        assert!(push_line(&full_node_id, &entry(None), now, None)
-            .starts_with(&format!("{full_node_id} WebSub")));
+        let long = push_line(&full_node_id, &entry(None), now, None);
+        let tag_end = long.find(']').expect("a node tag");
+        assert!(tag_end <= 65, "the node tag stays bounded: {long}");
+        assert!(long[tag_end..].starts_with("] WebSub 推送 "), "{long}");
         for (seconds, expected) in [
             (59, "59秒"),
             (60, "1分"),

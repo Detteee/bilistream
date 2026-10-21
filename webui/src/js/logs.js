@@ -6,12 +6,17 @@ import { getJson } from './api.js';
 
 // Global data
 let logLines = [];
-let logLineSet = new Set();
-const renderedLines = new Map();
+let renderedLines = new Map();
 let maxLogLines = 500;
 let logRefreshIntervalId = null;
 let logRefreshInFlight = false;
 let logGeneration = 0;
+let logFilter = '';
+
+const LEVELS = /^(ERROR|WARN|INFO|DEBUG|TRACE)\b/;
+const TIMESTAMP = /^(\d{4}-\d{2}-\d{2}[ T])?(\d{2}:\d{2}:\d{2})(\.\d+)?(Z|[+-]\d{2}:?\d{2})?\s+/;
+const PLATFORM = /^(?:YT|TW|NC)$/;
+
 function initLogControls() {
   document
     .getElementById('clear-logs-btn')
@@ -19,6 +24,15 @@ function initLogControls() {
   document
     .getElementById('refresh-logs-btn')
     ?.addEventListener('click', refreshLogs);
+  document
+    .getElementById('copy-logs-btn')
+    ?.addEventListener('click', copyLogs);
+  document
+    .getElementById('log-filter-input')
+    ?.addEventListener('input', event => {
+      logFilter = event.target.value.trim();
+      renderLogs();
+    });
 }
 function startLogRefresh() {
   if (logRefreshIntervalId) {
@@ -34,12 +48,8 @@ function startLogRefresh() {
 function clearLogs() {
   logGeneration += 1;
   logLines = [];
-  logLineSet.clear();
   renderedLines.clear();
-  const logOutput = document.getElementById('log-output');
-  if (logOutput) {
-    logOutput.replaceChildren(document.createTextNode('日志已清空'));
-  }
+  renderLogs(true);
 }
 async function refreshLogs() {
   if (logRefreshInFlight) return;
@@ -53,7 +63,6 @@ async function refreshLogs() {
       // lines trimmed on the previous refresh would rotate old entries to the end.
       logLines = [...new Set(data.logs.split('\n').filter(line => line.trim()))]
         .slice(-maxLogLines);
-      logLineSet = new Set(logLines);
 
       renderLogs();
 
@@ -70,50 +79,194 @@ async function refreshLogs() {
     logRefreshInFlight = false;
   }
 }
-function renderLogs() {
+/** Lines matching the current filter; render and copy share this list. */
+function visibleLogLines() {
+  if (!logFilter) return logLines;
+  const needle = logFilter.toLowerCase();
+  return logLines.filter(line => line.toLowerCase().includes(needle));
+}
+function renderLogs(cleared = false) {
   const logOutput = document.getElementById('log-output');
   if (!logOutput) return;
 
-  if (!renderedLines.size) logOutput.replaceChildren();
-  for (const line of renderedLines.keys()) {
-    if (!logLineSet.has(line)) renderedLines.delete(line);
+  // The snapshot markup may leave whitespace text nodes inside the tbody; a
+  // table body should hold rows only, and they would join every copied text.
+  for (const child of [...logOutput.childNodes]) {
+    if (child.nodeType !== Node.ELEMENT_NODE) child.remove();
   }
+  const next = new Map();
   const nodes = [];
-  logLines.forEach((line, index) => {
-    let lineElement = renderedLines.get(line);
-    if (!lineElement) {
-      lineElement = document.createElement('span');
-      lineElement.className = `log-line ${logLineLevel(line)}`.trim();
-      renderedLines.set(line, lineElement);
-    }
-    const text = line + (index + 1 < logLines.length ? '\n' : '');
-    if (lineElement.textContent !== text) lineElement.textContent = text;
-    nodes.push(lineElement);
-  });
+  for (const line of visibleLogLines()) {
+    let row = renderedLines.get(line);
+    if (!row) row = buildLogRow(line);
+    next.set(line, row);
+    nodes.push(row);
+  }
+  renderedLines = next;
+
+  if (!nodes.length) {
+    const empty = document.createElement('tr');
+    empty.className = 'log-row log-row--empty';
+    const cell = document.createElement('td');
+    cell.colSpan = 6;
+    cell.textContent = cleared
+      ? '日志已清空'
+      : logFilter
+        ? '没有匹配的日志'
+        : '等待日志…';
+    empty.append(cell);
+    nodes.push(empty);
+  }
   reconcileChildren(logOutput, nodes);
+}
+function buildLogRow(line) {
+  const parsed = parseLogLine(line);
+  const row = document.createElement('tr');
+  row.className = `log-row ${parsed.level}`.trim();
+  row.title = `${parsed.fullTime || '未标注时间'} · 点击复制整行`;
+  row.addEventListener('click', () => copyText(line, row));
+
+  const cells = [
+    ['log-cell log-cell--time', parsed.time, parsed.fullTime],
+    ['log-cell log-cell--level', parsed.level ? parsed.level.toUpperCase() : '', ''],
+    ['log-cell log-cell--component', parsed.component, ''],
+    ['log-cell log-cell--node', parsed.node, ''],
+    ['log-cell log-cell--platform', parsed.platform, ''],
+  ];
+  for (const [className, text, title] of cells) {
+    const cell = document.createElement('td');
+    cell.className = className;
+    cell.textContent = text;
+    if (title) cell.title = title;
+    row.append(cell);
+  }
+  // Brackets are column separators on the wire; in a table they only add noise,
+  // so the tag becomes a styled chip and the message keeps its own text.
+  const message = document.createElement('td');
+  message.className = 'log-cell log-cell--message';
+  if (parsed.label) {
+    const tag = document.createElement('span');
+    tag.className = 'log-tag';
+    tag.textContent = parsed.label;
+    message.append(tag, ' ');
+  }
+  message.append(document.createTextNode(parsed.message));
+  row.append(message);
+  return row;
+}
+/**
+ * Split one record into the columns the table shows. Bracket tags carry the
+ * record's identity: `[node]`, `[platform]`, then an optional `[标签]` such as
+ * `[弹幕 转播]`. Anything unrecognised stays in `message` verbatim, so a
+ * UI-only or future-format line still renders as its full text.
+ */
+function parseLogLine(line) {
+  const raw = String(line ?? '');
+  let rest = raw.trimStart();
+  let time = '';
+  let fullTime = '';
+  let level = '';
+  let component = '';
+  const stamp = rest.match(TIMESTAMP);
+  if (stamp) {
+    // The column shows the clock only; the untouched stamp stays in the tooltip.
+    fullTime = stamp[0].trim();
+    time = stamp[2];
+    rest = rest.slice(stamp[0].length);
+  }
+  const severity = rest.match(LEVELS);
+  if (severity) {
+    level = severity[1].toLowerCase();
+    rest = rest.slice(severity[0].length).trimStart();
+  }
+  const head = rest.match(/^\[([^\]]{1,64})\]\s?/);
+  if (head) {
+    component = head[1];
+    rest = rest.slice(head[0].length);
+  }
+  let node = '';
+  let platform = '';
+  let label = '';
+  for (let i = 0; i < 3; i += 1) {
+    const tag = rest.match(/^\[([^\]]{1,64})\]\s*/);
+    if (!tag) break;
+    const value = tag[1];
+    const isPlatform = PLATFORM.test(value);
+    if (!node && isPlatform) {
+      platform = value;
+    } else if (!node) {
+      node = value;
+    } else if (!platform && isPlatform) {
+      platform = value;
+    } else if (!label) {
+      label = value;
+    } else {
+      break;
+    }
+    rest = rest.slice(tag[0].length);
+  }
+  // A record that parsed nothing (a UI-only line) keeps its whole text.
+  const parsedSomething = time || level || component || node || platform || label;
+  return {
+    time,
+    fullTime,
+    level,
+    component,
+    node,
+    platform,
+    label,
+    message: rest.trim() || (parsedSomething ? '' : raw.trim()),
+  };
 }
 function logLineLevel(line) {
   // Tracing's level is authoritative; titles may contain ERROR or warning emoji.
   // Accept date+offset, older time-only records and explicit bare-level UI lines.
-  const timestamp = /^(?:\d{4}-\d{2}-\d{2}[ T])?\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?\s+/;
-  const message = line.trimStart().replace(timestamp, '');
-  const level = message.match(/^(ERROR|WARN|INFO|DEBUG|TRACE)\b/);
-  if (level) return level[1].toLowerCase();
+  const parsed = parseLogLine(line);
+  if (parsed.level) return parsed.level;
 
   // Older explicit UI-only messages sometimes begin with an emoji instead.
-  if (message.startsWith('❌')) {
+  const text = parsed.message.trimStart();
+  if (text.startsWith('❌')) {
     return 'error';
   }
-  if (message.startsWith('⚠')) {
+  if (text.startsWith('⚠')) {
     return 'warn';
   }
-  if (message.startsWith('✅') || message.startsWith('🚀')) {
+  if (text.startsWith('✅') || text.startsWith('🚀')) {
     return 'info';
   }
-  if (message.startsWith('🔄')) {
+  if (text.startsWith('🔄')) {
     return 'debug';
   }
   return '';
+}
+async function copyLogs() {
+  await copyText(visibleLogLines().join('\n'), document.getElementById('copy-logs-btn'));
+}
+/** Copies the untouched record, never the shortened table cells. */
+async function copyText(text, feedback) {
+  if (!text) return;
+  try {
+    await navigator.clipboard.writeText(text);
+    flash(feedback, '已复制');
+  } catch (error) {
+    console.debug('Clipboard unavailable:', error);
+  }
+}
+function flash(element, label) {
+  if (!element) return;
+  if (element.classList?.contains('log-row')) {
+    element.classList.add('log-row--copied');
+    setTimeout(() => element.classList.remove('log-row--copied'), 600);
+    return;
+  }
+  const previous = element.textContent;
+  element.textContent = label;
+  element.disabled = true;
+  setTimeout(() => {
+    element.textContent = previous;
+    element.disabled = false;
+  }, 900);
 }
 
 export {
@@ -122,6 +275,7 @@ export {
   clearLogs,
   refreshLogs,
   renderLogs,
+  parseLogLine,
   logLineLevel,
   logLines,
   maxLogLines,

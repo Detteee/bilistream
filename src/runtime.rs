@@ -1017,7 +1017,7 @@ async fn probe_sources(cfg: &Config, plan: &SourceProbePlan) -> Option<Vec<Probe
         };
         if let Err(error) = &status {
             tracing::warn!(
-                "{} 频道 {} 状态检查失败；{}",
+                "[{}] {} 状态检查失败；{}",
                 channel.platform.code(),
                 safe_text(&channel.channel_name, 64),
                 safe_diagnostic(error)
@@ -2863,7 +2863,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
             };
             let Some(ffmpeg_source) = selected_stream.ffmpeg_source() else {
                 tracing::warn!(
-                    "{} 直播 {} 缺少可播放的流，等待下一轮检查",
+                    "[{}] {} 缺少可播放的流，等待下一轮检查",
                     selected_stream.platform.code(),
                     selected_stream.channel_name
                 );
@@ -4389,7 +4389,7 @@ mod tests {
             let ordered = [
                 "Cut off/Warning",
                 "已标记频道",
-                "弹幕 %转播%",
+                "[弹幕 转播]",
                 "监听目标已更新",
                 "跳过频道",
                 "选台结果=[TW] 示例频道 002",

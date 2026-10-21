@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 // state.js initializes the browser config object; severity itself is pure.
 globalThis.window = {};
 globalThis.document = { addEventListener() {} };
-const { logLineLevel } = await import('../src/js/logs.js');
+const { logLineLevel, parseLogLine } = await import('../src/js/logs.js');
 
 test('log severity comes from the real prefix before title words or emoji', () => {
   for (const prefix of [
@@ -32,4 +32,46 @@ test('unprefixed legacy fallback only recognizes a leading severity emoji', () =
   assert.equal(logLineLevel('示例频道001 的 ERROR 片段 ⚠️'), '');
   assert.equal(logLineLevel('INFORMATION 不是日志级别'), '');
   assert.equal(logLineLevel(''), '');
+});
+
+test('a record splits into the table columns and keeps the full timestamp', () => {
+  assert.deepEqual(
+    parseLogLine('2026-10-21 15:43:08+0800 INFO [webui] [jp] [YT] 胡桃のあ 监听目标配置已更新；area=APEX英雄 (240)'),
+    {
+      time: '15:43:08',
+      fullTime: '2026-10-21 15:43:08+0800',
+      level: 'info',
+      component: 'webui',
+      node: 'jp',
+      platform: 'YT',
+      label: '',
+      message: '胡桃のあ 监听目标配置已更新；area=APEX英雄 (240)',
+    },
+  );
+});
+
+test('a danmaku command tag stays with the identity, not the message body', () => {
+  const parsed = parseLogLine(
+    '2026-10-21 07:41:09+0800 INFO [danmaku] [jp] [弹幕 转播] #1 选台结果=[YT] 紫宮るな；原因=请求频道是本轮最高可用候选；请求=[YT] 紫宮るな',
+  );
+  assert.equal(parsed.node, 'jp');
+  assert.equal(parsed.platform, '');
+  assert.equal(parsed.label, '弹幕 转播');
+  assert.equal(parsed.message.startsWith('#1 选台结果='), true);
+});
+
+test('a platform-first record does not mistake the platform for a node', () => {
+  const parsed = parseLogLine('2026-10-21 10:10:00+0800 WARN [runtime] [YT] 胡桃のあ 状态检查失败；超时');
+  assert.equal(parsed.node, '');
+  assert.equal(parsed.platform, 'YT');
+  assert.equal(parsed.message, '胡桃のあ 状态检查失败；超时');
+});
+
+test('unparsed and UI-only lines keep their full text in the message cell', () => {
+  assert.equal(parseLogLine('日志已清空').message, '日志已清空');
+  assert.equal(parseLogLine('⚠️ 连接暂时中断').message, '⚠️ 连接暂时中断');
+  const bare = parseLogLine('2026-10-21 10:10:00+0800 ERROR');
+  assert.equal(bare.level, 'error');
+  assert.equal(bare.component, '');
+  assert.equal(bare.message, '');
 });

@@ -369,7 +369,12 @@ impl Worker {
             LiveSignal::Ended(cause, detail) => {
                 let ended = self.ledger.live.end_with(now, cause, detail);
                 if ended {
-                    tracing::info!("QQ 下播通知: 结束原因 {}", cause.as_str());
+                    // The operator reads the same 结束原因 wording the notice
+                    // uses, never the wire code (`source_ended`).
+                    tracing::info!(
+                        "QQ 下播通知: 结束原因 {}",
+                        cause.notice_label(self.ledger.live.broadcast.newest_source())
+                    );
                 }
                 ended
             }

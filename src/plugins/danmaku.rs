@@ -659,8 +659,8 @@ pub(crate) fn report_target_decision(
         pending.last_decision = Some(decision.clone());
     }
     tracing::info!(
-        "[{}] 弹幕 %转播% #{} 选台结果={}；请求=[{}] {}",
-        safe_text(&request.node, 64),
+        "{} [弹幕 转播] #{} 选台结果={}；请求=[{}] {}",
+        crate::logging::node_tag(&request.node),
         request.id,
         decision,
         safe_text(&request.source.platform, 8),
@@ -685,7 +685,7 @@ impl DanmakuTargetLog {
             64,
         );
         let origin = format!(
-            "弹幕 %转播% #{}（{}）",
+            "[弹幕 转播] #{}（{}）",
             self.request_id,
             if self.sender.is_empty() {
                 "未知发送者".to_string()
@@ -777,8 +777,8 @@ async fn finish_target_update<AfterUpdate, AfterFuture, Reply, ReplyFuture>(
             let sync_message = after_update(update.previous_version, update.config, changed).await;
             if !sync_message.is_empty() {
                 tracing::info!(
-                    "{} 弹幕 %转播% #{} 目标同步结果{}",
-                    safe_text(&outcome.node, 64),
+                    "{} [弹幕 转播] #{} 目标同步结果{}",
+                    crate::logging::node_tag(&outcome.node),
                     outcome.request_id,
                     safe_text(&sync_message, 240)
                 );
@@ -1555,20 +1555,29 @@ pub async fn wait_config_update_or_timeout(timeout: Duration) -> bool {
 }
 
 pub fn get_area_name(area_id: u64) -> Option<String> {
-    let areas: serde_json::Value = crate::storage::read_document("areas.json").ok()?;
-
-    if let Some(areas_array) = areas["areas"].as_array() {
-        for area in areas_array {
-            if let (Some(id), Some(name)) = (area["id"].as_u64(), area["name"].as_str()) {
-                if id == area_id {
-                    return Some(name.to_string());
-                }
-            }
-        }
+    let name = area_name(area_id);
+    if name.is_none() {
+        tracing::error!("未知的分区ID: {}", area_id);
     }
+    name
+}
 
-    tracing::error!("未知的分区ID: {}", area_id);
-    None
+/// The stored 分区 name for `area_id`, without logging a miss.
+pub fn area_name(area_id: u64) -> Option<String> {
+    let areas: serde_json::Value = crate::storage::read_document("areas.json").ok()?;
+    areas["areas"].as_array()?.iter().find_map(|area| {
+        (area["id"].as_u64() == Some(area_id))
+            .then(|| area["name"].as_str().map(str::to_string))
+            .flatten()
+    })
+}
+
+/// `名称 (id)` — how a 分区 is named in operator logs and danmaku copy.
+pub fn area_label(area_id: u64) -> String {
+    match area_name(area_id) {
+        Some(name) => format!("{} ({area_id})", crate::logging::safe_text(&name, 48)),
+        None => format!("未知分区 ({area_id})"),
+    }
 }
 
 fn area_name_or_unknown(area_id: u64) -> String {
@@ -1749,7 +1758,7 @@ mod tests {
                 },
                 "{output}"
             );
-            assert!(output.contains("[ca] 弹幕 %转播% #0（未知发送者） [YT] 示例频道001"));
+            assert!(output.contains("[ca] [弹幕 转播] #0（未知发送者） [YT] 示例频道001"));
             assert!(output.contains("分区=其他单机(235)"));
             assert!(output.contains(expected));
             if expected == "监听目标更新已拒绝" {

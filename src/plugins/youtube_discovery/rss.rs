@@ -243,7 +243,7 @@ impl RssHealth {
                 if self.mode != RssMode::Up {
                     tracing::info!(
                         "{} YouTube RSS 暂停结束，恢复扫描，等待本轮结果",
-                        self.node_label()
+                        self.node_tag()
                     );
                     self.mode = RssMode::Up;
                 }
@@ -371,8 +371,9 @@ impl RssHealth {
         }
     }
 
-    fn node_label(&self) -> &str {
-        self.report_node.as_deref().unwrap_or("unknown")
+    /// `[node]` for this round's records; the raw node is kept for reporting state.
+    fn node_tag(&self) -> String {
+        crate::logging::node_tag(self.report_node.as_deref().unwrap_or("unknown"))
     }
 
     fn record_verification(
@@ -423,7 +424,7 @@ impl RssHealth {
             // establish that the other feeds have recovered.
             tracing::info!(
                 "{} YouTube RSS 探测成功，恢复全量扫描；本次成功={}/{}，完整恢复待验证",
-                self.node_label(),
+                self.node_tag(),
                 successful,
                 attempted
             );
@@ -449,7 +450,7 @@ impl RssHealth {
                 };
                 tracing::warn!(
                     "{} YouTube RSS 本轮成功={}/{} 请求失败={} HTTP429={}；{}；{}；分类={}",
-                    self.node_label(),
+                    self.node_tag(),
                     successful,
                     attempted,
                     failed,
@@ -467,7 +468,7 @@ impl RssHealth {
             if let Some(summary) = self.report.success(now) {
                 tracing::info!(
                     "{} YouTube RSS 所有频道均已重新验证成功；本轮成功={}/{} 已验证={}/{} 此前失败={}次 持续={}",
-                    self.node_label(),
+                    self.node_tag(),
                     attempted,
                     attempted,
                     self.report_roster.len(),
@@ -479,7 +480,7 @@ impl RssHealth {
         } else if let Some(summary) = self.report.pending(now) {
             tracing::info!(
                 "{} YouTube RSS 本轮成功={}/{}，尚有{}个频道待重新验证；{}",
-                self.node_label(),
+                self.node_tag(),
                 successful,
                 attempted,
                 self.unverified.len(),
@@ -656,7 +657,7 @@ mod tests {
         });
         let text = logs.text();
         assert!(
-            text.contains("jp YouTube RSS 本轮成功=1/1，尚有2个频道待重新验证"),
+            text.contains("[jp] YouTube RSS 本轮成功=1/1，尚有2个频道待重新验证"),
             "{text}"
         );
         assert!(!text.contains("本轮成功=1/3"));
@@ -706,7 +707,7 @@ mod tests {
             client
                 .get(format!("http://{address}/?key=synthetic-rss-token"))
                 .timeout(Duration::from_secs(2)),
-            "jp",
+            "[jp]",
             "UC_example_003",
         )
         .with_subscriber(debug_dispatch)
@@ -716,7 +717,7 @@ mod tests {
         assert_eq!(disconnected.failure, Some(FeedFailure::Transport));
         assert!(debug_logs
             .text()
-            .contains("jp YouTube RSS UC_example_003 读取失败"));
+            .contains("[jp] YouTube RSS UC_example_003 读取失败"));
         assert!(!debug_logs.text().contains("synthetic-rss-token"));
         reads.push(disconnected);
 
@@ -814,7 +815,7 @@ mod tests {
         assert_eq!(text.matches("WARN [rss]").count(), 2, "{text}");
         assert!(text.contains("累计失败=11次 持续=5分"));
         assert!(text.contains("本轮成功=1/2 请求失败=1 HTTP429=0"));
-        assert!(text.contains("jp YouTube RSS 本轮成功=1/2"));
+        assert!(text.contains("[jp] YouTube RSS 本轮成功=1/2"));
         assert_eq!(text.matches("所有频道均已重新验证成功").count(), 1);
         assert!(text.contains("此前失败=12次 持续=6分"));
     }

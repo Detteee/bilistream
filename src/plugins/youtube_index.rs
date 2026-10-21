@@ -337,6 +337,10 @@ impl Store {
         }
     }
 
+    fn node_tag(&self) -> String {
+        crate::logging::node_tag(&self.report_node())
+    }
+
     fn report_node(&self) -> String {
         match self.report_source.as_ref().map(|(node, _)| node.trim()) {
             Some("") => "local".to_string(),
@@ -349,7 +353,7 @@ impl Store {
         if let Some(summary) = self.failures.failure(now, 1) {
             tracing::warn!(
                 "{} YouTube 索引刷新失败，等待现有重试；视频数={} {} 原因={}",
-                self.report_node(),
+                self.node_tag(),
                 count,
                 summary,
                 safe_diagnostic(error)
@@ -357,7 +361,7 @@ impl Store {
         } else {
             tracing::debug!(
                 "{} YouTube 索引刷新仍失败: {}",
-                self.report_node(),
+                self.node_tag(),
                 safe_diagnostic(error)
             );
         }
@@ -367,7 +371,7 @@ impl Store {
         if let Some(summary) = self.failures.success(now) {
             tracing::info!(
                 "{} YouTube 索引刷新已恢复；此前失败={}次 持续={}",
-                self.report_node(),
+                self.node_tag(),
                 summary.failures,
                 human_elapsed(summary.elapsed)
             );
@@ -599,7 +603,7 @@ mod tests {
         assert_eq!(text.matches("WARN [yt-index]").count(), 4, "{text}");
         assert_eq!(text.matches("YouTube 索引刷新已恢复").count(), 1);
         assert!(text.contains("此前失败=12次 持续=6分"));
-        assert!(text.contains("jp YouTube 索引刷新失败"));
+        assert!(text.contains("[jp] YouTube 索引刷新失败"));
         assert!(!text.contains("synthetic-key"));
     }
 

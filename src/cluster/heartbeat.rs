@@ -204,14 +204,7 @@ impl AutomaticHandoffLog {
     fn prefix(&self, state: &HandoffEpisode, action: &str) -> String {
         format!(
             "{} 自动交接 {}→{} #{} {}",
-            safe_text(
-                if self.node.is_empty() {
-                    "local"
-                } else {
-                    &self.node
-                },
-                64
-            ),
+            crate::logging::node_tag(&self.node),
             safe_text(&state.source, 64),
             safe_text(&self.target, 64),
             self.id,
@@ -1099,7 +1092,7 @@ mod handoff_log_tests {
         assert!(output.contains("本轮未完成，后续自动重试已停止"));
         assert!(output
             .lines()
-            .any(|line| line.contains("ca 自动交接 ny→ca") && line.contains("WARN")));
+            .any(|line| line.contains("[ca] 自动交接 ny→ca") && line.contains("WARN")));
     }
 
     #[test]
@@ -1440,7 +1433,9 @@ mod handoff_log_tests {
         assert_eq!(calls.load(Ordering::Relaxed), 1);
         let output = logs.text();
         assert_eq!(
-            output.matches("ca 已确认源节点 jp 停止并关闭监控").count(),
+            output
+                .matches("[ca] 已确认源节点 jp 停止并关闭监控")
+                .count(),
             1,
             "{output}"
         );

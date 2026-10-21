@@ -247,11 +247,10 @@ pub async fn switch_stream(
         }
 
         tracing::info!(
-            "{} NC/{} 监听目标配置已更新；channel={} area={}",
-            log_node,
+            "{} [NC] {} 监听目标配置已更新；area={}",
+            crate::logging::node_tag(&log_node),
             safe_text(&cfg.niconico.channel_name, 64),
-            safe_text(&cfg.niconico.channel_id, 64),
-            cfg.niconico.area_v2
+            crate::plugins::danmaku::area_label(cfg.niconico.area_v2)
         );
 
         if niconico_monitor_reload_needed(&previous_cfg, &cfg) {
@@ -344,11 +343,10 @@ pub async fn switch_stream(
         }
 
         tracing::info!(
-            "{} TW/{} 监听目标配置已更新；channel={} area={}",
-            log_node,
+            "{} [TW] {} 监听目标配置已更新；area={}",
+            crate::logging::node_tag(&log_node),
             safe_text(&cfg.twitch.channel_name, 64),
-            safe_text(&cfg.twitch.channel_id, 64),
-            cfg.twitch.area_v2
+            crate::plugins::danmaku::area_label(cfg.twitch.area_v2)
         );
 
         if twitch_monitor_reload_needed(&previous_cfg, &cfg) {
@@ -425,11 +423,10 @@ pub async fn switch_stream(
     }
 
     tracing::info!(
-        "{} YT/{} 监听目标配置已更新；channel={} area={}",
-        log_node,
+        "{} [YT] {} 监听目标配置已更新；area={}",
+        crate::logging::node_tag(&log_node),
         safe_text(&cfg.youtube.channel_name, 64),
-        safe_text(&cfg.youtube.channel_id, 64),
-        cfg.youtube.area_v2
+        crate::plugins::danmaku::area_label(cfg.youtube.area_v2)
     );
 
     if youtube_monitor_reload_needed(&previous_cfg, &cfg) {

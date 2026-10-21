@@ -1295,3 +1295,55 @@ async fn one_broadcast_sends_开播_then_换台_then_one_下播() {
     })
     .await;
 }
+
+/// The operator reads the 下播 log in the same wording as the notice: a source
+/// end names the channel that ended, and a manual stop says 主动停播 — never the
+/// wire code (`source_ended`, `manual_stop`).
+#[tokio::test]
+async fn the_live_end_log_names_the_cause_in_chinese() {
+    use tracing::instrument::WithSubscriber;
+    crate::install_crypto_provider();
+    let (_temp, store) = store();
+    let mut worker = Worker::new(store, "solo".into());
+    let now = now_secs();
+    let source = |channel: &str| {
+        crate::notify::live_events::LiveSignal::Source(crate::notify::live_events::LiveSource {
+            stream_key: format!("YT:{channel}"),
+            platform: "YouTube".into(),
+            channel: channel.into(),
+            title: "示例直播".into(),
+        })
+    };
+    worker.on_live_signal(source("示例频道"), now);
+    let (dispatch, logs) = crate::logging::test_capture::subscriber(tracing::Level::INFO);
+    async {
+        worker.on_live_signal(
+            crate::notify::live_events::LiveSignal::Ended(
+                crate::events::BroadcastEndCause::SourceEnded,
+                None,
+            ),
+            now + 60,
+        );
+        worker.on_live_signal(source("第二个频道"), now + 120);
+        worker.on_live_signal(
+            crate::notify::live_events::LiveSignal::Ended(
+                crate::events::BroadcastEndCause::ManualStop,
+                None,
+            ),
+            now + 180,
+        );
+    }
+    .with_subscriber(dispatch)
+    .await;
+    let text = logs.text();
+    assert!(
+        text.contains("QQ 下播通知: 结束原因 示例频道下播"),
+        "a source end names the channel: {text}"
+    );
+    assert!(
+        text.contains("QQ 下播通知: 结束原因 主动停播"),
+        "a manual stop uses its label: {text}"
+    );
+    assert!(!text.contains("source_ended"), "{text}");
+    assert!(!text.contains("manual_stop"), "{text}");
+}

@@ -338,6 +338,17 @@ pub struct LiveLedger {
     pub active_push: BTreeMap<String, ActivePush>,
 }
 
+impl Broadcast {
+    /// The source relayed last in this session: the newest 换台, else the
+    /// channel the 开播 named. The 下播 notice and its log line both name it.
+    pub fn newest_source(&self) -> &str {
+        self.recent
+            .last()
+            .map(|entry| entry.channel.as_str())
+            .unwrap_or(&self.channel)
+    }
+}
+
 impl LiveLedger {
     pub fn is_empty(&self) -> bool {
         *self == LiveLedger::default()
@@ -715,11 +726,7 @@ fn push_platform_title(lines: &mut Vec<String>, platform: &str, title: &str) {
 /// The source relayed last in this session: the newest 换台, else the channel
 /// the 开播 named. A source end names it in the `结束原因` line.
 fn newest_source_channel(broadcast: &Broadcast) -> String {
-    broadcast
-        .recent
-        .last()
-        .map(|entry| entry.channel.clone())
-        .unwrap_or_else(|| broadcast.channel.clone())
+    broadcast.newest_source().to_string()
 }
 
 /// The source a switch notice announces. Only the newest switch is ever due

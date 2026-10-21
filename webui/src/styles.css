@@ -1355,36 +1355,227 @@
   gap: var(--sp-3);
 }
 
+/* The log is a dense read-only table. Every colour comes from the theme tokens,
+   so the light theme gets the same structure with its own contrast. */
 .log-scroll {
   max-height: min(62vh, 620px);
   min-height: 260px;
   overflow: auto;
-  padding: var(--sp-4);
+  padding: 0;
   border: 1px solid var(--line);
   border-radius: var(--r-md);
-  background: #0b0b12;
-  color: #cdd3e6;
+  background: var(--surface-1);
+  color: var(--text);
   font-family: var(--font-mono);
   font-size: var(--fs-sm);
   line-height: 1.55;
+}
+
+.log-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+.log-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: var(--sp-2) var(--sp-3);
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-2);
+  color: var(--text-mute);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+/* Identity columns are short fixed-width codes: centring both the header and the
+   value aligns them as a block. 内容 stays left-aligned because its text varies
+   in length, so centring it would waste the row's width. */
+.log-table .log-cell--time,
+.log-table .log-cell--level,
+.log-table .log-cell--component,
+.log-table .log-cell--node,
+.log-table .log-cell--platform {
+  text-align: center;
+}
+
+.log-table .log-cell--message {
+  text-align: left;
+}
+
+.log-row td {
+  padding: 1px var(--sp-3);
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 55%, transparent);
+  vertical-align: top;
+}
+
+.log-row:hover td {
+  background: color-mix(in srgb, var(--brand) 7%, transparent);
+}
+
+.log-row--copied td {
+  background: color-mix(in srgb, var(--ok) 22%, transparent);
+}
+
+.log-row--empty td {
+  padding: var(--sp-6);
+  color: var(--text-mute);
+  text-align: center;
+}
+
+.log-cell--time {
+  width: 1%;
+  color: var(--text-mute);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.log-cell--level {
+  width: 1%;
+  font-weight: 650;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+}
+
+.log-cell--component,
+.log-cell--node,
+.log-cell--platform {
+  width: 1%;
+  white-space: nowrap;
+}
+
+.log-cell--component {
+  color: var(--text-dim);
+}
+
+.log-cell--node,
+.log-cell--platform {
+  padding-inline: var(--sp-2);
+  color: var(--text-mute);
+}
+
+.log-cell--message {
   white-space: pre-wrap;
-  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
-.log-line.error {
-  color: #ff8a9c;
+/* A `[标签]` such as `[弹幕 转播]` reads as a chip, not as literal brackets. */
+.log-tag {
+  padding: 0 5px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--brand) 18%, transparent);
+  color: var(--brand-hi);
+  font-size: var(--fs-xs);
 }
 
-.log-line.warn {
-  color: #f9d189;
+/* Severity tints the level cell; only error/warn also tint the message, because
+   those are the rows an operator scans for. */
+.log-row.error .log-cell--level {
+  color: var(--danger);
 }
 
-.log-line.info {
-  color: #7fb6ff;
+.log-row.error .log-cell--message {
+  color: color-mix(in srgb, var(--danger) 72%, var(--text));
 }
 
-.log-line.debug {
-  color: #b9a2ff;
+.log-row.warn .log-cell--level {
+  color: var(--warn);
+}
+
+.log-row.warn .log-cell--message {
+  color: color-mix(in srgb, var(--warn) 62%, var(--text));
+}
+
+.log-row.info .log-cell--level {
+  color: var(--brand);
+}
+
+.log-row.debug .log-cell--level {
+  color: var(--brand-2);
+}
+
+.log-row.trace .log-cell--level {
+  color: var(--text-mute);
+}
+
+.log-filter {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  flex: 1 1 180px;
+  max-width: 300px;
+  gap: var(--sp-2);
+}
+
+.log-filter-icon {
+  width: 14px;
+  height: 14px;
+  color: var(--text-mute);
+}
+
+.log-filter input {
+  width: 100%;
+  min-width: 0;
+  padding: 5px var(--sp-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--surface-3);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--fs-sm);
+}
+
+.log-filter input:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 1px;
+}
+
+@media (max-width: 760px) {
+  .log-scroll {
+    max-height: min(70vh, 640px);
+    font-size: var(--fs-xs);
+  }
+
+  .log-table thead {
+    display: none;
+  }
+
+  .log-table,
+  .log-table tbody {
+    display: block;
+  }
+
+  /* One record per card: the identity cells sit inline on the first line and the
+     message is a block on its own line. A block message is bounded by the row
+     width, so a long line wraps instead of widening the scroll area. */
+  .log-row {
+    display: block;
+    padding: var(--sp-2) var(--sp-3);
+    border-bottom: 1px solid #1b1b26;
+  }
+
+  /* The desktop columns use width:1%; inside a card that would shrink every
+     identity cell, so each keeps its intrinsic width here. The message needs the
+     type selector too, or `.log-row td` would keep it inline. */
+  .log-row td:not(.log-cell--message) {
+    display: inline;
+    width: auto;
+    padding: 0;
+    border: 0;
+  }
+
+  .log-row td:not(.log-cell--message):not(:empty) {
+    margin-right: var(--sp-2);
+  }
+
+  .log-row td.log-cell--message {
+    display: block;
+    margin-top: 2px;
+    overflow-wrap: anywhere;
+  }
 }
 
 .log-actions {

@@ -953,7 +953,7 @@ pub(crate) async fn retry_unconfirmed_demotion(cfg: &Config) {
     if !still_owed {
         tracing::info!(
             "{} 源节点 {} 停播补确认已取消；本机已非所选节点或源节点已退出成员清单",
-            safe_text(&cfg.cluster.node_id, 64),
+            crate::logging::node_tag(&cfg.cluster.node_id),
             safe_text(&source, 64)
         );
         return;
@@ -982,7 +982,7 @@ pub(crate) async fn retry_unconfirmed_demotion(cfg: &Config) {
             if confirmed {
                 tracing::info!(
                     "{} 已确认源节点 {} 停止并关闭监控",
-                    safe_text(&cfg.cluster.node_id, 64),
+                    crate::logging::node_tag(&cfg.cluster.node_id),
                     safe_text(&source, 64)
                 );
             }

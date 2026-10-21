@@ -188,8 +188,8 @@ where
     Fut: Future<Output = Result<String, Box<dyn Error>>>,
 {
     let identity = format!(
-        "{} TW/{}",
-        safe_text(if node.is_empty() { "local" } else { node }, 64),
+        "{} [TW] {}",
+        crate::logging::node_tag(node),
         safe_text(channel, 64)
     );
     let backup_regions = ["asl", "as", "na", "sa", "eu", "eu3"];
@@ -573,7 +573,7 @@ mod tests {
                 .count(),
             1
         );
-        assert!(output.contains("ca TW/example_channel_001"));
+        assert!(output.contains("[ca] [TW] example_channel_001"));
         assert!(output.contains("region=na"));
         assert!(!output.contains("SYNTHETIC-TOKEN"));
     }

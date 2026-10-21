@@ -233,6 +233,19 @@ pub(crate) fn safe_text(raw: &str, max_columns: usize) -> String {
     shorten(&single_line, max_columns)
 }
 
+/// The record's node identity as one bracket tag (`[jp]`, `[local]`).
+///
+/// Every line that names the node uses this before its action, so a reader can
+/// scan a column of records for one node regardless of the emitting module.
+pub(crate) fn node_tag(raw: &str) -> String {
+    let name = safe_text(raw.trim(), 64);
+    if name.is_empty() {
+        "[local]".to_string()
+    } else {
+        format!("[{name}]")
+    }
+}
+
 pub(crate) fn safe_diagnostic(raw: &str) -> String {
     let text = safe_text(raw.trim(), DIAGNOSTIC_COLUMNS);
     if text.trim().is_empty() {

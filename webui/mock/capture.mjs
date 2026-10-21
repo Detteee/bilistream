@@ -327,7 +327,11 @@ try {
     const until = async (check, timeout = 2000) => { const deadline = performance.now() + timeout; while (performance.now() < deadline) { if (check()) return; await pause(20); } throw new Error('Log UI did not settle'); };
     let logRequests = 0;
     const fetchOriginal = window.fetch;
-    let lines = Array.from({length: 600}, (_, i) => '2026-10-10 18:00:00+0800 INFO [runtime] jp YT/示例频道001 log ' + i + ' title=ERROR ⚠️');
+    let lines = Array.from({length: 600}, (_, i) => '2026-10-10 18:00:' + String(i % 60).padStart(2, '0') + '+0800 INFO [runtime] [jp] [YT] 示例频道001 推流已观察到输出；会话 s=1 log ' + i + ' title=ERROR ⚠️');
+    // The rolling window keeps the newest 500, so the tagged fixtures sit at the
+    // tail where the operator actually sees them.
+    lines[598] = '2026-10-10 18:00:58+0800 INFO [danmaku] [jp] [弹幕 转播] #1 选台结果=[YT] 示例频道001；原因=请求频道是本轮最高可用候选；请求=[YT] 示例频道001';
+    lines[599] = '2026-10-10 18:00:59+0800 WARN [cluster] [ca] 自动交接 ny→jp #3 已接管，旧节点停止推送';
     let networkRequests = 0;
     window.fetch = (path, options) => {
       if (path === '/api/logs') { logRequests++; return Promise.resolve(new Response(JSON.stringify({success:true,logs:lines.join(String.fromCharCode(10))}), {headers:{'Content-Type':'application/json'}})); }
@@ -347,10 +351,12 @@ try {
       const first = output.firstElementChild;
       const next = first.nextElementSibling;
       const bounded = output.children.length === 500 && first.textContent.includes('log 100');
-      const severity = [...output.children].every(row => row.classList.contains('info'));
+      // The tail carries one tagged INFO and one WARN fixture, so severity is
+      // checked per row instead of assuming the whole window is INFO.
+      const severity = [...output.children].every((row, index) => row.classList.contains(index === 499 ? 'warn' : 'info'));
       await refresh();
       const retained = first === output.firstElementChild;
-      lines.push('2026-10-11 00:00:00+0800 ERROR [ffmpeg] jp YT/示例频道001 log 600 Broken pipe');
+      lines.push('2026-10-11 00:00:00+0800 ERROR [ffmpeg] [jp] [YT] 示例频道001 s=1 推流停滞，准备终止进程；流时间冻结12秒 log 600');
       await refresh();
       const appended = output.children.length === 500 && output.firstElementChild === next && output.lastElementChild.classList.contains('error');
       document.getElementById('clear-logs-btn').click();
@@ -375,11 +381,35 @@ try {
     } finally { window.fetch = fetchOriginal; }
   })()`));
   assert.deepEqual(performanceChecks, {bounded:true,severity:true,retained:true,appended:true,cleared:true,hiddenSkipped:true,hiddenLogsSkipped:true,visibleLogsFetched:true,visibleFetched:true});
+  // Narrow screens drop the table header and stack one record per card; the
+  // message must own a full line instead of widening the identity cells.
+  await command('browsingContext.setViewport', { context, viewport: { width: 320, height: 900 }, devicePixelRatio: 1 });
+  await evaluate("document.getElementById('tab-logs').click()");
+  const logMobile = JSON.parse(await evaluate(`(() => {
+    const scroll = document.getElementById('log-scroll');
+    const row = document.querySelector('.log-row:not(.log-row--empty)');
+    const message = row.querySelector('.log-cell--message');
+    const first = [...row.children].find(cell => cell !== message && cell.textContent);
+    const rowBox = row.getBoundingClientRect();
+    return JSON.stringify({
+      noHorizontalScroll: scroll.scrollWidth <= scroll.clientWidth + 1,
+      messageBelowIdentity: message.getBoundingClientRect().top >= first.getBoundingClientRect().bottom - 1,
+      messageSpansRow: message.getBoundingClientRect().width >= rowBox.width - 48,
+      headerHidden: getComputedStyle(document.querySelector('.log-table thead')).display === 'none',
+    });
+  })()`));
+  assert.deepEqual(logMobile, { noHorizontalScroll: true, messageBelowIdentity: true, messageSpansRow: true, headerHidden: true });
   if (process.argv[2]) {
-    await evaluate("document.getElementById('tab-logs').click()");
+    await capture(join(captureDir, 'log-mobile.png'));
+    await command('browsingContext.setViewport', { context, viewport: { width: 1440, height: 1320 }, devicePixelRatio: 1 });
     await capture(join(captureDir, 'log-readability.png'));
+    // The same table in the dark theme: both must read as the app's own surface.
+    await evaluate("document.documentElement.classList.remove('light-theme')");
+    await capture(join(captureDir, 'log-readability-dark.png'));
+    await evaluate("document.documentElement.classList.add('light-theme')");
     await evaluate("document.getElementById('tab-overview').click()");
   }
+  await command('browsingContext.setViewport', { context, viewport: { width: 1440, height: 1320 }, devicePixelRatio: 1 });
   // A same-version package must not reload the old page during installation.
   const updateChecks = JSON.parse(await evaluate(`(async () => {
     const pause = ms => new Promise(resolve => setTimeout(resolve, ms));

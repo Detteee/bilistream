@@ -362,19 +362,15 @@ impl Worker {
         }
     }
 
-    fn node_label(&self) -> String {
-        if self.report_node.trim().is_empty() {
-            "local".to_string()
-        } else {
-            safe_text(&self.report_node, 64)
-        }
+    fn node_tag(&self) -> String {
+        crate::logging::node_tag(&self.report_node)
     }
 
     fn note_fetch_failure(&mut self, owner: &str, error: &str, now: Instant) {
         if let Some(summary) = self.fetch_failures.failure(now, 1) {
             tracing::warn!(
                 "{} 读取节点 {} 的 YouTube 索引失败；{}，按现有规则使用缓存或本地查询；原因={}",
-                self.node_label(),
+                self.node_tag(),
                 safe_text(owner, 64),
                 summary,
                 safe_diagnostic(error)
@@ -382,7 +378,7 @@ impl Worker {
         } else {
             tracing::debug!(
                 "{} 读取节点 {} 的 YouTube 索引仍失败: {}",
-                self.node_label(),
+                self.node_tag(),
                 safe_text(owner, 64),
                 safe_diagnostic(error)
             );
@@ -393,7 +389,7 @@ impl Worker {
         if let Some(summary) = self.fetch_failures.success(now) {
             tracing::info!(
                 "{} 读取节点 {} 的 YouTube 索引已恢复；此前失败={}次 持续={}",
-                self.node_label(),
+                self.node_tag(),
                 safe_text(owner, 64),
                 summary.failures,
                 human_elapsed(summary.elapsed)
@@ -417,25 +413,25 @@ impl Worker {
             (_, Source::ThisNode) => {
                 tracing::info!(
                     "{} YouTube 索引: 本节点负责集群的 YouTube 查询",
-                    self.node_label()
+                    self.node_tag()
                 );
             }
             (_, Source::Node(node)) => tracing::info!(
                 "{} YouTube 索引: 使用节点 {} 的索引",
-                self.node_label(),
+                self.node_tag(),
                 safe_text(node, 64)
             ),
             (Source::Node(node), Source::Local) => {
                 tracing::warn!(
                     "{} YouTube 索引: 节点 {} 的索引不可用，回退本地查询",
-                    self.node_label(),
+                    self.node_tag(),
                     safe_text(node, 64)
                 );
             }
             (_, Source::Local) => {
                 tracing::info!(
                     "{} YouTube 索引: 本节点不再负责集群的 YouTube 查询",
-                    self.node_label()
+                    self.node_tag()
                 );
             }
         }
@@ -524,7 +520,7 @@ mod tests {
         assert_eq!(text.matches("读取节点 ny 的 YouTube 索引已恢复").count(), 1);
         assert!(text.contains("累计失败=11次"));
         assert!(text.contains("此前失败=1次"));
-        assert!(text.contains("jp 读取节点 ca"));
+        assert!(text.contains("[jp] 读取节点 ca"));
         assert!(text.contains("HTTP 530"));
         assert!(!text.contains("synthetic-peer-token"));
         assert!(!text.contains("https://peer.invalid"));
