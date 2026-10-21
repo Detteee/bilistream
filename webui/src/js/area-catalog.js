@@ -11,7 +11,7 @@ export function loadAreaCatalog() {
   }
   return catalogRequest;
 }
-export function fillAreaCatalog(select, areas, placeholder = '选择官方分区...') {
+export function fillAreaCatalog(select, areas, placeholder = '选择官方分区…') {
   const old = select.value;
   const option = document.createElement('option'); option.value = ''; option.textContent = placeholder;
   select.replaceChildren(option);

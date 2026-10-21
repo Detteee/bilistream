@@ -451,7 +451,7 @@ async function loadChannelsForPriorityInline() {
     const data = await getJson('/api/channels');
     const select = document.getElementById('priority-channel-edit-select');
 
-    select.replaceChildren(createSelectOption('', '选择频道...'));
+    select.replaceChildren(createSelectOption('', '选择频道…'));
 
     if (data.channels) {
       data.channels.forEach(channel => {
@@ -522,7 +522,7 @@ async function loadAreasForPriorityInline() {
     const data = await getJson('/api/areas');
     const select = document.getElementById('priority-area-edit-select');
 
-    select.replaceChildren(createAreaOption('', '选择分区...'));
+    select.replaceChildren(createAreaOption('', '选择分区…'));
 
     if (data.areas) {
       getSortedAreas(data.areas).forEach(area => {
@@ -876,7 +876,7 @@ function toggleYtChannelEdit() {
 }
 function populateYtChannelEditSelect() {
   const editSelect = document.getElementById('yt-channel-edit-select');
-  editSelect.replaceChildren(createSelectOption('', '选择频道...'));
+  editSelect.replaceChildren(createSelectOption('', '选择频道…'));
   appendPlatformChannelOptions(editSelect, 'youtube');
 }
 function cancelYtChannelEdit() {
@@ -936,7 +936,7 @@ function toggleYtAreaEdit() {
 }
 function populateYtAreaEditSelect() {
   const editSelect = document.getElementById('yt-area-edit-select');
-  editSelect.replaceChildren(createAreaOption('', '选择分区...'));
+  editSelect.replaceChildren(createAreaOption('', '选择分区…'));
 
   if (state.areasData && state.areasData.areas) {
     appendAreaOptions(editSelect, state.areasData.areas);
@@ -1109,7 +1109,7 @@ function toggleTwChannelEdit() {
 }
 function populateTwChannelEditSelect() {
   const editSelect = document.getElementById('tw-channel-edit-select');
-  editSelect.replaceChildren(createSelectOption('', '选择频道...'));
+  editSelect.replaceChildren(createSelectOption('', '选择频道…'));
   appendPlatformChannelOptions(editSelect, 'twitch');
 }
 function cancelTwChannelEdit() {
@@ -1169,7 +1169,7 @@ function toggleTwAreaEdit() {
 }
 function populateTwAreaEditSelect() {
   const editSelect = document.getElementById('tw-area-edit-select');
-  editSelect.replaceChildren(createAreaOption('', '选择分区...'));
+  editSelect.replaceChildren(createAreaOption('', '选择分区…'));
 
   if (state.areasData && state.areasData.areas) {
     appendAreaOptions(editSelect, state.areasData.areas);
@@ -1228,7 +1228,7 @@ async function toggleNcChannelEdit() {
 }
 function populateNcChannelEditSelect() {
   const editSelect = document.getElementById('nc-channel-edit-select');
-  editSelect.replaceChildren(createSelectOption('', '选择频道...'));
+  editSelect.replaceChildren(createSelectOption('', '选择频道…'));
   appendPlatformChannelOptions(editSelect, 'niconico');
 
   const channelSpan = document.getElementById('nc-channel-name');
@@ -1357,7 +1357,7 @@ function toggleNcAreaEdit() {
 }
 function populateNcAreaEditSelect() {
   const editSelect = document.getElementById('nc-area-edit-select');
-  editSelect.replaceChildren(createAreaOption('', '选择分区...'));
+  editSelect.replaceChildren(createAreaOption('', '选择分区…'));
 
   if (state.areasData && state.areasData.areas) {
     appendAreaOptions(editSelect, state.areasData.areas);
@@ -1416,7 +1416,7 @@ function toggleAreaEdit() {
 }
 function populateAreaEditSelect() {
   const editSelect = document.getElementById('area-edit-select');
-  editSelect.replaceChildren(createAreaOption('', '选择分区...'));
+  editSelect.replaceChildren(createAreaOption('', '选择分区…'));
   appendAreaOptions(editSelect, getAreaList());
 }
 function cancelAreaEdit() {
@@ -1536,7 +1536,7 @@ function populateQualityOptions(selectElement, platform, includeEmpty = true) {
 
   // Add empty option if requested
   if (includeEmpty) {
-    selectElement.appendChild(createSelectOption('', '选择画质...'));
+    selectElement.appendChild(createSelectOption('', '选择画质…'));
   }
 
   // Add options for the specified platform; the labels are the shared table so

@@ -44,7 +44,7 @@ function renderSetupChannelOptions() {
     const select = document.getElementById(`setup-${platform}-channel-select`);
     const previous = select.value;
     const seen = new Set();
-    const options = [createSelectOption('', '不转播（关闭监控）'), createSelectOption('manual', '手动添加频道...')];
+    const options = [createSelectOption('', '不转播（关闭监控）'), createSelectOption('manual', '手动添加频道…')];
     const channels = platform === 'yt'
       ? [...setupChannels, ...[...selectedFavorites.values()].map(channel => ({ name: channel.name, platforms: { youtube: channel.id } }))]
       : setupChannels;
@@ -119,7 +119,7 @@ async function loadSetupFavorites() {
     return;
   }
   button.disabled = true;
-  status.textContent = '正在加载收藏频道...';
+  status.textContent = '正在加载收藏频道…';
   try {
     const result = await postJsonApi('/api/setup/holodex-favorites', { api_key: apiKey, jwt }, { timeoutMs: 25000 });
     if (generation !== favoritesGeneration) return;
@@ -353,7 +353,7 @@ function startLoginPolling() {
   }, 2000);
 }
 async function triggerBiliLogin() {
-  showNotification('正在启动登录流程，请在终端查看二维码...', 'success');
+  showNotification('正在启动登录流程，请在终端查看二维码…', 'success');
 
   try {
     const data = await postJsonApi('/api/setup/login');
@@ -470,7 +470,7 @@ async function saveSetupConfig() {
     if (data.success) {
       saved = true;
       password.value = '';
-      showNotification('配置保存成功！正在加载控制面板...', 'success');
+      showNotification('配置保存成功！正在加载控制面板…', 'success');
       setTimeout(() => {
         location.reload();
       }, 1500);
@@ -560,7 +560,7 @@ function updateSetupTwitchChannel() { updateSetupTarget('tw'); }
 async function checkSetupAndRefresh() {
   const needsSetup = await checkSetupStatus();
   if (!needsSetup) {
-    showNotification('设置完成！正在加载控制面板...', 'success');
+    showNotification('设置完成！正在加载控制面板…', 'success');
     setTimeout(() => {
       location.reload();
     }, 1000);

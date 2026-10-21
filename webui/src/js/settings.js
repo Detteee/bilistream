@@ -905,7 +905,7 @@ async function loadVersion() {
 }
 async function checkForUpdates() {
   try {
-    showNotification('正在检查更新...', 'success');
+    showNotification('正在检查更新…', 'success');
 
     // Use backend API to check for updates
     const data = await getUpdateInfo();
@@ -981,11 +981,11 @@ async function autoInstallUpdate() {
     const updateProgress = document.getElementById('update-progress');
 
     autoUpdateBtn.disabled = true;
-    autoUpdateBtn.textContent = '⏳ 下载中...';
+    autoUpdateBtn.textContent = '⏳ 下载中…';
     updateProgress.classList.remove('hidden');
-    updateProgress.textContent = '正在下载更新，请稍候...';
+    updateProgress.textContent = '正在下载更新，请稍候…';
 
-    showNotification('开始下载更新...', 'success');
+    showNotification('开始下载更新…', 'success');
 
     const data = await postJsonApi('/api/update/download', { download_url: latestUpdateInfo.download_url });
 

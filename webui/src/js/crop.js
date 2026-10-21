@@ -173,7 +173,7 @@ async function autoCaptureFrame() {
   if (!session) return;
   const platform = document.getElementById('cropPlatform').value;
 
-  showNotification('正在捕获直播帧...', 'info');
+  showNotification('正在捕获直播帧…', 'info');
 
   try {
     const result = await postJsonApi(`/api/crop/capture/${platform}`, undefined, { signal: session.signal });
@@ -666,7 +666,7 @@ async function saveCropSelection(restart) {
       const pending = session.pendingSwitch;
       closeCropModal();
       if (pending) {
-        showNotification('裁剪已保存，正在切换频道...', 'info');
+        showNotification('裁剪已保存，正在切换频道…', 'info');
         await switchPendingStream(pending);
       } else if (restart) {
         const result = await postJsonApi('/api/restart');

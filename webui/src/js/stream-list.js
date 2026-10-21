@@ -178,7 +178,7 @@ async function cropAndSwitchToStream(channelId, suggestedAreaId, title, topicId,
   // First, open crop modal and auto-capture
   const session = openCropConfig(platform, { autoCapture: false });
 
-  showNotification('正在捕获直播帧...', 'info');
+  showNotification('正在捕获直播帧…', 'info');
 
   try {
     const captureUrl = platform === 'twitch'
@@ -649,7 +649,7 @@ async function refreshStreamList({ force = false } = {}) {
   // Refreshing an existing list should not insert a banner above the cards.
   streamsDiv.setAttribute('aria-busy', 'true');
   if (!streamsDiv.childElementCount) {
-    setStreamListStatus(statusDiv, '⏳ 加载中...', 'streams-status-loading');
+    setStreamListStatus(statusDiv, '⏳ 加载中…', 'streams-status-loading');
   }
 
   try {
