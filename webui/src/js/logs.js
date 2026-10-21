@@ -6,6 +6,8 @@ import { getJson } from './api.js';
 
 // Global data
 let logLines = [];
+// Rows keyed by record text survive filtering: a hidden record's row is reused
+// when the filter clears instead of rebuilding the whole table.
 let renderedLines = new Map();
 let maxLogLines = 500;
 let logRefreshIntervalId = null;
@@ -63,6 +65,10 @@ async function refreshLogs() {
       // lines trimmed on the previous refresh would rotate old entries to the end.
       logLines = [...new Set(data.logs.split('\n').filter(line => line.trim()))]
         .slice(-maxLogLines);
+      const visible = new Set(logLines);
+      for (const line of renderedLines.keys()) {
+        if (!visible.has(line)) renderedLines.delete(line);
+      }
 
       renderLogs();
 
@@ -94,15 +100,15 @@ function renderLogs(cleared = false) {
   for (const child of [...logOutput.childNodes]) {
     if (child.nodeType !== Node.ELEMENT_NODE) child.remove();
   }
-  const next = new Map();
   const nodes = [];
   for (const line of visibleLogLines()) {
     let row = renderedLines.get(line);
-    if (!row) row = buildLogRow(line);
-    next.set(line, row);
+    if (!row) {
+      row = buildLogRow(line);
+      renderedLines.set(line, row);
+    }
     nodes.push(row);
   }
-  renderedLines = next;
 
   if (!nodes.length) {
     const empty = document.createElement('tr');

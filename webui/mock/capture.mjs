@@ -354,6 +354,21 @@ try {
       // The tail carries one tagged INFO and one WARN fixture, so severity is
       // checked per row instead of assuming the whole window is INFO.
       const severity = [...output.children].every((row, index) => row.classList.contains(index === 499 ? 'warn' : 'info'));
+      // Filtering rewrites the visible rows only; clearing it restores the snapshot.
+      const filter = document.getElementById('log-filter-input');
+      filter.value = 'log 574';
+      filter.dispatchEvent(new Event('input'));
+      await pause(20);
+      const filteredRows = [...output.children];
+      const filtered = filteredRows.length === 1 && filteredRows[0].textContent.includes('log 574');
+      const filteredEmpty = (() => {
+        filter.value = 'no such record';
+        filter.dispatchEvent(new Event('input'));
+        const empty = output.children.length === 1 && output.textContent.includes('没有匹配的日志');
+        filter.value = '';
+        filter.dispatchEvent(new Event('input'));
+        return empty && output.children.length === 500;
+      })();
       await refresh();
       const retained = first === output.firstElementChild;
       lines.push('2026-10-11 00:00:00+0800 ERROR [ffmpeg] [jp] [YT] 示例频道001 s=1 推流停滞，准备终止进程；流时间冻结12秒 log 600');
@@ -377,10 +392,10 @@ try {
       const visibleLogsFetched = logRequests > logsBeforeHidden;
       document.getElementById('tab-overview').click();
       await until(() => networkRequests > 0);
-      return JSON.stringify({bounded,severity,retained,appended,cleared,hiddenSkipped,hiddenLogsSkipped,visibleLogsFetched,visibleFetched:networkRequests>0});
+      return JSON.stringify({bounded,severity,filtered,filteredEmpty,retained,appended,cleared,hiddenSkipped,hiddenLogsSkipped,visibleLogsFetched,visibleFetched:networkRequests>0});
     } finally { window.fetch = fetchOriginal; }
   })()`));
-  assert.deepEqual(performanceChecks, {bounded:true,severity:true,retained:true,appended:true,cleared:true,hiddenSkipped:true,hiddenLogsSkipped:true,visibleLogsFetched:true,visibleFetched:true});
+  assert.deepEqual(performanceChecks, {bounded:true,severity:true,filtered:true,filteredEmpty:true,retained:true,appended:true,cleared:true,hiddenSkipped:true,hiddenLogsSkipped:true,visibleLogsFetched:true,visibleFetched:true});
   // Narrow screens drop the table header and stack one record per card; the
   // message must own a full line instead of widening the identity cells.
   await command('browsingContext.setViewport', { context, viewport: { width: 320, height: 900 }, devicePixelRatio: 1 });
