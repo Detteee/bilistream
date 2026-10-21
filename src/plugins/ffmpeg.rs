@@ -2226,7 +2226,7 @@ impl StderrReporter {
             self.emit(
                 self.suppressed_level,
                 &format!(
-                    "{state}；已合并{}条重复诊断：{}",
+                    "{state}；已合并 {} 条重复诊断：{}",
                     self.suppressed, self.last_diagnostic
                 ),
                 now,
@@ -3614,7 +3614,7 @@ mod tests {
         assert!(output.contains("[jp] [YT] 示例频道001 s=44 缓存；Broken pipe"));
         assert!(output.contains("[jp] [YT] 示例频道001 s=44 推流；Broken pipe"));
         assert!(output.contains("[ca] [TW] 示例频道002 s=45 推流；Broken pipe"));
-        assert!(output.contains("已合并1条重复诊断"));
+        assert!(output.contains("已合并 1 条重复诊断"));
         assert_eq!(output.lines().count(), 5, "{output}");
     }
 
@@ -3783,8 +3783,8 @@ mod tests {
             3,
             "{output}"
         );
-        assert!(output.contains("已合并20条重复诊断"));
-        assert!(output.contains("诊断读取结束；已合并1条重复诊断"));
+        assert!(output.contains("已合并 20 条重复诊断"));
+        assert!(output.contains("诊断读取结束；已合并 1 条重复诊断"));
         assert!(output.contains("ERROR [jp] [YT] 示例频道001 s=46 摄取；ERROR new decoder failure"));
         assert!(output
             .lines()

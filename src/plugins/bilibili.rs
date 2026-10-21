@@ -852,7 +852,7 @@ where
         },
     };
     tracing::info!(
-        "弹幕发送过快（code {code}），{}秒后重试一次",
+        "弹幕发送过快（code {code}），{} 秒后重试一次",
         backoff.as_secs()
     );
     tokio::time::sleep(backoff).await;

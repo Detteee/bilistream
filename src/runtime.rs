@@ -2124,7 +2124,7 @@ fn interpret_refetch_step(step: RefetchStep, stream_log: &FfmpegStreamIdentity) 
         } => {
             if timed_out {
                 tracing::warn!(
-                    "{stream_log} 源状态请求连续失败{}秒且无在线回应，按直播结束处理",
+                    "{stream_log} 源状态请求连续失败 {} 秒且无在线回应，按直播结束处理",
                     STREAM_END_ERROR_WINDOW.as_secs()
                 );
             } else {
@@ -2308,13 +2308,13 @@ async fn stop_room_after_source_end(
     let wait = auto_stop_delay(live_secs, cfg.auto_stop_threshold_hours, cfg.interval);
     if wait.is_zero() {
         tracing::info!(
-            "{session_log} 源直播已结束，本场已直播{}小时（≥{}小时），立即自动停播B站直播间",
+            "{session_log} 源直播已结束，本场已直播 {} 小时（≥ {} 小时），立即自动停播B站直播间",
             live_secs / 3600,
             cfg.auto_stop_threshold_hours
         );
     } else {
         tracing::info!(
-            "{session_log} 源直播已结束，{}秒后自动停播B站直播间，避免挂机判定",
+            "{session_log} 源直播已结束，{} 秒后自动停播B站直播间，避免挂机判定",
             wait.as_secs()
         );
         tokio::time::sleep(wait).await;
@@ -2548,7 +2548,7 @@ async fn run_push_loop(
 
         // Stream is still live but ffmpeg exited, restart it
         tracing::info!(
-            "{} 源直播仍在线，1秒后重试推流",
+            "{} 源直播仍在线，1 秒后重试推流",
             stream_log.session_label(session)
         );
         tokio::time::sleep(Duration::from_secs(1)).await;

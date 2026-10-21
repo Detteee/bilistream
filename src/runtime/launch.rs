@@ -503,9 +503,9 @@ async fn run_webui_app(
 
     #[cfg(target_os = "windows")]
     {
-        tracing::info!("请勿关闭此窗口 ");
+        tracing::info!("请勿关闭此窗口");
         if let Err(e) = show_windows_notification(port) {
-            eprintln!("无法显示通知: {}", e);
+            eprintln!("无法显示通知：{}", e);
         }
     }
 
@@ -680,8 +680,8 @@ fn show_windows_notification(port: u16) -> Result<(), Box<dyn std::error::Error>
     // Build notification message
     let mut message = String::from("Web UI 服务已启动\n");
     message.push_str("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
-    message.push_str(&format!("本地访问: http://localhost:{}\n", port));
-    message.push_str(&format!("本地访问: http://127.0.0.1:{}\n", port));
+    message.push_str(&format!("本地访问：http://localhost:{}\n", port));
+    message.push_str(&format!("本地访问：http://127.0.0.1:{}\n", port));
 
     // Escape the message for PowerShell
     let escaped_message = message.replace("`", "``").replace("\"", "`\"");

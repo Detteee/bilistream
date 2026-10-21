@@ -191,7 +191,7 @@ where
                 }
             }
             Err(error) => tracing::warn!(
-                "B站直播汇总请求失败（第 {} 次）: {}",
+                "B站直播汇总请求失败（第 {} 次）：{}",
                 attempt + 1,
                 safe_fetch_failure(&error)
             ),

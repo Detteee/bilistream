@@ -120,7 +120,7 @@ pub async fn capture_frame(
                         success: false,
                         data: None,
                         message: Some(format!(
-                            "yt-dlp 启动失败：{}。请确认已安装 yt-dlp 并位于 PATH 中。",
+                            "yt-dlp 启动失败：{}；请确认已安装 yt-dlp 并位于 PATH 中",
                             e
                         )),
                     });

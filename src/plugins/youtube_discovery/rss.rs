@@ -479,7 +479,7 @@ impl RssHealth {
             }
         } else if let Some(summary) = self.report.pending(now) {
             tracing::info!(
-                "{} YouTube RSS 本轮成功={}/{}，尚有{}个频道待重新验证；{}",
+                "{} YouTube RSS 本轮成功={}/{}，尚有 {} 个频道待重新验证；{}",
                 self.node_tag(),
                 successful,
                 attempted,
@@ -657,7 +657,7 @@ mod tests {
         });
         let text = logs.text();
         assert!(
-            text.contains("[jp] YouTube RSS 本轮成功=1/1，尚有2个频道待重新验证"),
+            text.contains("[jp] YouTube RSS 本轮成功=1/1，尚有 2 个频道待重新验证"),
             "{text}"
         );
         assert!(!text.contains("本轮成功=1/3"));
