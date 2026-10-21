@@ -283,6 +283,10 @@ pub struct ClusterApplyNodeModeRequest {
 pub struct MonitoredConfig {
     pub interval: u64,
     pub auto_cover: bool,
+    #[serde(default = "default_true")]
+    pub auto_stop_after_source_end: bool,
+    #[serde(default = "crate::config::default_auto_stop_threshold_hours")]
+    pub auto_stop_threshold_hours: u64,
     pub enable_anti_collision: bool,
     pub anti_collision_list: HashMap<String, i32>,
     #[serde(default = "default_true")]

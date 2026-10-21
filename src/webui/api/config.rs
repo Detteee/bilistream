@@ -189,6 +189,8 @@ fn config_response(cfg: &Config) -> serde_json::Value {
     response["warning_hold_exempt_reasons"] = json!(cfg.warning_hold_exempt_reasons);
     response["warning_hold_exempt_all_low_risk"] = json!(cfg.warning_hold_exempt_all_low_risk);
     response["warning_hold_exempt_channels"] = exempt_channel_catalog();
+    response["auto_stop_after_source_end"] = json!(cfg.auto_stop_after_source_end);
+    response["auto_stop_threshold_hours"] = json!(cfg.auto_stop_threshold_hours);
     response["riot_api_key_configured"] =
         json!(cfg.riot_api_key.as_ref().is_some_and(|s| !s.is_empty()));
     response["holodex_api_key_configured"] =
@@ -215,6 +217,8 @@ pub struct UpdateConfigRequest {
     #[serde(skip_serializing)]
     expected: Option<HashMap<String, serde_json::Value>>,
     interval: Option<u64>,
+    auto_stop_after_source_end: Option<bool>,
+    auto_stop_threshold_hours: Option<u64>,
     auto_cover: Option<bool>,
     show_priority_channel: Option<bool>,
     show_twitch: Option<bool>,
@@ -370,6 +374,8 @@ pub(crate) fn validate_edit_preconditions(
 fn config_form_values(cfg: &Config) -> serde_json::Value {
     json!({
         "interval": cfg.interval,
+        "auto_stop_after_source_end": cfg.auto_stop_after_source_end,
+        "auto_stop_threshold_hours": cfg.auto_stop_threshold_hours,
         "show_priority_channel": cfg.show_priority_channel,
         "show_twitch": cfg.show_twitch,
         "show_niconico": cfg.show_niconico,
@@ -474,6 +480,15 @@ pub(crate) fn validated_exempt_reasons(reasons: Vec<String>) -> Result<Vec<Strin
     match unknown.first() {
         Some(reason) => Err(format!("违规类型无效：{reason}")),
         None => Ok(known),
+    }
+}
+
+/// Runtime auto-stop threshold: one hour up to a week, inclusive.
+pub(crate) fn validated_auto_stop_threshold_hours(hours: u64) -> Result<u64, String> {
+    if (1..=168).contains(&hours) {
+        Ok(hours)
+    } else {
+        Err("自动停播阈值需在 1 到 168 小时之间".into())
     }
 }
 
@@ -903,6 +918,15 @@ pub async fn update_config(
 
     if let Some(enable_danmaku_command) = payload.enable_danmaku_command {
         cfg.bililive.enable_danmaku_command = enable_danmaku_command;
+    }
+    if let Some(auto_stop_after_source_end) = payload.auto_stop_after_source_end {
+        cfg.auto_stop_after_source_end = auto_stop_after_source_end;
+    }
+    if let Some(hours) = payload.auto_stop_threshold_hours {
+        match validated_auto_stop_threshold_hours(hours) {
+            Ok(hours) => cfg.auto_stop_threshold_hours = hours,
+            Err(message) => return Ok(edit_refusal(message)),
+        }
     }
     if let Some(youtube_enable_monitor) = payload.youtube_enable_monitor {
         cfg.youtube.enable_monitor = youtube_enable_monitor;
@@ -1418,6 +1442,8 @@ mod tests {
             response["warning_hold_exempt_channels"].is_array(),
             "the picker roster must always be a list"
         );
+        assert_eq!(response["auto_stop_after_source_end"], json!(true));
+        assert_eq!(response["auto_stop_threshold_hours"], json!(3));
     }
 
     #[test]
@@ -1438,6 +1464,17 @@ mod tests {
             json!(["game_mode_off"])
         );
         assert_eq!(values["warning_hold_exempt_all_low_risk"], json!(false));
+        assert_eq!(values["auto_stop_after_source_end"], json!(true));
+        assert_eq!(values["auto_stop_threshold_hours"], json!(3));
+    }
+
+    #[test]
+    fn the_auto_stop_threshold_stays_between_one_hour_and_a_week() {
+        assert_eq!(validated_auto_stop_threshold_hours(1), Ok(1));
+        assert_eq!(validated_auto_stop_threshold_hours(3), Ok(3));
+        assert_eq!(validated_auto_stop_threshold_hours(168), Ok(168));
+        assert!(validated_auto_stop_threshold_hours(0).is_err());
+        assert!(validated_auto_stop_threshold_hours(169).is_err());
     }
 
     #[test]

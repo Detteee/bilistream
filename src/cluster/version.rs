@@ -10,6 +10,8 @@ pub fn monitored_config_from_config(cfg: &Config) -> MonitoredConfig {
     let mut payload = MonitoredConfig {
         interval: cfg.interval,
         auto_cover: cfg.auto_cover,
+        auto_stop_after_source_end: cfg.auto_stop_after_source_end,
+        auto_stop_threshold_hours: cfg.auto_stop_threshold_hours,
         enable_anti_collision: cfg.enable_anti_collision,
         anti_collision_list: cfg.anti_collision_list.clone(),
         enable_danmaku_command: cfg.bililive.enable_danmaku_command,

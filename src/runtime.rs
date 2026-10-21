@@ -637,10 +637,17 @@ fn room_offline_cause(source_ended: bool) -> BroadcastEndCause {
     }
 }
 
-/// How long the B站 room waits after its source ended before it is closed.
-/// One monitor interval; a zero (hand-edited) interval still waits a second.
-fn auto_stop_wait(interval_secs: u64) -> Duration {
-    Duration::from_secs(interval_secs.max(1))
+/// How long the B站 room waits after its source ended: a session already at
+/// least the configured threshold old closes at once, a shorter one waits one
+/// monitor interval in case a new source takes over. A zero (hand-edited)
+/// interval still waits a second.
+fn auto_stop_delay(live_secs: i64, threshold_hours: u64, interval_secs: u64) -> Duration {
+    let threshold_secs = threshold_hours.max(1).saturating_mul(3600) as i64;
+    if live_secs >= threshold_secs {
+        Duration::ZERO
+    } else {
+        Duration::from_secs(interval_secs.max(1))
+    }
 }
 
 fn end_danmaku_text(channel_name: &str, commands_enabled: bool) -> String {
@@ -2154,16 +2161,25 @@ async fn read_end_live_states(
     cfg: &bilistream::config::Config,
     exit_reason: FfmpegLoopExitReason,
     source_client: &Option<SourceClient<'_>>,
-) -> (bool, bool) {
+) -> EndLiveStates {
     let current_is_live = match exit_reason {
         FfmpegLoopExitReason::SourceEnded => false,
         _ => !matches!(refetch_source(source_client).await, RefetchReading::Offline),
     };
-    let bili_is_live = fetch_bili_live_status_logged(cfg.bililive.room)
-        .await
-        .map(|status| status.is_live)
-        .unwrap_or(true);
-    (current_is_live, bili_is_live)
+    let bili = fetch_bili_live_status_logged(cfg.bililive.room).await;
+    EndLiveStates {
+        current_is_live,
+        bili_is_live: bili.as_ref().map(|status| status.is_live).unwrap_or(true),
+        bili_live_start_ts: bili.ok().and_then(|status| status.live_start_ts),
+    }
+}
+
+/// The live states the end check read once. The auto-stop threshold reuses
+/// Bilibili's `live_start_ts` instead of paying for a second status call.
+struct EndLiveStates {
+    current_is_live: bool,
+    bili_is_live: bool,
+    bili_live_start_ts: Option<i64>,
 }
 
 /// What the end announcement needs from the pass that ended.
@@ -2173,13 +2189,16 @@ struct EndAnnouncement<'a> {
     channel_name: &'a str,
     session_log: &'a str,
     bili_live: bool,
+    /// The room's live start from the same pass's status read; `None` when
+    /// Bilibili did not report it, which counts as a short session.
+    bili_live_start_ts: Option<i64>,
     /// Whether the 直播结束 notice still needs to go out for this broadcast.
     end_announce: bool,
 }
 
 /// Announce the end of a stream whose source is positively offline: mark the
 /// session ended through the shared state, send the 结束弹幕 once, then auto-stop
-/// a room that has been live for `AUTO_STOP_AFTER_HOURS` or more.
+/// the still-live room (see `auto_stop_delay`).
 ///
 /// `end_announce` is consumed here: it decides whether the 结束弹幕 still has to
 /// go out, and the value it takes afterwards is not read by anyone.
@@ -2194,6 +2213,7 @@ async fn announce_stream_end(
         channel_name,
         session_log,
         bili_live,
+        bili_live_start_ts,
         mut end_announce,
     } = ctx;
     // B站 stopped first (or another exit) with the source
@@ -2242,13 +2262,35 @@ async fn announce_stream_end(
         }
     }
 
-    // The source is positively offline. Leaving the B站 room open with no
-    // video makes Bilibili treat the relay as 挂机/录播 and cut it minutes
-    // later, so close the room one monitor interval after the source ended.
-    // One interval is enough for a brief source hiccup to recover, while a
-    // real end cannot leave a silent room long enough to be flagged.
+    // The source is positively offline; see `stop_room_after_source_end`.
     if bili_live {
-        let wait = auto_stop_wait(cfg.interval);
+        stop_room_after_source_end(cfg, session_log, bili_live_start_ts).await;
+    }
+}
+
+/// Close a still-live B站 room after its source ended: a silent room gets
+/// flagged as 挂机/录播 and cut later, so a long session stops at once and a
+/// short one gets one monitor interval in case a new source takes over.
+async fn stop_room_after_source_end(
+    cfg: &bilistream::config::Config,
+    session_log: &str,
+    bili_live_start_ts: Option<i64>,
+) {
+    if !cfg.auto_stop_after_source_end {
+        tracing::debug!("{session_log} 源结束后自动停播已关闭，B站房间保持开播");
+        return;
+    }
+    let live_secs = bili_live_start_ts
+        .map(|start| (crate::storage::now() as i64 - start).max(0))
+        .unwrap_or(0);
+    let wait = auto_stop_delay(live_secs, cfg.auto_stop_threshold_hours, cfg.interval);
+    if wait.is_zero() {
+        tracing::info!(
+            "{session_log} 源直播已结束，本场已直播{}小时（≥{}小时），立即自动停播B站直播间",
+            live_secs / 3600,
+            cfg.auto_stop_threshold_hours
+        );
+    } else {
         tracing::info!(
             "{session_log} 源直播已结束，{}秒后自动停播B站直播间，避免挂机判定",
             wait.as_secs()
@@ -2258,12 +2300,13 @@ async fn announce_stream_end(
             tracing::info!("{session_log} 等待期间本节点失去执行权，跳过自动停播");
             return;
         }
-        match bili_stop_live(cfg).await {
-            Ok(()) => bilistream::notify::live_ended(BroadcastEndCause::AutoStop),
-            Err(e) => tracing::error!("自动停播失败: {}", e),
-        }
+    }
+    match bili_stop_live(cfg).await {
+        Ok(()) => bilistream::notify::live_ended(BroadcastEndCause::AutoStop),
+        Err(e) => tracing::error!("自动停播失败: {}", e),
     }
 }
+
 /// Everything the push loop needs from the pass that selected a source.
 ///
 /// Fourteen values, but they travel as one struct: the loop is the longest phase
@@ -3014,8 +3057,11 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
             // more could flap back and turn 结束 into 中断.
             // Other exits read the source strictly: only a positive offline
             // statement counts; a failed request reads as still live.
-            let (current_is_live, bili_is_live) =
-                read_end_live_states(&cfg, ffmpeg_loop_exit_reason, &source_client).await;
+            let EndLiveStates {
+                current_is_live,
+                bili_is_live,
+                bili_live_start_ts,
+            } = read_end_live_states(&cfg, ffmpeg_loop_exit_reason, &source_client).await;
 
             let action = end_action(
                 ffmpeg_loop_exit_reason,
@@ -3078,6 +3124,7 @@ async fn run_bilistream(ffmpeg_log_level: &str) -> Result<(), Box<dyn std::error
                             channel_name: &channel_name,
                             session_log: &session_log,
                             bili_live,
+                            bili_live_start_ts,
                             end_announce,
                         },
                     )
@@ -5314,14 +5361,33 @@ mod tests {
     }
 
     #[test]
-    fn end_danmaku_text_and_the_auto_stop_wait() {
+    fn end_danmaku_text_and_the_auto_stop_delay() {
         assert_eq!(
             end_danmaku_text("示例", true),
             "示例 直播结束，可使用弹幕指令进行换台"
         );
         assert_eq!(end_danmaku_text("示例", false), "示例 直播结束");
-        assert_eq!(auto_stop_wait(0), Duration::from_secs(1));
-        assert_eq!(auto_stop_wait(30), Duration::from_secs(30));
+        assert_eq!(
+            auto_stop_delay(8 * 3600, 3, 30),
+            Duration::ZERO,
+            "a session past the threshold stops immediately"
+        );
+        assert_eq!(
+            auto_stop_delay(2 * 3600, 3, 30),
+            Duration::from_secs(30),
+            "a shorter session waits one monitor interval"
+        );
+        assert_eq!(
+            auto_stop_delay(3 * 3600, 3, 30),
+            Duration::ZERO,
+            "at the threshold it is already long enough"
+        );
+        assert_eq!(
+            auto_stop_delay(2 * 3600, 5, 30),
+            Duration::from_secs(30),
+            "a raised threshold keeps the wait"
+        );
+        assert_eq!(auto_stop_delay(0, 1, 0), Duration::from_secs(1));
     }
 
     #[test]

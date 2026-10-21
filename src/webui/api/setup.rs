@@ -336,6 +336,8 @@ pub(crate) async fn save_setup_config(
             auto_cover: true,
             enable_anti_collision: false,
             interval: 60,
+            auto_stop_after_source_end: true,
+            auto_stop_threshold_hours: 3,
             bililive: crate::config::BiliLive {
                 enable_danmaku_command: true,
                 room: 0,

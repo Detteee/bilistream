@@ -113,6 +113,9 @@ function startKeyStatusRefresh() {
 }
 function initSystemSettingsActions() {
   initStorageControls();
+  document
+    .getElementById('config-auto-stop-checkbox')
+    ?.addEventListener('change', syncAutoStopControls);
   initPanelSecurity();
   for (const control of secretControls) document.getElementById(control.button)?.addEventListener('click', () => clearSavedSecret(control));
   startKeyStatusRefresh();
@@ -288,6 +291,9 @@ async function loadSystemConfig() {
 
     // Load basic settings
     setInputValue('config-interval', config.interval ?? 30);
+    setCheckboxChecked('config-auto-stop-checkbox', config.auto_stop_after_source_end !== false);
+    setInputValue('config-auto-stop-hours', config.auto_stop_threshold_hours ?? 3);
+    syncAutoStopControls();
     setCheckboxChecked('config-show-twitch-checkbox', config.show_twitch !== false);
     setCheckboxChecked('config-show-niconico-checkbox', config.show_niconico === true);
     setCheckboxChecked('config-show-priority-checkbox', config.show_priority_channel === true);
@@ -721,9 +727,16 @@ function removeAntiCollisionEntry(username) {
     showNotification('已从防撞车名单移除', 'success');
   }
 }
+function syncAutoStopControls() {
+  const enabled = document.getElementById('config-auto-stop-checkbox')?.checked !== false;
+  const hours = document.getElementById('config-auto-stop-hours');
+  if (hours) hours.disabled = !enabled;
+}
 function getCurrentConfig() {
   return {
     interval: readIntegerInput('config-interval', 30),
+    auto_stop_after_source_end: document.getElementById('config-auto-stop-checkbox').checked,
+    auto_stop_threshold_hours: readIntegerInput('config-auto-stop-hours', 3),
     show_twitch: document.getElementById('config-show-twitch-checkbox').checked,
     show_niconico: document.getElementById('config-show-niconico-checkbox').checked,
     show_priority_channel: document.getElementById('config-show-priority-checkbox').checked,

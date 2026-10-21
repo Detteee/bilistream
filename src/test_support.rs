@@ -24,6 +24,8 @@ pub(crate) fn config(node_id: &str, priority: i32) -> Config {
         auto_cover: false,
         enable_anti_collision: false,
         interval: 60,
+        auto_stop_after_source_end: true,
+        auto_stop_threshold_hours: 3,
         bililive: BiliLive {
             enable_danmaku_command: false,
             room: 1,

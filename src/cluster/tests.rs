@@ -699,6 +699,15 @@ fn push_applies_the_warning_hold_exemption_and_drops_gone_identities() {
     );
     assert!(local.warning_hold_exempt_all_low_risk);
 
+    // Auto-stop settings travel with the monitored config too.
+    let mut auto_stop = monitored_config_from_config(&config("source", 0));
+    auto_stop.auto_stop_after_source_end = false;
+    auto_stop.auto_stop_threshold_hours = 5;
+    let mut target = config("local", 0);
+    apply_monitored_config_to_config(&mut target, auto_stop);
+    assert!(!target.auto_stop_after_source_end);
+    assert_eq!(target.auto_stop_threshold_hours, 5);
+
     // The integrity hash covers the new fields, so an older peer rejects a
     // push that carries them instead of silently dropping the list.
     let base = monitored_config_from_config(&config("a", 0));
@@ -713,6 +722,13 @@ fn push_applies_the_warning_hold_exemption_and_drops_gone_identities() {
     assert_ne!(
         monitored_config_integrity_version_from_payload(&base),
         monitored_config_integrity_version_from_payload(&changed_all_low_risk)
+    );
+    let mut changed_auto_stop = base.clone();
+    changed_auto_stop.auto_stop_threshold_hours = 5;
+    assert_ne!(
+        monitored_config_integrity_version_from_payload(&base),
+        monitored_config_integrity_version_from_payload(&changed_auto_stop),
+        "the threshold joins the integrity hash so older peers reject the push"
     );
     let mut changed_reasons = base.clone();
     changed_reasons.warning_hold_exempt_reasons = vec!["game_mode_off".into()];

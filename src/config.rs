@@ -141,6 +141,14 @@ pub struct Config {
     pub auto_cover: bool,
     pub enable_anti_collision: bool,
     pub interval: u64,
+    /// After the source ends while the B站 room is still live, stop that room
+    /// instead of leaving a silent room (Bilibili would flag 挂机 later).
+    #[serde(default = "default_true")]
+    pub auto_stop_after_source_end: bool,
+    /// A room already live for this many hours stops immediately after the
+    /// source ends; a shorter one waits one monitor interval first.
+    #[serde(default = "default_auto_stop_threshold_hours")]
+    pub auto_stop_threshold_hours: u64,
     pub bililive: BiliLive,
     pub twitch: Twitch,
     pub youtube: Youtube,
@@ -857,6 +865,10 @@ impl Default for HistoryRetention {
             max_mb: 512,
         }
     }
+}
+
+pub(crate) fn default_auto_stop_threshold_hours() -> u64 {
+    3
 }
 
 fn default_true() -> bool {

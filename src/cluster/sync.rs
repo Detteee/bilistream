@@ -265,6 +265,8 @@ pub(crate) fn apply_monitored_config_to_config(cfg: &mut Config, payload: Monito
     let local_priority_channel_enabled = cfg.priority_channel.enabled;
     let local_priority_channel_auto_restart = cfg.priority_channel.auto_restart;
     cfg.interval = payload.interval;
+    cfg.auto_stop_after_source_end = payload.auto_stop_after_source_end;
+    cfg.auto_stop_threshold_hours = payload.auto_stop_threshold_hours;
     cfg.auto_cover = payload.auto_cover;
     cfg.enable_anti_collision = payload.enable_anti_collision;
     cfg.anti_collision_list = payload.anti_collision_list;

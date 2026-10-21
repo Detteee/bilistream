@@ -54,7 +54,7 @@ pub enum BroadcastEndCause {
     WarningCut,
     /// 主动停播 (WebUI or danmaku command).
     ManualStop,
-    /// 源直播已结束，房间空转超过 3 小时后自动停播.
+    /// 源直播已结束，房间按自动停播设置主动关播（满阈值立即，否则等一个检测间隔）.
     AutoStop,
     /// 源直播结束：房间当场确认，或房间在换台窗口里随后自行下播.
     SourceEnded,
