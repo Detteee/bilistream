@@ -23,10 +23,10 @@ use bilistream::plugins::{
     announce_room_lock, bili_change_live_title, bili_start_live, bili_stop_live, bili_update_area,
     bilibili, check_area_id_with_title, clear_config_updated, clear_manual_restart,
     clear_manual_stop, current_game_riot_ids, enable_danmaku_commands, ffmpeg, get_aliases,
-    get_area_name, get_bili_live_status, get_bili_live_time, get_bili_room_lock, get_puuid,
-    is_config_updated, is_danmaku_commands_enabled, is_danmaku_running, is_ffmpeg_running,
-    niconico_channel_identity, niconico_configured, resolve_playable_priority_channel, run_danmaku,
-    send_danmaku, set_manual_restart, should_skip_due_to_warning, stop_danmaku, stop_ffmpeg,
+    get_area_name, get_bili_live_status, get_bili_room_lock, get_puuid, is_config_updated,
+    is_danmaku_commands_enabled, is_danmaku_running, is_ffmpeg_running, niconico_channel_identity,
+    niconico_configured, resolve_playable_priority_channel, run_danmaku, send_danmaku,
+    set_manual_restart, should_skip_due_to_warning, stop_danmaku, stop_ffmpeg,
     stop_restart_generation, store_prefetched_playable_stream, streamlink_ingest,
     take_prefetched_playable_stream, timed_room_lock_wait, wait_config_update_or_timeout,
     was_manual_restart, was_manual_stop, FfmpegCacheOptions, FfmpegSource, FfmpegStreamIdentity,
@@ -637,20 +637,18 @@ fn room_offline_cause(source_ended: bool) -> BroadcastEndCause {
     }
 }
 
+/// How long the B站 room waits after its source ended before it is closed.
+/// One monitor interval; a zero (hand-edited) interval still waits a second.
+fn auto_stop_wait(interval_secs: u64) -> Duration {
+    Duration::from_secs(interval_secs.max(1))
+}
+
 fn end_danmaku_text(channel_name: &str, commands_enabled: bool) -> String {
     if commands_enabled {
         format!("{} 直播结束，可使用弹幕指令进行换台", channel_name)
     } else {
         format!("{} 直播结束", channel_name)
     }
-}
-
-/// The room is stopped automatically once it has been live this long and the
-/// source has ended.
-const AUTO_STOP_AFTER_HOURS: i64 = 3;
-
-fn should_auto_stop_after_end(live_hours: i64) -> bool {
-    live_hours >= AUTO_STOP_AFTER_HOURS
 }
 
 fn log_selected_stream(identity: &FfmpegStreamIdentity, title: Option<&str>, priority: bool) {
@@ -2244,30 +2242,25 @@ async fn announce_stream_end(
         }
     }
 
-    // Announce first, then stop a room that has been live for
-    // AUTO_STOP_AFTER_HOURS (3) hours or more.
+    // The source is positively offline. Leaving the B站 room open with no
+    // video makes Bilibili treat the relay as 挂机/录播 and cut it minutes
+    // later, so close the room one monitor interval after the source ended.
+    // One interval is enough for a brief source hiccup to recover, while a
+    // real end cannot leave a silent room long enough to be flagged.
     if bili_live {
-        match get_bili_live_time(cfg.bililive.room).await {
-            Ok(Some(live_start)) => {
-                let hours = chrono::Local::now()
-                    .signed_duration_since(live_start)
-                    .num_hours();
-                if should_auto_stop_after_end(hours) {
-                    tracing::info!(
-                        "B站直播已超过{}小时（{}小时），自动停播",
-                        AUTO_STOP_AFTER_HOURS,
-                        hours
-                    );
-                    match bili_stop_live(cfg).await {
-                        Ok(()) => bilistream::notify::live_ended(BroadcastEndCause::AutoStop),
-                        Err(e) => tracing::error!("自动停播失败: {}", e),
-                    }
-                }
-            }
-            Ok(None) => {}
-            Err(e) => {
-                tracing::warn!("获取B站直播时间失败: {}", e);
-            }
+        let wait = auto_stop_wait(cfg.interval);
+        tracing::info!(
+            "{session_log} 源直播已结束，{}秒后自动停播B站直播间，避免挂机判定",
+            wait.as_secs()
+        );
+        tokio::time::sleep(wait).await;
+        if cfg.cluster.enabled && !cluster::local_monitoring_allowed(cfg) {
+            tracing::info!("{session_log} 等待期间本节点失去执行权，跳过自动停播");
+            return;
+        }
+        match bili_stop_live(cfg).await {
+            Ok(()) => bilistream::notify::live_ended(BroadcastEndCause::AutoStop),
+            Err(e) => tracing::error!("自动停播失败: {}", e),
         }
     }
 }
@@ -5321,15 +5314,14 @@ mod tests {
     }
 
     #[test]
-    fn end_danmaku_text_and_auto_stop_threshold() {
+    fn end_danmaku_text_and_the_auto_stop_wait() {
         assert_eq!(
             end_danmaku_text("示例", true),
             "示例 直播结束，可使用弹幕指令进行换台"
         );
         assert_eq!(end_danmaku_text("示例", false), "示例 直播结束");
-        assert!(!should_auto_stop_after_end(2));
-        assert!(should_auto_stop_after_end(3));
-        assert!(should_auto_stop_after_end(8));
+        assert_eq!(auto_stop_wait(0), Duration::from_secs(1));
+        assert_eq!(auto_stop_wait(30), Duration::from_secs(30));
     }
 
     #[test]

@@ -386,41 +386,6 @@ async fn bili_live_status_url(
     ))
 }
 
-/// Gets the live start time of a Bilibili room from the API.
-/// Returns None if the room is not live or live_time is invalid/zero.
-pub async fn get_bili_live_time(
-    room: i32,
-) -> Result<Option<chrono::DateTime<chrono::Local>>, Box<dyn Error>> {
-    let retry_policy = ExponentialBackoff::builder().build_with_max_retries(3);
-    let raw_client = reqwest::Client::builder()
-        .cookie_store(true)
-        .timeout(Duration::new(30, 0))
-        .build()?;
-    let client = ClientBuilder::new(raw_client.clone())
-        .with(RetryTransientMiddleware::new_with_policy(retry_policy))
-        .build();
-
-    let mut params = BTreeMap::new();
-    params.insert("room_id", room.to_string());
-    let query_string = super::wbi::signed_query(&raw_client, params).await?;
-
-    let res: Value = client
-        .get(format!(
-            "https://api.live.bilibili.com/room/v1/Room/get_info?{}",
-            query_string
-        ))
-        .send()
-        .await?
-        .json()
-        .await?;
-
-    Ok(parse_bili_live_time_str(
-        res["data"]["live_time"]
-            .as_str()
-            .unwrap_or("0000-00-00 00:00:00"),
-    ))
-}
-
 /// Starts a Bilibili live stream.
 ///
 /// # Arguments

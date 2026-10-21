@@ -360,10 +360,7 @@ impl HoldDecision<'_> {
             .any(|entry| entry.matches(self.platform, self.channel_id));
         let low_risk_everywhere = self.all_low_risk
             && !self.reason_ids.is_empty()
-            && self
-                .reason_ids
-                .iter()
-                .all(|id| id.risk() == RiskTier::Low);
+            && self.reason_ids.iter().all(|id| id.risk() == RiskTier::Low);
         !self.room_lock && allowed && (listed || low_risk_everywhere)
     }
 
@@ -612,10 +609,7 @@ mod tests {
             !decision(&exempt, &allowed, &unknown, false, false, "UC1").releases(),
             "unknown needs the unrecognized class"
         );
-        let with_unknown = vec![
-            "idle_recording".to_string(),
-            "unrecognized".to_string(),
-        ];
+        let with_unknown = vec!["idle_recording".to_string(), "unrecognized".to_string()];
         assert!(
             decision(&exempt, &with_unknown, &unknown, false, false, "UC1").releases(),
             "listed channel + unrecognized releases an empty classify"
