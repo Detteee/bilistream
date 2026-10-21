@@ -936,6 +936,25 @@ fn the_notice_copy_is_the_task_copy() {
     );
 }
 
+/// The auto stop closes a still-live room right after its source ended, so the
+/// 下播 says why it happened instead of naming the source (which a room edge
+/// would); the later observed room-offline edge cannot add a second end.
+#[test]
+fn an_auto_stop_names_its_cause_once() {
+    let mut ledger = started();
+    assert!(ledger.live.end(NOW + 2 * 3600, BroadcastEndCause::AutoStop));
+    assert_eq!(
+        render(LiveEventKey::end(), &ledger.live.broadcast, false, "JP"),
+        "⚪ 本场转播已结束\n本场从 某频道 开始，共持续 2 小时 0 分钟。\n结束原因：源直播结束后自动停播\n发送节点：JP"
+    );
+    assert!(
+        !ledger
+            .live
+            .end(NOW + 2 * 3600 + 5, BroadcastEndCause::SourceEnded),
+        "the observed room-offline edge after the stop is the same end"
+    );
+}
+
 /// Only a source end names a channel: the session's newest source, because
 /// that is the channel the operator saw go offline. Any other cause stays a
 /// room fact, and an unknown source falls back to the generic label.
