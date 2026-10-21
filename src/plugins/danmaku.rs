@@ -1272,7 +1272,6 @@ pub fn run_danmaku() {
                     }
                 })
                 .await;
-                tracing::info!("弹幕客户端已停止");
             });
             // A cancelled DNS lookup can leave a blocking resolver task behind.
             // It must not hold up stopping this client or starting its replacement.
@@ -1310,9 +1309,8 @@ pub async fn stop_danmaku() {
             return;
         }
 
-        if !should_stop_danmaku() {
-            tracing::info!("停止弹幕客户端");
-        }
+        // The caller's "…，停止弹幕客户端" line already records the reason;
+        // this function only reports the outcome once below.
         set_danmaku_stop_signal(true);
     }
     enable_danmaku_commands(false);

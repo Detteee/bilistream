@@ -193,10 +193,7 @@ async fn stop_room_for_warning(cfg: &Config, room: u64) {
             recent_violation(room, Instant::now()),
         ),
         Err(error) => {
-            error!(
-                "Failed to stop live on warning: {}",
-                safe_diagnostic(&error.to_string())
-            );
+            error!("警告/切断停播失败：{}", safe_diagnostic(&error.to_string()));
         }
     }
 }
@@ -976,7 +973,10 @@ impl BilibiliDanmakuClient {
                 // Successfully got server info - suppress log
             }
             Err(e) => {
-                warn!("Failed to get danmaku info: {}, using fallback", e);
+                warn!(
+                    "弹幕服务器信息获取失败，改用备用地址；{}",
+                    safe_diagnostic(&e.to_string())
+                );
                 // Fallback to hardcoded servers with empty token
                 self.host_list = vec![
                     "broadcastlv.chat.bilibili.com".to_string(),
@@ -1009,13 +1009,13 @@ impl BilibiliDanmakuClient {
         loop {
             // Check for stop signal
             if crate::plugins::danmaku::should_stop_danmaku() {
-                info!("收到停止信号，断开弹幕连接");
+                info!("弹幕连接收到停止信号，断开连接");
                 break;
             }
 
             tokio::select! {
                 _ = crate::plugins::danmaku::wait_danmaku_stop_signal() => {
-                    info!("收到停止信号，断开弹幕连接");
+                    info!("弹幕连接收到停止信号，断开连接");
                     break;
                 }
                 // Handle incoming messages with timeout
@@ -1024,25 +1024,25 @@ impl BilibiliDanmakuClient {
                         Ok(Some(Ok(Message::Binary(data)))) => {
                             last_activity = Instant::now(); // Update activity timestamp
                             if let Err(e) = self.handle_message(&data).await {
-                                error!("Error handling message: {}", e);
+                                error!("弹幕消息处理失败：{}", safe_diagnostic(&e.to_string()));
                             }
                         }
                         Ok(Some(Ok(Message::Close(_)))) => {
-                            warn!("WebSocket connection closed by server");
+                            warn!("弹幕连接被服务端关闭");
                             break;
                         }
                         Ok(Some(Err(e))) => {
-                            error!("WebSocket error: {}", e);
+                            error!("弹幕连接失败：{}", safe_diagnostic(&e.to_string()));
                             break;
                         }
                         Ok(None) => {
-                            warn!("WebSocket stream ended");
+                            warn!("弹幕连接已结束");
                             break;
                         }
                         Ok(Some(Ok(Message::Ping(data)))) => {
                             last_activity = Instant::now();
                             if let Err(e) = ws_sender.send(Message::Pong(data)).await {
-                                error!("Failed to send pong: {}", e);
+                                error!("弹幕连接回复心跳失败：{}", safe_diagnostic(&e.to_string()));
                                 break;
                             }
                         }
@@ -1052,7 +1052,7 @@ impl BilibiliDanmakuClient {
                         Err(_) => {
                             // Timeout occurred - check if connection is still alive
                             if last_activity.elapsed() > connection_timeout {
-                                warn!("Connection timeout - no activity for {:?}", connection_timeout);
+                                warn!("弹幕连接超时，已 {} 无活动", crate::logging::human_elapsed(connection_timeout));
                                 break;
                             }
                         }
@@ -1062,13 +1062,13 @@ impl BilibiliDanmakuClient {
                 // Send heartbeat
                 _ = heartbeat_interval.tick() => {
                     if let Err(e) = ws_sender.send(Message::Binary(heartbeat_packet.clone())).await {
-                        error!("Failed to send heartbeat: {}", e);
+                        error!("弹幕心跳发送失败：{}", safe_diagnostic(&e.to_string()));
                         break;
                     }
 
                     // Also check for connection timeout during heartbeat
                     if last_activity.elapsed() > connection_timeout {
-                        warn!("Connection appears stale - forcing reconnection");
+                        warn!("弹幕连接疑似失效，准备重连");
                         break;
                     }
                 }
@@ -1119,16 +1119,17 @@ impl BilibiliDanmakuClient {
 
         let code = response["code"].as_i64().unwrap_or(-1);
         if code != 0 {
-            let message = response["message"].as_str().unwrap_or("Unknown error");
-            error!("Danmaku API error - Code: {}, Message: {}", code, message);
+            let message = response["message"].as_str().unwrap_or("未知错误");
+            // The body carries the danmaku auth token: keep only code/message.
             error!(
-                "Full response: {}",
-                serde_json::to_string_pretty(&response).unwrap_or_default()
+                "弹幕服务器信息获取失败（code {}）：{}",
+                code,
+                safe_text(message, 160)
             );
             return Err(anyhow::anyhow!(
-                "Failed to get danmaku info: Code {}, Message: {}",
+                "弹幕服务器信息获取失败（code {}）：{}",
                 code,
-                message
+                safe_text(message, 160)
             ));
         }
 
@@ -1384,7 +1385,7 @@ impl BilibiliDanmakuClient {
                             ),
                             Err(error) => {
                                 error!(
-                                    "Failed to stop live on warning: {}",
+                                    "警告/切断停播失败：{}",
                                     safe_diagnostic(&error.to_string())
                                 );
                             }
@@ -1394,10 +1395,7 @@ impl BilibiliDanmakuClient {
                         }
                         let notice = violation_notice_for(&cfg, &warning_tracker(), &warning);
                         if let Err(error) = send_violation_notice(&cfg, &notice).await {
-                            error!(
-                                "Failed to send warning danmaku: {}",
-                                safe_diagnostic(&error)
-                            );
+                            error!("警告/切断通知弹幕发送失败：{}", safe_diagnostic(&error));
                         }
                         warning_tracker().finish_unmarked_event(&warning);
                     });
@@ -1443,10 +1441,7 @@ impl BilibiliDanmakuClient {
                             crate::plugins::mask_pairing::finish_mask(room);
                             let notice = violation_notice_for(&cfg, &warning_tracker(), &warning);
                             if let Err(error) = send_violation_notice(&cfg, &notice).await {
-                                error!(
-                                    "Failed to send warning danmaku: {}",
-                                    safe_diagnostic(&error)
-                                );
+                                error!("警告/切断通知弹幕发送失败：{}", safe_diagnostic(&error));
                             }
                             warning_tracker().finish_unmarked_event(&warning);
                             return;
@@ -1458,10 +1453,7 @@ impl BilibiliDanmakuClient {
                         }
                         let notice = violation_notice_for(&cfg, &warning_tracker(), &warning);
                         if let Err(error) = send_violation_notice(&cfg, &notice).await {
-                            error!(
-                                "Failed to send warning danmaku: {}",
-                                safe_diagnostic(&error)
-                            );
+                            error!("警告/切断通知弹幕发送失败：{}", safe_diagnostic(&error));
                         }
                         if !warning_tracker().event_is_current(&warning) {
                             return;
@@ -1599,7 +1591,7 @@ impl BilibiliDanmakuClient {
             "ROOM_CONTENT_AUDIT_REPORT" => {
                 if let Some(data) = &message.data {
                     if let Some(title) = data["audit_title"].as_str() {
-                        info!("标题修改成功：{}", safe_text(title, 160));
+                        info!("B站房间标题修改已生效：{}", safe_text(title, 160));
                     }
                 } else {
                     debug!("忽略缺少 data 的弹幕事件 type=ROOM_CONTENT_AUDIT_REPORT");

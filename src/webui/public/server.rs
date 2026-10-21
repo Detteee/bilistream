@@ -224,7 +224,7 @@ pub fn start_public_status_supervisor() -> PublicStatusSupervisor {
                     stop_listener(running.take());
                     match spawn_listener(wanted.addr).await {
                         Ok(stop) => {
-                            tracing::info!("🌐 公开状态页已启动：http://{}", wanted.addr);
+                            tracing::info!("公开状态页已启动：http://{}", wanted.addr);
                             running = Some(RunningListener {
                                 addr: wanted.addr,
                                 stop_server: stop,

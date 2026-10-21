@@ -1363,8 +1363,20 @@ async fn skip_stream_if_banned_keyword(
 
 /// Updates the Bilibili live cover from the source stream's thumbnail in the
 /// background.
-fn spawn_cover_update(cfg: &Config, platform: &str, channel_id: &str, stream_id: Option<String>) {
+fn spawn_cover_update(
+    cfg: &Config,
+    platform: &str,
+    channel_id: &str,
+    channel_name: &str,
+    stream_id: Option<String>,
+) {
     let cfg = cfg.clone();
+    // Owned identity: the spawned task outlives this pass's borrows.
+    let identity = format!(
+        "[{}] {}",
+        safe_text(platform, 8),
+        safe_text(channel_name, 64)
+    );
     let platform = platform.to_string();
     let channel_id = channel_id.to_string();
     tokio::spawn(async move {
@@ -1377,16 +1389,22 @@ fn spawn_cover_update(cfg: &Config, platform: &str, channel_id: &str, stream_id:
         match get_thumbnail(&platform, &channel_id, stream_id.as_deref(), proxy).await {
             Ok(cover_path) if !cover_path.is_empty() => {
                 if let Err(e) = bilibili::bili_change_cover(&cfg, &cover_path).await {
-                    tracing::error!("B站直播间封面替换失败：{}", e);
+                    tracing::error!(
+                        "{identity} B站直播间封面替换失败：{}",
+                        safe_diagnostic(&e.to_string())
+                    );
                 } else {
-                    tracing::info!("B站直播间封面替换成功");
+                    tracing::info!("{identity} B站直播间封面替换成功");
                 }
             }
             Ok(_) => {
-                tracing::warn!("跳过封面更新：缩略图下载失败");
+                tracing::warn!("{identity} 跳过封面更新：缩略图下载失败");
             }
             Err(e) => {
-                tracing::error!("获取缩略图失败：{}", e);
+                tracing::error!(
+                    "{identity} 获取缩略图失败：{}",
+                    safe_diagnostic(&e.to_string())
+                );
             }
         }
     });
@@ -1787,7 +1805,7 @@ async fn align_bili_room(
 ) -> AlignBiliRoom {
     let mut history_area_v2 = align.is_live.then_some(align.area_id);
     if !align.is_live {
-        tracing::info!("B站未直播");
+        tracing::info!("{stream_log} B站房间未开播，准备开播");
         let area_name = area_label(align.area_v2);
 
         match bili_start_live(cfg, align.area_v2).await {
@@ -1795,7 +1813,7 @@ async fn align_bili_room(
                 history_area_v2 = Some(align.area_v2);
                 if align.title != align.cfg_title {
                     if let Err(e) = bili_change_live_title(cfg, align.cfg_title).await {
-                        tracing::error!("B站直播标题变更失败：{}", e);
+                        tracing::error!("{stream_log} B站直播标题变更失败：{}", e);
                     }
                 }
                 // 开播 notice (Addendum A) is recorded once the source
@@ -1848,13 +1866,14 @@ async fn align_bili_room(
                 cfg,
                 align.platform,
                 align.channel_id,
+                align.channel_name,
                 align.current_video_id.map(str::to_owned),
             );
         }
     } else {
         if align.title != align.cfg_title {
             if let Err(e) = bili_change_live_title(cfg, align.cfg_title).await {
-                tracing::error!("B站直播标题变更失败：{}", e);
+                tracing::error!("{stream_log} B站直播标题变更失败：{}", e);
             } else {
                 tracing::info!(
                     "{stream_log} B站直播标题已更新；{} → {}",
@@ -1871,19 +1890,19 @@ async fn align_bili_room(
                     )
                     .await
                     {
-                        tracing::error!("发送弹幕失败：{}", e);
+                        tracing::error!("{stream_log} 换台提示弹幕发送失败：{}", e);
                     }
                 }
             }
         }
         if align.area_id != align.area_v2 {
             if let Err(e) = update_area(align.area_id, align.area_v2).await {
-                tracing::error!("B站分区更新失败：{}", e);
+                tracing::error!("{stream_log} B站分区更新失败：{}", e);
             } else {
                 history_area_v2 = Some(align.area_v2);
                 tokio::time::sleep(Duration::from_secs(2)).await;
                 if let Err(e) = bili_change_live_title(cfg, align.cfg_title).await {
-                    tracing::error!("B站直播标题变更失败：{}", e);
+                    tracing::error!("{stream_log} B站直播标题变更失败：{}", e);
                 }
             }
         }
@@ -1896,6 +1915,7 @@ async fn align_bili_room(
                 cfg,
                 align.platform,
                 align.channel_id,
+                align.channel_name,
                 align.current_video_id.map(str::to_owned),
             );
         }
@@ -2301,8 +2321,11 @@ async fn stop_room_after_source_end(
         }
     }
     match bili_stop_live(cfg).await {
-        Ok(()) => bilistream::notify::live_ended(BroadcastEndCause::AutoStop),
-        Err(e) => tracing::error!("自动停播失败：{}", e),
+        Ok(()) => {
+            tracing::info!("{session_log} 已自动停播B站直播间");
+            bilistream::notify::live_ended(BroadcastEndCause::AutoStop);
+        }
+        Err(e) => tracing::error!("{session_log} 自动停播失败：{}", e),
     }
 }
 
