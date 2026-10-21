@@ -876,6 +876,13 @@
   align-items: start;
 }
 
+/* Wide shells fit a third column without crowding a label and its input. */
+@media (min-width: 1200px) {
+  .settings-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
 @media (max-width: 700px) {
   .settings-grid {
     grid-template-columns: minmax(0, 1fr);
@@ -912,25 +919,21 @@
   max-width: 10rem;
 }
 
-/* A field that stands alone among switches takes a row of its own, so the row
-   is never as tall as the hint sitting under one cell while the switch beside
-   it has nothing to do. Capped in measure: stretched across the full width the
-   label and its input drift a screen apart. */
-#view-settings .settings-field-row {
-  grid-column: 1 / -1;
-  max-width: 24rem;
-}
-
-/* The auto-stop threshold belongs to the switch beside it, so it sits in the
-   same cell instead of taking a row of its own. Off, the switch hides it. */
-#view-settings .settings-toggle-inline {
+/* A label, its control and the value that belongs to it share one line, so a
+   short field sits in the same two-column grid as the switches instead of
+   taking a row of its own. The hint keeps the line under both. */
+#view-settings .settings-inline-row {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: var(--sp-2) var(--sp-3);
 }
 
-#view-settings .settings-toggle-inline > .settings-help-text {
+#view-settings .settings-inline-row > label {
+  flex: 0 0 auto;
+}
+
+#view-settings .settings-inline-row > .settings-help-text {
   flex-basis: 100%;
 }
 

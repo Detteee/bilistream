@@ -1560,6 +1560,14 @@
           <div class="panel__body">
             <h3 class="subsection-title">显示与检测</h3>
             <div class="settings-grid">
+              <div class="control-group settings-inline-row">
+                <label for="config-interval">检测间隔</label>
+                <span class="settings-inline-value">
+                  <input type="number" id="config-interval" min="10" max="300" placeholder="30"
+                    aria-label="检测间隔（秒）">
+                  <span>秒</span>
+                </span>
+              </div>
               <div class="control-group">
                 <label class="toggle-label" title="隐藏只影响仪表盘卡片，不影响监控。">
                   <span class="toggle-switch">
@@ -1605,14 +1613,10 @@
                   <span>yt-dlp 兜底</span>
                 </label>
               </div>
-              <div class="control-group settings-field-row">
-                <label for="config-interval">检测间隔（秒）</label>
-                <input type="number" id="config-interval" min="10" max="300" placeholder="30">
-              </div>
             </div>
             <h3 class="subsection-title">自动化</h3>
             <div class="settings-grid">
-              <div class="control-group settings-toggle-inline">
+              <div class="control-group settings-inline-row">
                 <label class="toggle-label" for="config-auto-stop-checkbox"
                   title="源直播结束后自动关闭B站直播间，避免房间长时间没有画面被判定为挂机/录播。">
                   <span class="toggle-switch">
@@ -1673,7 +1677,7 @@
                   <option value="opera">Opera</option>
                   <option value="vivaldi">Vivaldi</option>
                 </select>
-                <small class="settings-help-text">选中后，会优先使用服务器上该浏览器的登录状态。</small>
+                <small class="settings-help-text">选中后，优先使用服务器上该浏览器的登录状态。</small>
               </div>
               <div class="control-group">
                 <label for="yt-cookie-upload">YouTube Cookie</label>
@@ -1681,7 +1685,7 @@
                 <input type="file" id="yt-cookie-upload" accept=".txt,text/plain">
                 <details><summary>粘贴 Cookie</summary><textarea id="yt-cookie-paste" rows="4" spellcheck="false" autocomplete="off" aria-label="Netscape Cookie 内容"></textarea></details>
                 <div class="session-check-actions"><button type="button" id="yt-cookie-save" class="btn-primary">保存 Cookie</button><button type="button" id="yt-cookie-clear" class="btn-secondary">清除</button></div>
-                <small class="settings-help-text">支持 Netscape 格式，会自动保存并同步给 yt-dlp。</small>
+                <small class="settings-help-text">支持 Netscape 格式，自动保存并同步给 yt-dlp。</small>
                 <input type="hidden" id="config-yt-cookies-file" value="">
               </div>
               <div class="control-group">
@@ -2057,7 +2061,7 @@
             <h3 class="subsection-title" id="warning-exempt-title">违规后可续播频道</h3>
             <div class="warning-exempt-section" id="warning-exempt-section">
               <p class="settings-help-text warning-exempt-risk" data-tone="warn">
-                B站 警告或切断后默认暂停，需手动恢复。低风险可应用到全部频道，中高风险只对指定频道生效。
+                B站 警告或切断后默认暂停，需手动恢复。
                 <strong>反复违规继续开播极易导致直播间被关闭。</strong>
               </p>
 

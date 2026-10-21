@@ -24,6 +24,12 @@ export async function checkNotifyWatch({ base, context, command, evaluate, waitF
     await ready();
   };
   const expand = async () => {
+    // The list and the picker only exist while the switch is on, so the draft
+    // starts by turning it on; the off state is asserted before this point.
+    if (await evaluate(`${el('notify-watch-body')}.hidden`)) {
+      await evaluate(`${el('notify-watch-enabled')}.click()`);
+      await waitFor(`!${el('notify-watch-body')}.hidden`);
+    }
     await evaluate(`${el('notify-watch-picker-toggle')}.focus()`);
     await key(' ');
     await waitFor(`${el('notify-watch-picker')}.open`);
