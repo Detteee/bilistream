@@ -74,6 +74,7 @@ function allSessions(now) {
   }
   out.reverse();
   splitSwitchedLive(out);
+  restartedLive(out);
   return out;
 }
 
@@ -89,11 +90,28 @@ function splitSwitchedLive(sessions) {
   const whole = sessions[at];
   const mid = whole.started_at + Math.floor((whole.ended_at - whole.started_at) / 2);
   const other = CHANNELS[(whole.n + 1) % CHANNELS.length];
-  const first = { ...whole, ended_at: mid, duration_secs: mid - whole.started_at, end_reason: 'source_ended', broadcast_id: `live:${whole.n}` };
+  const first = { ...whole, ended_at: mid, duration_secs: mid - whole.started_at, end_reason: 'source_ended', broadcast_id: `live:${whole.n}`, gaps: [] };
   const second = {
     ...whole, id: sid(whole.node, 900 + whole.n), n: 900 + whole.n, eid: `local-${900 + whole.n}`,
     ...other, title: `${other.channel_name} | 示例直播 ${whole.n}`, started_at: mid,
-    duration_secs: whole.ended_at - mid, end_reason: 'source_ended', broadcast_id: `live:${whole.n}`,
+    duration_secs: whole.ended_at - mid, end_reason: 'source_ended', broadcast_id: `live:${whole.n}`, gaps: [],
+  };
+  sessions.splice(at, 1, first, second);
+}
+
+// One Bilibili live whose relay restarted on another node (local → tokyo-1)
+// without switching channel: one 段, but the row boundary is still one 中断.
+// This is the shape production hit — a 场 with a restart and no channel chain.
+function restartedLive(sessions) {
+  const at = sessions.findIndex(s => s.channel_name === '示例频道 003'
+    && s.ended_at && s.ended_at - s.started_at >= 2 * 3600);
+  if (at < 0) return;
+  const whole = sessions[at];
+  const mid = whole.started_at + Math.floor((whole.ended_at - whole.started_at) * 0.6);
+  const first = { ...whole, ended_at: mid, duration_secs: mid - whole.started_at, end_reason: 'process_restart', broadcast_id: `live:${whole.n}`, gaps: [] };
+  const second = {
+    ...whole, id: sid('tokyo-1', 800 + whole.n), n: 800 + whole.n, eid: 'local-800', node: 'tokyo-1',
+    started_at: mid, duration_secs: whole.ended_at - mid, broadcast_id: `live:${whole.n}`, gaps: [],
   };
   sessions.splice(at, 1, first, second);
 }

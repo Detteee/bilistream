@@ -16,7 +16,7 @@ import {
   ringArcs, biliTotals, biliStateLabel, rangeAudience, watchedSourceLabel, sessionDuration, formatSessionDuration,
   expectedResolution, customRange, missingNodeText, streamHeat, spectrumColor, broadcastGroups, platformKey, platformName, reasonLabel,
   formatMonthDay, formatClockShort, localHourOffset, sessionEnd,
-  mergeRetention, EVENTS_EMPTY, isolatedPointIndices, cleanNotice,
+  mergeRetention, EVENTS_EMPTY, isolatedPointIndices, cleanNotice, broadcastShape, interruptionMarks,
 } from './analytics-format.js';
 import { createHistoryClient, historyStateNotice, localHistoryScope } from './analytics-history.js';
 
@@ -909,10 +909,6 @@ function groupSpan(group) {
 }
 
 // The 中断 timestamps: every switch starts a new 段, so each later 段 is one mark.
-function segmentMarks(group) {
-  return group.segments.slice(1).map(seg => seg.started_at).filter(t => Number.isFinite(t));
-}
-
 async function showBroadcast(group) {
   detailController?.abort();
   const controller = detailController = new AbortController();
@@ -926,9 +922,10 @@ async function showBroadcast(group) {
   const nodes = [...new Set(segments.flatMap(seg => seg.nodes))];
   const restarts = segments.reduce((n, seg) => n + (Number(seg.restarts) || 0), 0);
   const chain = segments.map(seg => seg.channelName || DASH).join(' → ');
+  const marks = interruptionMarks(group);
   const meta = el('dl', 'cluster-node-meta');
   for (const [label, value, detail = '', tone = ''] of [
-    ['频道', chain, many ? `${segments.length} 段 · ${segments.length - 1} 次中断` : ''],
+    ['频道', chain, broadcastShape(segments.length, marks.length)],
     ['节点', nodes.join(' → ') || DASH],
     ['时间', `${formatAbsolute(group.started_at)} ～ ${group.ended_at != null ? formatAbsolute(group.ended_at) : '进行中'}`],
     ['时长', formatSessionDuration(groupSpan(group))],
@@ -961,7 +958,6 @@ async function showBroadcast(group) {
     if (!mounted || controller !== detailController) return;
     if (stats?.ts?.length) {
       const span = groupSpan(group) || DAY;
-      const marks = segmentMarks(group);
       charts.append(chartFigure('detail-aud', resolutionLabel(stats.resolution), stats, [
         { key: 'online', label: '在线', tone: '--brand' }, { key: 'watched', label: '看过（累计）', tone: '--teal' },
       ], span, '本场在线人数与看过人数；黄色虚线是频道中断。', marks));

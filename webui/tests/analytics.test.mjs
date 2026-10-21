@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises';
 import {
   DASH, stopLiveDataToBili, biliTotals, aggregateAudience, sessionDuration, expectedResolution, customRange,
   missingNodeText, streamHeat, spectrumColor, broadcastGroups, biliStateLabel, rangeAudience, watchedSourceLabel, orDash, STOP_LIVE_DATA_FIELDS,
-  cleanNotice,
+  cleanNotice, broadcastShape, interruptionMarks,
 } from '../src/js/analytics-format.js';
 import {
   createAnalyticsLoader, renderChunkError, CHUNK_ERROR_TITLE, CHUNK_ERROR_BODY, CHUNK_ERROR_BUTTON,
@@ -344,13 +344,32 @@ test('B4: 结束原因 maps codes to zh-CN; unknown → 其他, never the raw co
   assert.match(css, /\.analytics-detail-dialog \.cluster-node-meta-value small \{[^}]*color: var\(--text-mute\);/);
 });
 
+test('B2: 中断 marks come from row boundaries and in-row gaps', () => {
+  const row = (started_at, gaps = []) => ({ started_at, gaps });
+  const group = rows => ({ segments: [{ members: rows }] });
+  assert.deepEqual(interruptionMarks(group([row(100)])), []);
+  assert.deepEqual(interruptionMarks(group([row(100, [[200, 230, 'reconnecting']])])), [200]);
+  assert.deepEqual(interruptionMarks(group([row(100), row(200)])), [200]);
+  assert.deepEqual(interruptionMarks(group([row(100, [[200, 260, 'failed']]), row(250)])), [200]);
+  const production = group([row(0, [[3600, 3660, 'reconnecting']]), row(7200), row(14400), row(14820)]);
+  assert.deepEqual(interruptionMarks(production), [3600, 7200, 14400, 14820]);
+  assert.equal(broadcastShape(1, 4), '4 次中断');
+});
+
+test('B2b: the 频道 sub-line counts 段 only when the channel switched', () => {
+  assert.equal(broadcastShape(1, 0), '');
+  assert.equal(broadcastShape(1, 1), '1 次中断');
+  assert.equal(broadcastShape(2, 1), '2 段 · 1 次中断');
+  assert.equal(broadcastShape(3, 4), '3 段 · 4 次中断');
+});
+
 test('B3: 段 switches are 中断 marks in one 场 chart, not paging', async () => {
   const view = await readFile(new URL('../src/js/analytics.js', import.meta.url), 'utf8');
   const html = await readFile(new URL('../src/index.html', import.meta.url), 'utf8');
   const format = await readFile(new URL('../src/js/analytics-format.js', import.meta.url), 'utf8');
   // One 场, one page: the switch shows as a dashed warn line inside the plot.
-  assert.match(view, /function segmentMarks\(group\) \{/);
-  assert.match(view, /return group\.segments\.slice\(1\)\.map\(seg => seg\.started_at\)/);
+  assert.match(format, /export function interruptionMarks\(group\) \{/);
+  assert.match(view, /const marks = interruptionMarks\(group\);/);
   assert.match(view, /hooks: \{ draw: \[u => drawInterrupts\(u, marks\)\] \}/);
   assert.match(view, /ctx\.setLineDash\(\[4, 3\]\)/);
   assert.match(view, /cssVar\('--warn'\)/);

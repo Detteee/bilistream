@@ -581,6 +581,37 @@ export function mergeRetention(datas) {
   }
   return { clamped: clampNoticeText(clamp, scope), partial: partialNodesText([...nodes].map(([node, clamped_to_days]) => ({ node, clamped_to_days }))) };
 }
+// The 中断 timestamps. Two things break a relay: the boundary between two
+// relay rows (a channel switch, a node handover ca → jp, or an ffmpeg restart
+// that opened a new row) and a gap inside a row (`gaps` = a run that ended and
+// its reconnect window). Marks closer than a minute collapse, so a failed run's
+// tail gap does not double-count the row boundary that follows it.
+export function interruptionMarks(group) {
+  const rows = group.segments
+    .flatMap(seg => seg.members)
+    .sort((a, b) => (a.started_at || 0) - (b.started_at || 0));
+  const times = rows.slice(1).map(row => row.started_at);
+  for (const row of rows) {
+    for (const gap of Array.isArray(row.gaps) ? row.gaps : []) {
+      if (Array.isArray(gap) && Number.isFinite(gap[0])) times.push(gap[0]);
+    }
+  }
+  const marks = [];
+  for (const at of times.filter(Number.isFinite).sort((a, b) => a - b)) {
+    if (!marks.length || at - marks[marks.length - 1] > 60) marks.push(at);
+  }
+  return marks;
+}
+
+// The 频道 row sub-line of 本场详情: 段 only when the channel switched, 中断
+// whenever the relay broke (row boundary or in-row gap).
+export function broadcastShape(segments, interruptions) {
+  const parts = [];
+  if (segments > 1) parts.push(`${segments} 段`);
+  if (interruptions > 0) parts.push(`${interruptions} 次中断`);
+  return parts.join(' · ');
+}
+
 export const EVENTS_EMPTY = '暂无事件记录';
 // Keep isolated observations visible without drawing across unrecorded
 // intervals. uPlot's point filter takes source-column indices.
