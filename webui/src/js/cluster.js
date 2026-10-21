@@ -643,23 +643,27 @@ function createClusterNodeTile(node, clusterConfigVersion) {
   const tile = document.createElement('div');
   tile.className = 'cluster-node-tile';
 
+  // Identity stays content-bounded (name ellipsises against the badge), so a
+  // node that gains a 状态页 or YT chip cannot shove the row onto a new line;
+  // those chips are metadata and belong on the fixed metrics line below.
   const head = document.createElement('div');
   head.className = 'cluster-node-tile-head';
   head.append(createClusterNodeName(node), createClusterNodeBadge(node, clusterConfigVersion));
+
+  const metrics = document.createElement('div');
+  metrics.className = 'cluster-node-tile-metrics';
   const tileChip = createPublicStatusChip(node);
-  if (tileChip) {
-    head.appendChild(tileChip);
-  }
+  if (tileChip) metrics.appendChild(tileChip);
   const tileIndexChip = createYtIndexChip(node);
-  if (tileIndexChip) head.appendChild(tileIndexChip);
+  if (tileIndexChip) metrics.appendChild(tileIndexChip);
 
   const seen = createClusterSeenValue(node);
   seen.classList.add('cluster-node-tile-seen');
-
-  tile.append(head, seen);
+  metrics.appendChild(seen);
   const selfCheck = createClusterSelfCheck(node);
-  if (selfCheck) tile.appendChild(selfCheck);
-  tile.appendChild(createClusterNodeActions(node));
+  if (selfCheck) metrics.appendChild(selfCheck);
+
+  tile.append(head, metrics, createClusterNodeActions(node));
   return tile;
 }
 

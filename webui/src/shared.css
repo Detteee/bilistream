@@ -927,6 +927,14 @@ input[type="checkbox"] {
   font-weight: 500;
 }
 
+/* The label is the hit area on a phone, not the 22px switch inside it. .panel
+   scope covers the notify view too; public markup has no .toggle-label. */
+@media (max-width: 560px) {
+  .panel .toggle-label { min-height: 44px; }
+
+  .panel .credential-clear { min-height: 44px; padding-inline: var(--sp-2); }
+}
+
 /* ==========================================================================
    7. Panels & cards
    ========================================================================== */
@@ -938,10 +946,13 @@ input[type="checkbox"] {
   box-shadow: var(--sh-1);
 }
 
+/* Heads wrap instead of crushing the title: a long sub or a badge+button
+   cluster takes its own row. One declaration replaces the per-view copies. */
 .panel__head {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: var(--sp-3);
+  gap: var(--sp-2) var(--sp-3);
   padding: var(--sp-4) var(--sp-5);
   border-bottom: 1px solid var(--line);
 }
@@ -1767,13 +1778,26 @@ html.light-theme .bili-network-graph.single-sided .bili-network-bar.push {
   gap: var(--sp-2);
 }
 
+/* Height is structural. The tile used to be a wrapping flex row, so a longer
+   heartbeat or a node that gained a 状态页/YT chip pushed its parts onto a
+   second line and the card grew taller than its neighbours every few seconds.
+   Areas pin two fixed rows: identity + actions above, every metadata part in
+   the metrics line below, where extra chips clip against `overflow: hidden`
+   (each chip already carries a title tooltip) instead of opening a new row.
+   The metrics track collapses to nothing when a tile has no metrics content,
+   which is how the public page's head-only tile keeps its single row without
+   a phantom gap — no `:has()` needed, so it holds on every target browser. */
 .cluster-node-tile {
   flex: 1 1 252px;
   min-width: 0;
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "identity actions"
+    "metrics  metrics";
   align-items: center;
-  flex-wrap: wrap;
-  gap: var(--sp-1) var(--sp-2);
+  column-gap: var(--sp-2);
+  row-gap: 0;
   padding: var(--sp-2) var(--sp-3);
   border: 1px solid var(--line);
   border-radius: var(--r-md);
@@ -1786,20 +1810,44 @@ html.light-theme .bili-network-graph.single-sided .bili-network-bar.push {
 }
 
 .cluster-node-tile-head {
+  grid-area: identity;
   display: flex;
   align-items: center;
   gap: var(--sp-2);
   min-width: 0;
-  flex: 1 1 auto;
 }
 
-.cluster-node-tile-seen {
+/* A chip is taller than a run of small text, so an unpinned line would put the
+   chip-bearing node's tile 4.5px above its neighbours'. One token height holds
+   both cases. The top margin, not a row gap, spaces it: an empty track keeps
+   its zero size, so a head-only tile pays nothing for a row it never uses. */
+.cluster-node-tile-metrics {
+  grid-area: metrics;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+  min-height: var(--sp-6);
+  margin-top: var(--sp-1);
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+/* Reserved slots: "刚刚"…"1h 2m 前" and "76 ms"…"1000 ms" share one box, so a
+   tick can change the digits but never the tile's geometry. Selectors are
+   scoped to the tile to outrank `.cluster-node-meta-value` below. */
+.cluster-node-tile .cluster-node-tile-seen,
+.cluster-node-tile .cluster-self-check {
   flex: 0 0 auto;
-  text-align: left;
+  min-width: 4.2em;
   font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
 }
 
 .cluster-node-tile .cluster-node-actions {
+  grid-area: actions;
   flex: 0 0 auto;
   margin-top: 0;
   margin-left: auto;

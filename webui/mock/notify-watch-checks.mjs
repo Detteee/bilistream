@@ -15,7 +15,7 @@ export async function checkNotifyWatch({ base, context, command, evaluate, waitF
   const key = value => command('input.performActions', { context, actions: [{ type: 'key', id: 'watch-keyboard', actions: [{ type: 'keyDown', value }, { type: 'keyUp', value }] }] });
   const ready = async () => {
     await waitFor("document.documentElement.classList.contains('app-ready')");
-    await evaluate(`${el('tab-settings')}.click()`);
+    await evaluate(`${el('tab-notify')}.click()`);
     await waitFor(`!${el('notify-watch-search')}.disabled && !${el('notify-app-secret')}.disabled`);
   };
   const open = async mode => {

@@ -295,14 +295,16 @@ test('renderChunkError works on its own', () => {
   assert.equal(view.getAttribute('aria-busy'), 'false');
 });
 
-test('admin markup: 统计 tab is last, after 日志, with its view and no revenue copy', async () => {
+test('admin markup: tabs are 总览…统计 then 通知, each with its view and no revenue copy', async () => {
   const html = await readFile(new URL('../src/index.html', import.meta.url), 'utf8');
   const tabs = [...html.matchAll(/class="tab[^"]*" id="tab-([a-z]+)"/g)].map(m => m[1]);
-  assert.deepEqual(tabs, ['overview', 'manage', 'settings', 'logs', 'analytics']);
+  assert.deepEqual(tabs, ['overview', 'manage', 'settings', 'logs', 'analytics', 'notify']);
+  assert.match(html, /id="view-notify"/);
+  assert.match(html, /id="tab-notify" data-view="notify"/);
   assert.match(html, /<symbol id="i-chart"/);
   assert.match(html, /id="view-analytics"/);
   const main = await readFile(new URL('../src/js/main.js', import.meta.url), 'utf8');
-  assert.match(main, /const VIEW_IDS = \['overview', 'manage', 'settings', 'logs', 'analytics'\]/);
+  assert.match(main, /const VIEW_IDS = \['overview', 'manage', 'settings', 'logs', 'analytics', 'notify'\]/);
   assert.match(main, /import\('\.\/analytics\.js'\)/);
   const view = await readFile(new URL('../src/js/analytics.js', import.meta.url), 'utf8');
   for (const text of [html, view]) assert.doesNotMatch(text, /HamsterRmb|收益|revenue/i);

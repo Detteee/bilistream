@@ -44,7 +44,7 @@ import {
 } from './status-refresh.js';
 import { initAreaModalControls, switchToStream } from './switch-flow.js';
 
-const VIEW_IDS = ['overview', 'manage', 'settings', 'logs', 'analytics'];
+const VIEW_IDS = ['overview', 'manage', 'settings', 'logs', 'analytics', 'notify'];
 const viewsLoaded = new Set();
 
 // 统计 is a lazy chunk (W14 P1). It must not import stateful app modules, so
@@ -68,6 +68,10 @@ function loadViewData(name) {
       break;
     case 'settings':
       loadSystemConfig();
+      break;
+    case 'notify':
+      // QQ 通知 has its own endpoint and save contract, so it owns its own
+      // view and its own first-load fetch instead of riding on 系统设置.
       loadNotifySettings();
       break;
     case 'logs':
@@ -177,7 +181,7 @@ function bindEventStream() {
   configureEventStream({
     onStatus: () => {
       refreshStatus();
-      if (isViewActive('settings')) refreshNotifyStatus();
+      if (isViewActive('notify')) refreshNotifyStatus();
     },
     onConfig: () => {
       invalidateManagedData();

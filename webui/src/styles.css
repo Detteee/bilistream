@@ -193,8 +193,6 @@
   color: var(--text);
   font-size: var(--fs-sm);
   font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
 }
 
 .cluster-settings-panel-mark,
@@ -862,9 +860,14 @@
    12. Settings
    ========================================================================== */
 
+/* One declaration, no breakpoints. min(100%, 320px) makes the column count
+   non-decreasing in container width: narrower than 320 the single column just
+   fills, wider it adds whole 320s. The old 240px base plus a 1200px 300px
+   override and a 700px single-column reset made 4 cols fall back to 3 at
+   1200px and 2 cols fall back to 1 at 561px. */
 .settings-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
   gap: var(--sp-4) var(--sp-5);
 }
 
@@ -891,20 +894,6 @@
 
 #view-settings .settings-actions {
   grid-column: 1 / -1;
-}
-
-/* Full-width 基础设置: keep toggles evenly distributed (2 rows of 4) on
-   large windows, while smaller windows keep the 2-column 240px grid. */
-@media (min-width: 1200px) {
-  #view-settings .settings-panel--wide .settings-grid {
-    grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
-  }
-}
-
-@media (max-width: 700px) {
-  #view-settings.is-active {
-    grid-template-columns: 1fr;
-  }
 }
 
 .settings-websub-row,
@@ -943,15 +932,6 @@
   color: var(--text-dim);
   font-size: var(--fs-sm);
   font-weight: 600;
-}
-
-.settings-field-help {
-  display: block;
-  margin-top: var(--sp-1);
-  color: var(--text-mute);
-  font-size: var(--fs-sm);
-  font-weight: 400;
-  line-height: 1.5;
 }
 
 .settings-inline-pair {
@@ -1006,7 +986,11 @@
 }
 .key-meter {
   display: grid;
-  grid-template-columns: 5.5em minmax(5rem, 1fr) 7.5em;
+  /* Both outer tracks can shrink: at 320px the old 5.5em / 7.5em pair plus the
+     5rem middle minimum needed 252px of a 264px box, so the row had ~12px of
+     slack and any wider value or label overflowed. Bounded minmax keeps the
+     tracks aligned at normal sizes but lets them give way instead. */
+  grid-template-columns: minmax(4em, 5.5em) minmax(4rem, 1fr) minmax(5em, 7.5em);
   align-items: center;
   gap: var(--sp-2);
 }
@@ -1211,8 +1195,7 @@
 
 /* A hint that has turned into a warning: the value is saved-blocking, so it
    should not still read as neutral guidance. */
-.settings-help-text.is-invalid,
-.settings-field-help.is-invalid {
+.settings-help-text.is-invalid {
   color: var(--danger);
 }
 
@@ -2721,7 +2704,6 @@ html:not(.app-ready) #main-page {
 /* R6. Phones: head wraps instead of crushing the title; actions stack full
    width; every control reaches a 44px tap target. */
 @media (max-width: 560px) {
-  .notify-settings .panel__head { flex-wrap: wrap; row-gap: var(--sp-1); }
   .notify-settings .panel__title { white-space: nowrap; }
   .notify-settings .panel__sub { order: 3; flex-basis: 100%; }
 
@@ -3092,8 +3074,8 @@ html.light-theme .analytics {
 .analytics figure { min-width: 0; }
 .analytics figure { margin: 0; }
 
-/* Head: range control + scope + refresh wrap as one group. */
-.analytics .panel__head { flex-wrap: wrap; row-gap: var(--sp-2); }
+/* Head: range control + scope + refresh wrap as one group. Wrapping is now on
+   the base .panel__head (shared.css); only the actions still need it here. */
 .analytics .panel__actions { flex-wrap: wrap; justify-content: flex-end; }
 .analytics .analytics-scope { width: auto; min-width: 9rem; }
 

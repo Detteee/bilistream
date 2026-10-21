@@ -568,7 +568,7 @@ function renderBind() {
       // code must not keep redrawing and polling while another view is on
       // screen. The timer stays armed so returning to the view resumes the
       // countdown immediately.
-      if (!isViewActive('settings') || document.hidden) return;
+      if (!isViewActive('notify') || document.hidden) return;
       renderBind();
       // Poll the status while waiting; SSE `status` also wakes us.
       if (Math.round((Date.now() - statusAt) / 1000) >= 3) refreshNotifyStatus();
@@ -1110,7 +1110,7 @@ async function cancelBind() {
 let liveTick = null;
 let liveVisibilityHooked = false;
 export function liveTickActive() {
-  return Boolean(settings) && isViewActive('settings') && !document.hidden;
+  return Boolean(settings) && isViewActive('notify') && !document.hidden;
 }
 function liveTickFn() { if (liveTickActive()) { renderStatus(); renderLiveEvents(); } }
 
@@ -1182,7 +1182,7 @@ export function initNotifySettings() {
   }
   // Same visibility gate as the other 系统设置 timers.
   setInterval(() => {
-    if (isViewActive('settings') && !document.hidden) refreshNotifyStatus();
+    if (isViewActive('notify') && !document.hidden) refreshNotifyStatus();
   }, 30_000);
 }
 

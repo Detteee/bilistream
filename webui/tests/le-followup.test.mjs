@@ -99,7 +99,7 @@ test('Clerk L1 / N1: one timer handle, cleared on re-init, view/visibility gated
   const src = await readFile(new URL('../src/js/notify.js', import.meta.url), 'utf8');
   assert.match(src, /if \(liveTick\) clearInterval\(liveTick\);\n\s+liveTick = setInterval\(liveTickFn, LIVE_EVENTS_TICK_MS\);/);
   assert.equal(src.match(/setInterval\(liveTickFn/g).length, 1);
-  assert.match(src, /return Boolean\(settings\) && isViewActive\('settings'\) && !document\.hidden;/);
+  assert.match(src, /return Boolean\(settings\) && isViewActive\('notify'\) && !document\.hidden;/);
   assert.match(src, /if \(!liveVisibilityHooked\)/, 'visibility listener added once');
   assert.ok(!/function setText|function setHidden/.test(src), 'unused helpers removed');
   assert.match(src, /\n  form\.watch_enabled = Boolean/, 'readForm indentation fixed');
