@@ -149,15 +149,21 @@ function buildLogRow(line) {
   // so the tag becomes a styled chip and the message keeps its own text.
   const message = document.createElement('td');
   message.className = 'log-cell log-cell--message';
-  if (parsed.label) {
-    const tag = document.createElement('span');
-    tag.className = 'log-tag';
-    tag.textContent = parsed.label;
-    message.append(tag, ' ');
+  if (parsed.label) message.append(tagChip(parsed.label), ' ');
+  // The formatter also prints platform codes mid-message (`选定 [YT] …`); in the
+  // table those read as the same chip the 平台 column uses instead of `=YT`.
+  for (const [index, part] of parsed.message.split(/\[(YT|TW|NC)\]/).entries()) {
+    if (!part) continue;
+    message.append(index % 2 ? tagChip(part) : document.createTextNode(part));
   }
-  message.append(document.createTextNode(parsed.message));
   row.append(message);
   return row;
+}
+function tagChip(text) {
+  const tag = document.createElement('span');
+  tag.className = 'log-tag';
+  tag.textContent = text;
+  return tag;
 }
 /**
  * Split one record into the columns the table shows. Bracket tags carry the

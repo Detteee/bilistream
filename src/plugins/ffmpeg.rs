@@ -348,7 +348,7 @@ impl SessionLogContext {
 
 impl fmt::Display for SessionLogContext {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{} s={}", self.identity, self.session)
+        write!(f, "{} 会话{}", self.identity, self.session)
     }
 }
 
@@ -3499,7 +3499,7 @@ mod tests {
             })
         });
         assert_eq!(output.lines().count(), 3, "{output}");
-        assert!(output.contains("ERROR [jp] [YT] 示例频道001 s=41 推流"));
+        assert!(output.contains("ERROR [jp] [YT] 示例频道001 会话41 推流"));
         assert!(output.contains("示例诊断"));
         assert_eq!(output.matches("Broken pipe").count(), 1);
         assert_eq!(output.matches("Conversion failed").count(), 1);
@@ -3532,7 +3532,7 @@ mod tests {
         assert_eq!(output.lines().count(), 2, "{output}");
         assert_eq!(output.matches("Broken pipe").count(), 1);
         assert_eq!(output.matches("读取诊断失败").count(), 1);
-        assert!(output.contains("s=42 摄取"));
+        assert!(output.contains("会话42 摄取"));
         assert!(output.contains("HTTP 502"));
         assert!(!output.contains("SYNTHETIC_"));
         assert!(!output.contains("proxy.invalid"));
@@ -3610,10 +3610,10 @@ mod tests {
                 .await;
             })
         });
-        assert!(output.contains("[jp] [YT] 示例频道001 s=44 缓存；HTTP error 403 Forbidden"));
-        assert!(output.contains("[jp] [YT] 示例频道001 s=44 缓存；Broken pipe"));
-        assert!(output.contains("[jp] [YT] 示例频道001 s=44 推流；Broken pipe"));
-        assert!(output.contains("[ca] [TW] 示例频道002 s=45 推流；Broken pipe"));
+        assert!(output.contains("[jp] [YT] 示例频道001 会话44 缓存；HTTP error 403 Forbidden"));
+        assert!(output.contains("[jp] [YT] 示例频道001 会话44 缓存；Broken pipe"));
+        assert!(output.contains("[jp] [YT] 示例频道001 会话44 推流；Broken pipe"));
+        assert!(output.contains("[ca] [TW] 示例频道002 会话45 推流；Broken pipe"));
         assert!(output.contains("已合并 1 条重复诊断"));
         assert_eq!(output.lines().count(), 5, "{output}");
     }
@@ -3785,7 +3785,9 @@ mod tests {
         );
         assert!(output.contains("已合并 20 条重复诊断"));
         assert!(output.contains("诊断读取结束；已合并 1 条重复诊断"));
-        assert!(output.contains("ERROR [jp] [YT] 示例频道001 s=46 摄取；ERROR new decoder failure"));
+        assert!(
+            output.contains("ERROR [jp] [YT] 示例频道001 会话46 摄取；ERROR new decoder failure")
+        );
         assert!(output
             .lines()
             .any(|line| line.starts_with("DEBUG") && line.contains("keepalive request failed")));
@@ -3949,7 +3951,7 @@ mod tests {
             })
         });
         assert_eq!(output.lines().count(), 1, "{output}");
-        assert!(output.contains("s=51 推流 已观察到推流输出"));
+        assert!(output.contains("会话51 推流 已观察到推流输出"));
         assert!(!output.contains("SYNTHETIC_STATS_TOKEN"));
     }
 
@@ -4002,10 +4004,10 @@ mod tests {
                 clear_manual_stop();
             })
         });
-        assert!(output.contains("s=52 缓存 进程已启动 pid="));
+        assert!(output.contains("会话52 缓存 进程已启动 pid="));
         assert_eq!(output.matches("进程异常退出").count(), 1);
         assert_eq!(output.matches("exit=7").count(), 1);
-        assert!(output.contains("s=53 ffmpeg 子进程已停止；原因=主动停止请求"));
+        assert!(output.contains("会话53 ffmpeg 子进程已停止；原因=主动停止请求"));
         assert!(!output.contains("Some("));
         assert!(!output.contains("None"));
         assert!(!output.contains("ExitStatus("));
@@ -4029,7 +4031,7 @@ mod tests {
         let records: Vec<_> = output.lines().collect();
         assert_eq!(records.len(), 4);
         assert!(records[..3].iter().all(|line| line.starts_with("ERROR")));
-        assert!(records[0].contains("s=54 HLS 缓存写入 停滞"));
+        assert!(records[0].contains("会话54 HLS 缓存写入 停滞"));
         assert!(records[0].contains("31秒无 stats"));
         assert!(records[1].contains("推流停滞"));
         assert!(records[2].contains("1分5秒"));
@@ -4047,7 +4049,7 @@ mod tests {
             context.started();
             context.exited(&std::process::ExitStatus::from_raw(15));
         });
-        assert!(output.contains("s=56 摄取 进程已启动 pid=未知"));
+        assert!(output.contains("会话56 摄取 进程已启动 pid=未知"));
         assert!(output.contains("进程异常退出 pid=未知 signal=15"));
         assert!(!output.contains("Some("));
         assert!(!output.contains("None"));

@@ -528,6 +528,8 @@ struct DanmakuTargetLog {
     area: Option<(u64, String)>,
     requested_area: Option<u64>,
     forced_without_title: bool,
+    /// Orders requests for the pending/decision guard; deliberately not printed,
+    /// because a request counter in prose answers no operator question.
     request_id: u64,
     /// The sender's display name, so the log line identifies the real sender
     /// instead of a role placeholder.
@@ -632,17 +634,24 @@ pub(crate) fn report_target_decision(
     selected: Option<&BroadcastSource>,
     reason: &str,
 ) {
-    let selected = selected.map_or_else(
-        || "暂无可用频道".to_owned(),
-        |source| {
-            format!(
-                "[{}] {}",
-                safe_text(&source.platform, 8),
-                safe_text(&source.channel_name, 64)
-            )
-        },
-    );
-    let decision = format!("{selected}；原因={reason}");
+    // A command only changes a monitored target; the selector decides what really
+    // relays. A pick that is the requested channel needs no second record — the
+    // target-update line already names it — so only a different pick, or no pick,
+    // says something the operator cannot infer.
+    let decision = match selected {
+        Some(source)
+            if source.platform == request.source.platform
+                && source.channel_name == request.source.channel_name =>
+        {
+            return;
+        }
+        Some(source) => format!(
+            "实际转播 [{}] {}；原因：{reason}",
+            safe_text(&source.platform, 8),
+            safe_text(&source.channel_name, 64)
+        ),
+        None => format!("暂无可用频道；原因：{reason}"),
+    };
     {
         let mut pending = PENDING_TARGET
             .lock()
@@ -659,10 +668,8 @@ pub(crate) fn report_target_decision(
         pending.last_decision = Some(decision.clone());
     }
     tracing::info!(
-        "{} [弹幕 转播] #{} 选台结果={}；请求=[{}] {}",
+        "{} [弹幕 转播] 切台请求 [{}] {}；{decision}",
         crate::logging::node_tag(&request.node),
-        request.id,
-        decision,
         safe_text(&request.source.platform, 8),
         safe_text(&request.source.channel_name, 64)
     );
@@ -685,8 +692,7 @@ impl DanmakuTargetLog {
             64,
         );
         let origin = format!(
-            "[弹幕 转播] #{}（{}）",
-            self.request_id,
+            "[弹幕 转播]（{}）",
             if self.sender.is_empty() {
                 "未知发送者".to_string()
             } else {
@@ -777,9 +783,8 @@ async fn finish_target_update<AfterUpdate, AfterFuture, Reply, ReplyFuture>(
             let sync_message = after_update(update.previous_version, update.config, changed).await;
             if !sync_message.is_empty() {
                 tracing::info!(
-                    "{} [弹幕 转播] #{} 目标同步结果{}",
+                    "{} [弹幕 转播] 目标同步结果{}",
                     crate::logging::node_tag(&outcome.node),
-                    outcome.request_id,
                     safe_text(&sync_message, 240)
                 );
             }
@@ -1179,11 +1184,7 @@ pub async fn process_danmaku_with_owner(command: &str, is_owner: bool, sender: &
                     accept_target_request(&request)
                 });
                 if let Some(active) = warnings.active_source() {
-                    report_target_decision(
-                        &request,
-                        Some(&active),
-                        "当前转播继续，下一轮按自动顺序选台",
-                    );
+                    report_target_decision(&request, Some(&active), "下一轮选台决定是否切换");
                 }
 
                 if changed
@@ -1756,7 +1757,7 @@ mod tests {
                 },
                 "{output}"
             );
-            assert!(output.contains("[ca] [弹幕 转播] #0（未知发送者） [YT] 示例频道001"));
+            assert!(output.contains("[ca] [弹幕 转播]（未知发送者） [YT] 示例频道001"));
             assert!(output.contains("分区：其他单机 (235)"));
             assert!(output.contains(expected));
             if expected == "监听目标更新已拒绝" {

@@ -332,11 +332,11 @@ try {
     // marker inside the message, so the fixture reads like a real tail.
     const clock = i => { const t = 18 * 3600 + i; const pad = n => String(n).padStart(2, '0'); return pad(Math.floor(t / 3600)) + ':' + pad(Math.floor(t / 60) % 60) + ':' + pad(t % 60); };
     const shapes = [
-      'INFO [ffmpeg] [jp] [YT] 示例频道001 s=1 推流 已观察到推流输出',
-      'INFO [danmaku] [jp] [弹幕 转播] #1 选台结果=[YT] 示例频道001；请求=[YT] 示例频道001',
+      'INFO [ffmpeg] [jp] [YT] 示例频道001 会话1 推流 已观察到推流输出',
+      'INFO [danmaku] [jp] [弹幕 转播] 切台请求 [YT] 示例频道001；实际转播 [TW] 示例频道002；原因：本轮排序更高',
       'INFO [cluster] [jp] YouTube 索引：使用节点 ca 的索引',
       'INFO [runtime] [jp] 源直播已结束，30 秒后自动停播B站直播间，避免挂机判定',
-      'INFO [ffmpeg] [jp] [TW] 示例频道002 s=2 转播；已合并 1 条重复诊断：ERROR new decoder failure',
+      'INFO [ffmpeg] [jp] [TW] 示例频道002 会话2 转播；已合并 1 条重复诊断：ERROR new decoder failure',
     ];
     // Shape order is deterministic but not a straight cycle, so the tail does not
     // read as 5 rows on repeat the way a plain modulo index would.
@@ -384,9 +384,10 @@ try {
       })();
       await refresh();
       const retained = first === output.firstElementChild;
-      lines.push('2026-10-11 00:00:00+0800 ERROR [ffmpeg] [jp] [YT] 示例频道001 s=1 推流停滞，准备终止进程；流时间冻结12秒');
+      lines.push('2026-10-11 00:00:00+0800 ERROR [ffmpeg] [jp] [YT] 示例频道001 会话1 推流停滞，准备终止进程；流时间冻结12秒');
       await refresh();
       const appended = output.children.length === 500 && output.firstElementChild === next && output.lastElementChild.classList.contains('error');
+      const platformChip = [...output.querySelectorAll('.log-cell--message .log-tag')].some(tag => tag.textContent === 'YT');
       document.getElementById('clear-logs-btn').click();
       const cleared = output.textContent === '日志已清空';
       document.getElementById('setup-page').classList.add('hidden');
@@ -405,10 +406,10 @@ try {
       const visibleLogsFetched = logRequests > logsBeforeHidden;
       document.getElementById('tab-overview').click();
       await until(() => networkRequests > 0);
-      return JSON.stringify({bounded,severity,filtered,filteredEmpty,retained,appended,cleared,hiddenSkipped,hiddenLogsSkipped,visibleLogsFetched,visibleFetched:networkRequests>0});
+      return JSON.stringify({bounded,severity,filtered,filteredEmpty,retained,appended,platformChip,cleared,hiddenSkipped,hiddenLogsSkipped,visibleLogsFetched,visibleFetched:networkRequests>0});
     } finally { window.fetch = fetchOriginal; }
   })()`));
-  assert.deepEqual(performanceChecks, {bounded:true,severity:true,filtered:true,filteredEmpty:true,retained:true,appended:true,cleared:true,hiddenSkipped:true,hiddenLogsSkipped:true,visibleLogsFetched:true,visibleFetched:true});
+  assert.deepEqual(performanceChecks, {bounded:true,severity:true,filtered:true,filteredEmpty:true,retained:true,appended:true,platformChip:true,cleared:true,hiddenSkipped:true,hiddenLogsSkipped:true,visibleLogsFetched:true,visibleFetched:true});
   // Narrow screens drop the table header and stack one record per card; the
   // message must own a full line instead of widening the identity cells.
   await command('browsingContext.setViewport', { context, viewport: { width: 320, height: 900 }, devicePixelRatio: 1 });

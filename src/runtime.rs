@@ -1192,6 +1192,7 @@ fn report_danmaku_selection(
         return;
     };
     let selected = select_stream(yt, tw, nico);
+    let platform = request.source.platform.clone();
     let enabled = match request.source.platform.as_str() {
         "YT" => cfg.youtube.enable_monitor,
         "TW" => cfg.twitch.enable_monitor,
@@ -1201,14 +1202,17 @@ fn report_danmaku_selection(
         probe.channel.platform.code() == request.source.platform
             && probe.channel.channel_id == request.source.channel_id
     });
+    // Reasons name the real channel (bounded like every displayed title) instead
+    // of a generic 请求频道, so a tail of decisions reads without cross-referencing.
+    let channel = safe_text(&request.source.channel_name, 64);
     let reason = if bilistream::plugins::danmaku::source_is_held(cfg, warning, &request.source) {
-        "请求频道仍因警告/切断临时跳过"
+        format!("{channel} 仍因警告/切断临时跳过")
     } else if !enabled {
-        "请求平台的普通监控未启用"
+        format!("{platform} 普通监控未启用")
     } else if let Some(probe) = probe {
         match &probe.status {
-            Err(_) => "请求频道状态检查失败",
-            Ok(status) if !status.is_live => "请求频道未直播",
+            Err(_) => format!("{channel} 状态检查失败"),
+            Ok(status) if !status.is_live => format!("{channel} 未开播"),
             Ok(status)
                 if bilistream::plugins::banned_keywords::streaming_banned_hit(
                     status.topic.as_deref(),
@@ -1217,24 +1221,16 @@ fn report_danmaku_selection(
                 )
                 .is_some() =>
             {
-                "请求频道标题/游戏包含禁用关键词"
+                format!("{channel} 标题或分区命中禁用词")
             }
             Ok(status) if status.m3u8_url.as_ref().is_none_or(|url| url.is_empty()) => {
-                "请求频道暂无可播放的流地址"
+                format!("{channel} 暂无可播放流地址")
             }
-            Ok(_)
-                if selected.as_ref().is_some_and(|stream| {
-                    stream.platform.code() == request.source.platform
-                        && stream.channel_id == request.source.channel_id
-                }) =>
-            {
-                "请求频道是本轮最高可用候选"
-            }
-            Ok(_) if selected.is_some() => "自动排序选择了更高优先级的可用频道",
-            Ok(_) => "请求频道未通过防撞车检查",
+            Ok(_) if selected.is_some() => "本轮排序更高".into(),
+            Ok(_) => "本轮没有可转播的频道".into(),
         }
     } else {
-        "请求频道尚未进入本轮检查"
+        format!("本轮检查未覆盖 {channel}")
     };
     report_target_decision(
         &request,
@@ -1242,7 +1238,7 @@ fn report_danmaku_selection(
             .as_ref()
             .map(StreamCandidate::source_identity)
             .as_ref(),
-        reason,
+        &reason,
     );
 }
 
@@ -4429,7 +4425,6 @@ mod tests {
                 "[弹幕 转播]",
                 "监听目标已更新",
                 "跳过频道",
-                "选台结果=[TW] 示例频道 002",
                 "标题=示例直播 002",
                 "Connection refused",
                 "已观察到推流输出",
@@ -4559,10 +4554,13 @@ mod tests {
         .with_subscriber(dispatch)
         .await;
         let output = logs.text();
-        assert!(output.contains("请求频道仍因警告/切断临时跳过"), "{output}");
+        assert!(output.contains("仍因警告/切断临时跳过"), "{output}");
         assert!(output.contains("跳过频道"), "{output}");
         assert!(!output.contains("临时跳过已解除"), "{output}");
-        assert!(!output.contains("请求频道是本轮最高可用候选"), "{output}");
+        // A pick that equals the request logs no tautological decision; the held
+        // request shows the deviation ("暂无可用频道") instead of echoing a pick.
+        assert!(!output.contains("实际转播"), "{output}");
+        assert!(!output.contains("已选定请求"), "{output}");
         assert!(!output.contains("https://"), "{output}");
     }
 
