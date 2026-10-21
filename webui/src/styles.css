@@ -1468,6 +1468,19 @@
   font-size: var(--fs-xs);
 }
 
+/* The fused session digits (`示例频道001_2`) and the reason/diagnostics tail
+   (everything from the first `：`/`；`) read muted from the theme tokens. `em`
+   keeps the subscript proportionate wherever it lands — desktop rows and the
+   stacked mobile cards share these rules because both render one DOM. */
+.log-sub {
+  color: var(--text-mute);
+  font-size: 0.85em;
+}
+
+.log-detail {
+  color: var(--text-mute);
+}
+
 /* Severity tints the level cell; only error/warn also tint the message, because
    those are the rows an operator scans for. */
 .log-row.error .log-cell--level {

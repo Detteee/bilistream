@@ -680,13 +680,13 @@ fn log_ffmpeg_loop_exit(
         .unwrap_or_default();
     match reason {
         FfmpegLoopExitReason::SourceEnded => {
-            tracing::info!("{context} 源直播已结束，退出推流循环{execution}");
+            tracing::info!("{context} 直播已结束：退出推流循环{execution}");
         }
         FfmpegLoopExitReason::BiliStopped => {
-            tracing::info!("{context} B站直播已停止，退出推流循环{execution}");
+            tracing::info!("{context} B站直播已停止：退出推流循环{execution}");
         }
         FfmpegLoopExitReason::IntentionalRestart { .. } => {
-            tracing::info!("{context} 收到重启或切换信号，退出本次推流循环{execution}");
+            tracing::info!("{context} 收到重启或切换信号：退出本次推流循环{execution}");
         }
         FfmpegLoopExitReason::ClusterHandoff => {
             tracing::info!("{context} 集群执行权限已撤销，退出本节点推流循环{execution}");
@@ -2122,7 +2122,7 @@ fn interpret_refetch_step(step: RefetchStep, stream_log: &FfmpegStreamIdentity) 
                     STREAM_END_ERROR_WINDOW.as_secs()
                 );
             } else {
-                tracing::info!("{stream_log} 源播放列表刷新未找到直播，源直播已结束");
+                tracing::info!("{stream_log} 直播已结束：源播放列表刷新未找到直播");
             }
             outcome.current_is_live = false;
             outcome.end_announce = announce;
@@ -2280,7 +2280,7 @@ async fn announce_stream_end(
 
     // The source is positively offline; see `stop_room_after_source_end`.
     if bili_live {
-        stop_room_after_source_end(cfg, session_log, bili_live_start_ts).await;
+        stop_room_after_source_end(cfg, session_log, channel_name, bili_live_start_ts).await;
     }
 }
 
@@ -2290,10 +2290,11 @@ async fn announce_stream_end(
 async fn stop_room_after_source_end(
     cfg: &bilistream::config::Config,
     session_log: &str,
+    channel_name: &str,
     bili_live_start_ts: Option<i64>,
 ) {
     if !cfg.auto_stop_after_source_end {
-        tracing::debug!("{session_log} 源结束后自动停播已关闭，B站房间保持开播");
+        tracing::debug!("{session_log} 源结束后自动停播已关闭；B站房间保持开播");
         return;
     }
     let live_secs = bili_live_start_ts
@@ -2302,18 +2303,18 @@ async fn stop_room_after_source_end(
     let wait = auto_stop_delay(live_secs, cfg.auto_stop_threshold_hours, cfg.interval);
     if wait.is_zero() {
         tracing::info!(
-            "{session_log} 源直播已结束，本场已直播 {} 小时（≥ {} 小时），立即自动停播B站直播间",
+            "{session_log} {channel_name} 直播已结束（已播 {} 小时，超过阈值 {} 小时）：立即自动停播B站直播间",
             live_secs / 3600,
             cfg.auto_stop_threshold_hours
         );
     } else {
         tracing::info!(
-            "{session_log} 源直播已结束，{} 秒后自动停播B站直播间，避免挂机判定",
+            "{session_log} {channel_name} 直播已结束：{} 秒后自动停播B站直播间（避免挂机判定）",
             wait.as_secs()
         );
         tokio::time::sleep(wait).await;
         if cfg.cluster.enabled && !cluster::local_monitoring_allowed(cfg) {
-            tracing::info!("{session_log} 等待期间本节点失去执行权，跳过自动停播");
+            tracing::info!("{session_log} 等待期间本节点失去执行权；跳过自动停播");
             return;
         }
     }
@@ -3543,7 +3544,7 @@ impl LolMonitor {
             return None;
         }
         let Some(riot_api_key) = normalized_api_key(cfg.riot_api_key.as_deref()) else {
-            tracing::warn!("LOL 监控已启用，但 Riot API Key 未配置，跳过本次检测");
+            tracing::warn!("LOL 监控 跳过本次检测：Riot API Key 未配置");
             return None;
         };
         Some(Self {
@@ -4075,7 +4076,7 @@ mod tests {
         assert!(lines[1].contains("\\n2026-10-10 ERROR"));
         assert!(!output.contains('\u{1b}'));
         assert!(!output.contains("SYNTHETIC_TITLE_TOKEN"));
-        assert!(lines[3].contains("源直播已结束"));
+        assert!(lines[3].contains("直播已结束"));
         assert!(lines[4].contains("B站直播已停止"));
         assert!(lines[5].contains("重启或切换信号"));
         assert!(lines[6].contains("集群执行权限已撤销"));

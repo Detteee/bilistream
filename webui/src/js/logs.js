@@ -150,12 +150,11 @@ function buildLogRow(line) {
   const message = document.createElement('td');
   message.className = 'log-cell log-cell--message';
   if (parsed.label) message.append(tagChip(parsed.label), ' ');
-  // The formatter also prints platform codes mid-message (`选定 [YT] …`); in the
-  // table those read as the same chip the 平台 column uses instead of `=YT`.
-  for (const [index, part] of parsed.message.split(/\[(YT|TW|NC)\]/).entries()) {
-    if (!part) continue;
-    message.append(index % 2 ? tagChip(part) : document.createTextNode(part));
-  }
+  // The formatter also prints platform codes mid-message (`切台请求 [YT] …`); in
+  // the table those read as the same chip the 平台 column uses instead of raw
+  // brackets. messageMarkup escapes the text first, so the wrapped spans inside
+  // this cell stay XML-safe in desktop rows and stacked mobile cards alike.
+  message.insertAdjacentHTML('beforeend', parsed.messageHtml);
   row.append(message);
   return row;
 }
@@ -164,6 +163,43 @@ function tagChip(text) {
   tag.className = 'log-tag';
   tag.textContent = text;
   return tag;
+}
+/** XML-safe text: escape a record's message before any span markup is wrapped. */
+function escapeMessage(text) {
+  return text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+}
+/**
+ * Session numbering is fused into the channel copy (`示例频道001_2`): the digits
+ * drop to a muted subscript so the text keeps `_N` while the eye reads the name.
+ * Only the FIRST whitespace token fuses, and only when it ends in `_digits`
+ * (decision m03068); interior underscores and later tokens stay verbatim.
+ */
+function fuseSessionId(html) {
+  const token = html.match(/^([^\s]*?)_(\d+)(?=\s|$)/);
+  if (!token) return html;
+  return `${token[1]}<span class="log-sub">${token[2]}</span>${html.slice(token[0].length)}`;
+}
+/**
+ * Two-tone message: the part before the first `：` or `；` carries the outcome;
+ * the separator and the reason/diagnostics tail after it read muted. Without a
+ * separator the whole message keeps its single tone.
+ */
+function splitMessageBody(html) {
+  const detail = html.search(/：|；/);
+  if (detail < 0) return html;
+  return `${html.slice(0, detail)}<span class="log-detail">${html.slice(detail)}</span>`;
+}
+/**
+ * Table markup for one parsed message. Order is load-bearing: escape first so
+ * the wrapped spans stay XML-safe, then fuse `_N`, then two-tone, and only then
+ * replace platform codes — the chip pass matches raw-bracket tokens of the
+ * escaped text, never its own span tags.
+ */
+function messageMarkup(message) {
+  return splitMessageBody(fuseSessionId(escapeMessage(message))).replace(
+    /\[(YT|TW|NC)\]/g,
+    (unused, platform) => `<span class="log-tag">${platform}</span>`,
+  );
 }
 /**
  * Split one record into the columns the table shows. Bracket tags carry the
@@ -220,6 +256,7 @@ function parseLogLine(line) {
   }
   // A record that parsed nothing (a UI-only line) keeps its whole text.
   const parsedSomething = time || level || component || node || platform || label;
+  const message = rest.trim() || (parsedSomething ? '' : raw.trim());
   return {
     time,
     fullTime,
@@ -228,7 +265,10 @@ function parseLogLine(line) {
     node,
     platform,
     label,
-    message: rest.trim() || (parsedSomething ? '' : raw.trim()),
+    message,
+    // Table markup for the message (two-tone, fused `_N`, platform chips);
+    // `message` stays the verbatim text the row click copies.
+    messageHtml: messageMarkup(message),
   };
 }
 function logLineLevel(line) {

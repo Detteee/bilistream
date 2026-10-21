@@ -369,7 +369,7 @@ impl Worker {
     fn note_fetch_failure(&mut self, owner: &str, error: &str, now: Instant) {
         if let Some(summary) = self.fetch_failures.failure(now, 1) {
             tracing::warn!(
-                "{} 读取节点 {} 的 YouTube 索引失败；{}，按现有规则使用缓存或本地查询；原因={}",
+                "{} 读取节点 {} 的 YouTube 索引失败：{}；原因：{}；使用缓存或本地查询",
                 self.node_tag(),
                 safe_text(owner, 64),
                 summary,
@@ -388,7 +388,7 @@ impl Worker {
     fn note_fetch_success(&mut self, owner: &str, now: Instant) {
         if let Some(summary) = self.fetch_failures.success(now) {
             tracing::info!(
-                "{} 读取节点 {} 的 YouTube 索引已恢复；此前失败={}次 持续={}",
+                "{} 读取节点 {} 的 YouTube 索引已恢复（此前失败 {} 次，持续 {}）",
                 self.node_tag(),
                 safe_text(owner, 64),
                 summary.failures,
@@ -423,7 +423,7 @@ impl Worker {
             ),
             (Source::Node(node), Source::Local) => {
                 tracing::warn!(
-                    "{} YouTube 索引：节点 {} 的索引不可用，回退本地查询",
+                    "{} YouTube 索引 回退本地查询（节点 {} 不可用）",
                     self.node_tag(),
                     safe_text(node, 64)
                 );
@@ -519,7 +519,7 @@ mod tests {
         assert_eq!(text.matches("WARN [yt-index]").count(), 3, "{text}");
         assert_eq!(text.matches("读取节点 ny 的 YouTube 索引已恢复").count(), 1);
         assert!(text.contains("累计失败=11次"));
-        assert!(text.contains("此前失败=1次"));
+        assert!(text.contains("此前失败 1 次"));
         assert!(text.contains("[jp] 读取节点 ca"));
         assert!(text.contains("HTTP 530"));
         assert!(!text.contains("synthetic-peer-token"));
