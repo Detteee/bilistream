@@ -1397,7 +1397,6 @@
 .log-table .log-cell--time,
 .log-table .log-cell--level,
 .log-table .log-cell--component,
-.log-table .log-cell--node,
 .log-table .log-cell--platform {
   text-align: center;
 }
@@ -1441,7 +1440,6 @@
 }
 
 .log-cell--component,
-.log-cell--node,
 .log-cell--platform {
   width: 1%;
   white-space: nowrap;
@@ -1451,7 +1449,6 @@
   color: var(--text-dim);
 }
 
-.log-cell--node,
 .log-cell--platform {
   padding-inline: var(--sp-2);
   color: var(--text-mute);

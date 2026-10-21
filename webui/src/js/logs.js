@@ -114,7 +114,7 @@ function renderLogs(cleared = false) {
     const empty = document.createElement('tr');
     empty.className = 'log-row log-row--empty';
     const cell = document.createElement('td');
-    cell.colSpan = 6;
+    cell.colSpan = 5;
     cell.textContent = cleared
       ? '日志已清空'
       : logFilter
@@ -136,7 +136,6 @@ function buildLogRow(line) {
     ['log-cell log-cell--time', parsed.time, parsed.fullTime],
     ['log-cell log-cell--level', parsed.level ? parsed.level.toUpperCase() : '', ''],
     ['log-cell log-cell--component', parsed.component, ''],
-    ['log-cell log-cell--node', parsed.node, ''],
     ['log-cell log-cell--platform', parsed.platform, ''],
   ];
   for (const [className, text, title] of cells) {
@@ -163,8 +162,10 @@ function buildLogRow(line) {
 /**
  * Split one record into the columns the table shows. Bracket tags carry the
  * record's identity: `[node]`, `[platform]`, then an optional `[标签]` such as
- * `[弹幕 转播]`. Anything unrecognised stays in `message` verbatim, so a
- * UI-only or future-format line still renders as its full text.
+ * `[弹幕 转播]`. The node tag is consumed but not shown: `/api/logs` only ever
+ * returns this process's records, so its value is constant and the column would
+ * repeat one id on every row. Anything unrecognised stays in `message` verbatim,
+ * so a UI-only or future-format line still renders as its full text.
  */
 function parseLogLine(line) {
   const raw = String(line ?? '');

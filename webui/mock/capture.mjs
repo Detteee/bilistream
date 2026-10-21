@@ -327,11 +327,24 @@ try {
     const until = async (check, timeout = 2000) => { const deadline = performance.now() + timeout; while (performance.now() < deadline) { if (check()) return; await pause(20); } throw new Error('Log UI did not settle'); };
     let logRequests = 0;
     const fetchOriginal = window.fetch;
-    let lines = Array.from({length: 600}, (_, i) => '2026-10-10 18:00:' + String(i % 60).padStart(2, '0') + '+0800 INFO [runtime] [jp] [YT] 示例频道001 推流已观察到输出；会话 s=1 log ' + i + ' title=ERROR ⚠️');
-    // The rolling window keeps the newest 500, so the tagged fixtures sit at the
-    // tail where the operator actually sees them.
-    lines[598] = '2026-10-10 18:00:58+0800 INFO [danmaku] [jp] [弹幕 转播] #1 选台结果=[YT] 示例频道001；原因=请求频道是本轮最高可用候选；请求=[YT] 示例频道001';
-    lines[599] = '2026-10-10 18:00:59+0800 WARN [cluster] [ca] 自动交接 ny→jp #3 已接管，旧节点停止推送';
+    // Mock records in the shapes the app actually emits; every value is invented.
+    // One clock second per record keeps each row addressable without a synthetic
+    // marker inside the message, so the fixture reads like a real tail.
+    const clock = i => { const t = 18 * 3600 + i; const pad = n => String(n).padStart(2, '0'); return pad(Math.floor(t / 3600)) + ':' + pad(Math.floor(t / 60) % 60) + ':' + pad(t % 60); };
+    const shapes = [
+      'INFO [ffmpeg] [jp] [YT] 示例频道001 s=1 推流 已观察到推流输出',
+      'INFO [danmaku] [jp] [弹幕 转播] #1 选台结果=[YT] 示例频道001；请求=[YT] 示例频道001',
+      'INFO [cluster] [jp] YouTube 索引：使用节点 ca 的索引',
+      'INFO [runtime] [jp] 源直播已结束，30 秒后自动停播B站直播间，避免挂机判定',
+      'INFO [ffmpeg] [jp] [TW] 示例频道002 s=2 转播；已合并 1 条重复诊断：ERROR new decoder failure',
+    ];
+    // Shape order is deterministic but not a straight cycle, so the tail does not
+    // read as 5 rows on repeat the way a plain modulo index would.
+    const shape = i => shapes[(i * 3 + Math.floor(i / 7)) % shapes.length];
+    let lines = Array.from({length: 600}, (_, i) => '2026-10-10 ' + clock(i) + '+0800 ' + shape(i));
+    // The rolling window keeps the newest 500, so the WARN fixture sits at the
+    // tail where the operator actually sees it.
+    lines[599] = '2026-10-10 ' + clock(599) + '+0800 WARN [cluster] [jp] 集群心跳编码失败，本次跳过：failed to encode';
     let networkRequests = 0;
     window.fetch = (path, options) => {
       if (path === '/api/logs') { logRequests++; return Promise.resolve(new Response(JSON.stringify({success:true,logs:lines.join(String.fromCharCode(10))}), {headers:{'Content-Type':'application/json'}})); }
@@ -350,17 +363,17 @@ try {
       const output = document.getElementById('log-output');
       const first = output.firstElementChild;
       const next = first.nextElementSibling;
-      const bounded = output.children.length === 500 && first.textContent.includes('log 100');
+      const bounded = output.children.length === 500 && first.textContent.includes('18:01:40');
       // The tail carries one tagged INFO and one WARN fixture, so severity is
       // checked per row instead of assuming the whole window is INFO.
       const severity = [...output.children].every((row, index) => row.classList.contains(index === 499 ? 'warn' : 'info'));
       // Filtering rewrites the visible rows only; clearing it restores the snapshot.
       const filter = document.getElementById('log-filter-input');
-      filter.value = 'log 574';
+      filter.value = '18:09:34';
       filter.dispatchEvent(new Event('input'));
       await pause(20);
       const filteredRows = [...output.children];
-      const filtered = filteredRows.length === 1 && filteredRows[0].textContent.includes('log 574');
+      const filtered = filteredRows.length === 1 && filteredRows[0].textContent.includes('18:09:34');
       const filteredEmpty = (() => {
         filter.value = 'no such record';
         filter.dispatchEvent(new Event('input'));
@@ -371,7 +384,7 @@ try {
       })();
       await refresh();
       const retained = first === output.firstElementChild;
-      lines.push('2026-10-11 00:00:00+0800 ERROR [ffmpeg] [jp] [YT] 示例频道001 s=1 推流停滞，准备终止进程；流时间冻结12秒 log 600');
+      lines.push('2026-10-11 00:00:00+0800 ERROR [ffmpeg] [jp] [YT] 示例频道001 s=1 推流停滞，准备终止进程；流时间冻结12秒');
       await refresh();
       const appended = output.children.length === 500 && output.firstElementChild === next && output.lastElementChild.classList.contains('error');
       document.getElementById('clear-logs-btn').click();
