@@ -1372,7 +1372,7 @@ pub(crate) fn configured_broadcast_source(cfg: &Config, platform: &str) -> Optio
 }
 
 /// If the exemption releases the current hold for `source`, the matched
-/// reason id (for the R8 log line and the R4 rail record). Read-only: it
+/// reason id (for the R8 log line and the R4 cooldown record). Read-only: it
 /// never logs or records, so status cards can ask it every poll.
 pub(crate) fn exempt_hold_release(
     cfg: &Config,
@@ -1392,15 +1392,15 @@ pub(crate) fn exempt_hold_release(
         channel_id: &source.channel_id,
         // Empty classify is the high-risk `unrecognized` settings class.
         reason_ids: &reason_ids,
-        // The rail costs a document read plus a peer scan; ask only after the
+        // The cooldown costs a document read plus a peer scan; ask only after the
         // cheap configuration conditions pass.
-        rail_hit: false,
+        cooldown_hit: false,
         room_lock: false,
     };
     if !decision.configured_release() {
         return None;
     }
-    if crate::plugins::warning_exempt::rail_hit(
+    if crate::plugins::warning_exempt::in_cooldown(
         &source.platform,
         &source.channel_id,
         warning.episode_id_for(source),
@@ -1418,7 +1418,7 @@ pub(crate) fn exempt_hold_release(
 }
 
 /// Release an exempt hold at the moment the runtime would skip the source:
-/// records the R4 rail first (a failed record keeps the hold, preserving the
+/// records the R4 cooldown first (a failed record keeps the hold, preserving the
 /// one-restart guarantee), then clears the hold and logs the R8 line so every
 /// later `holds()` check (ffmpeg spawn, priority transition) sees the restart.
 /// Returns true only when a hold was actually released.
@@ -1432,7 +1432,7 @@ pub(crate) fn release_exempt_hold(
         return false;
     };
     let episode = snapshot.episode_id_for(source).map(str::to_owned);
-    if let Err(error) = crate::plugins::warning_exempt::record_restart(
+    if let Err(error) = crate::plugins::warning_exempt::start_cooldown(
         &source.platform,
         &source.channel_id,
         episode.as_deref(),
@@ -1446,8 +1446,8 @@ pub(crate) fn release_exempt_hold(
         );
         return false;
     }
-    // A frame marked during the rail write leaves a newer hold: the release
-    // refuses, the rail spend stands (conservative) and the caller falls
+    // A frame marked during the cooldown write leaves a newer hold: the release
+    // refuses, the cooldown spend stands (conservative) and the caller falls
     // through to the normal skip.
     let Some(released) = warnings.release_exempt(&snapshot, source) else {
         return false;

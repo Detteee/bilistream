@@ -101,8 +101,8 @@ pub(crate) fn read_json_file(name: &str) -> Option<serde_json::Value> {
 }
 
 /// Whether a peer heartbeat claims a recent exempt warning-hold restart of
-/// this channel+episode (the local rail is checked by the caller).
-pub(crate) fn peer_exempt_rails_hit(
+/// this channel+episode (the local cooldown is checked by the caller).
+pub(crate) fn peer_exempt_cooldowns_hit(
     platform: &str,
     channel_id: &str,
     episode_id: Option<&str>,
@@ -111,8 +111,8 @@ pub(crate) fn peer_exempt_rails_hit(
     cluster_state_read()
         .nodes
         .values()
-        .filter_map(|node| node.warning_exempt_rail.as_ref())
-        .any(|rail| rail.hit(platform, channel_id, episode_id, now))
+        .filter_map(|node| node.warning_exempt_cooldown.as_ref())
+        .any(|cooldown| cooldown.is_active(platform, channel_id, episode_id, now))
 }
 
 /// Peers' heartbeat B站 live books (analytics §17). The read guard is

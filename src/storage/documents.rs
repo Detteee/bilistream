@@ -101,8 +101,8 @@ pub(crate) fn validate(name: &str, value: &Value) -> io::Result<()> {
                 }
             }
         }
-        "warning_exempt_rail.json" => {
-            serde_json::from_value::<crate::plugins::warning_exempt::ExemptRail>(value.clone())
+        "warning_exempt_cooldown.json" => {
+            serde_json::from_value::<crate::plugins::warning_exempt::ExemptCooldown>(value.clone())
                 .map_err(|_| bad())?;
         }
         _ => return Err(bad()),

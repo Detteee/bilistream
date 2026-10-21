@@ -96,12 +96,13 @@ pub async fn get_cluster_status() -> Json<ApiResponse<ClusterStatus>> {
 }
 
 /// Heartbeat-only node fields (the B站 live book and the warning-exemption
-/// rail) never leave the signed heartbeat: every HTTP status copy strips both,
-/// so no browser or peer response can serve a `live_key` or a rail record.
+/// cooldown) never leave the signed heartbeat: every HTTP status copy strips
+/// both, so no browser or peer response can serve a `live_key` or a cooldown
+/// record.
 pub(crate) fn without_heartbeat_only_fields(mut status: ClusterStatus) -> ClusterStatus {
     for node in &mut status.nodes {
         node.bili_live = None;
-        node.warning_exempt_rail = None;
+        node.warning_exempt_cooldown = None;
     }
     status
 }
@@ -857,10 +858,10 @@ mod heartbeat_only_tests {
     use super::*;
 
     #[test]
-    fn response_status_strips_the_live_book_and_exempt_rail() {
+    fn response_status_strips_the_live_book_and_exempt_cooldown() {
         let mut node = crate::cluster::empty_node("n", "n", "http://n", 0, true, 1);
         node.bili_live = Some(Default::default());
-        node.warning_exempt_rail = Some(Default::default());
+        node.warning_exempt_cooldown = Some(Default::default());
         let status = ClusterStatus {
             enabled: true,
             local_node_id: "n".into(),
@@ -875,7 +876,7 @@ mod heartbeat_only_tests {
         assert!(stripped
             .nodes
             .iter()
-            .all(|node| node.bili_live.is_none() && node.warning_exempt_rail.is_none()));
+            .all(|node| node.bili_live.is_none() && node.warning_exempt_cooldown.is_none()));
     }
 
     /// A source-level guard, because the helper is only as good as its call

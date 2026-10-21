@@ -111,7 +111,7 @@ pub struct ClusterNodeSnapshot {
     /// Recent exempt warning-hold restarts this node recorded; peer heartbeat
     /// only, stripped from `/api/cluster/status`. Older nodes ignore it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub warning_exempt_rail: Option<crate::plugins::warning_exempt::ExemptRail>,
+    pub warning_exempt_cooldown: Option<crate::plugins::warning_exempt::ExemptCooldown>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

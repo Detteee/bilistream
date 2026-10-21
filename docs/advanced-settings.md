@@ -58,7 +58,7 @@ You can also clear the hold with **重启流**, a bilistream process restart, or
 - **Low risk · 挂机/录播等消极直播** — **应用到全部频道** switches this class on for every monitored channel; no channel list is needed. Off by default.
 - **Medium/high risk** — tick the reason and add channels under **中高风险 · 指定频道**. The class comes from the cleaned 违规原因; a reason matching several classes releases only when every class is ticked.
 - Unknown reasons, a warning without a reason, an unpaired mask and a timed room lock (`ROOM_LOCK`) are never exempt. The immediate stop, banned keywords and the monitor shutdown on a start restriction are unchanged.
-- At most one automatic restart per channel and episode within 30 minutes; a second warning/cut inside that window holds as usual. Since repeated violations can get the room closed, keep the list narrow. This record is shared in the cluster heartbeat, so a failover node makes the same call.
+- At most one automatic restart per channel and episode, then a 30-minute cooldown; a second warning/cut inside that window holds as usual. Since repeated violations can get the room closed, keep the list narrow. This record is shared in the cluster heartbeat, so a failover node makes the same call.
 - The 警告/切断 danmaku says 「稍后自动恢复」 when the hold was released, and 「暂停转播 {channel}，请换台」 when it stays.
 
 **源结束后自动停播** (Basic Settings) closes the Bilibili room when the relayed source ends while the room is still live — a silent room is what Bilibili later flags as 挂机/录播. On by default.

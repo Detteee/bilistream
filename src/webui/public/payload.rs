@@ -345,7 +345,7 @@ mod tests {
             notify_openid_rebind: None,
             notify_watch_sync: None,
             bili_live: None,
-            warning_exempt_rail: None,
+            warning_exempt_cooldown: None,
         }
     }
 

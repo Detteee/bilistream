@@ -4115,7 +4115,7 @@ mod tests {
         );
 
         // R4: the second event for the same episode inside the window holds as
-        // today (the rail has no room left).
+        // today (the cooldown has no room left).
         let mut event = tracker.capture_event();
         event.set_reason_ids([ReasonId::IdleRecording].into_iter().collect());
         tracker.mark_event(&mut event, None).unwrap();
@@ -4123,7 +4123,7 @@ mod tests {
         stream.channel_name = channel_name.into();
         stream.channel_id = channel_id.into();
         skip_stream_if_previously_warned(&mut stream, &cfg, &tracker).await;
-        assert!(!stream.is_live, "the rail keeps the second hold");
+        assert!(!stream.is_live, "the cooldown keeps the second hold");
         assert!(tracker.snapshot().holds(&source));
     }
 

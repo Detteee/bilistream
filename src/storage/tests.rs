@@ -503,18 +503,18 @@ fn a_28a20792_backup_with_a_niconico_cookie_document_restores_without_it() {
 }
 
 #[test]
-fn warning_exempt_rail_document_validates_its_shape() {
+fn warning_exempt_cooldown_document_validates_its_shape() {
     use super::documents::validate;
     validate(
-        "warning_exempt_rail.json",
-        &json!({"restarts":[{"platform":"YT","channel_id":"UC1","at":1,"reason":"idle_recording"}]}),
+        "warning_exempt_cooldown.json",
+        &json!({"entries":[{"platform":"YT","channel_id":"UC1","at":1,"reason":"idle_recording"}]}),
     )
     .unwrap();
-    validate("warning_exempt_rail.json", &json!({"restarts":[]})).unwrap();
-    assert!(validate("warning_exempt_rail.json", &json!({"restarts":"x"})).is_err());
+    validate("warning_exempt_cooldown.json", &json!({"entries":[]})).unwrap();
+    assert!(validate("warning_exempt_cooldown.json", &json!({"entries":"x"})).is_err());
     assert!(validate(
-        "warning_exempt_rail.json",
-        &json!({"restarts":[{"platform":"YT"}]})
+        "warning_exempt_cooldown.json",
+        &json!({"entries":[{"platform":"YT"}]})
     )
     .is_err());
 }

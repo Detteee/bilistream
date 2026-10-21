@@ -211,7 +211,7 @@ impl Drop for SourceOwner {
 }
 
 /// A hold released by the warning/cut exemption; the caller logs the R8 line
-/// and records the R4 rail with the matched classes.
+/// and records the R4 cooldown with the matched classes.
 pub(crate) struct ExemptRelease {
     pub channel: String,
     pub reason_ids: BTreeSet<ReasonId>,
@@ -569,9 +569,9 @@ impl WarningTracker {
 
     /// Release the hold matching `source` because the exemption allows the
     /// restart. `before_action` must be the snapshot the exemption decision was
-    /// taken on: a warning marked in between (the rail write is I/O) may carry
+    /// taken on: a warning marked in between (the cooldown write is I/O) may carry
     /// different classes or episode, so a stale release is refused. Returns the
-    /// channel and matched classes for the R8 log and the R4 rail; every later
+    /// channel and matched classes for the R8 log and the R4 cooldown; every later
     /// `holds()` check then sees no hold.
     pub fn release_exempt(
         &self,
