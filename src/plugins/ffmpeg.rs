@@ -1057,6 +1057,13 @@ fn update_stream_time(stream_time_secs: u32) {
     }
 }
 
+/// A frozen stream clock only means a wedged push while data still flows.
+/// Once the transfer is idle the source ended, and the idle-drain check owns
+/// that case with its normal-end severity instead of an ERROR stall.
+fn frozen_clock_is_a_stall(hls_cache_active: bool, transfer_idle: bool) -> bool {
+    !hls_cache_active && !transfer_idle
+}
+
 fn is_network_transfer_idle(
     hls_cache_active: bool,
     push_active: bool,
@@ -1139,8 +1146,10 @@ fn check_ffmpeg_stuck(timeout_secs: u64) -> Option<StuckReason> {
     // In cached HLS mode the delayed reader may report a steady speed/bitrate
     // while its input playlist advances by segment cadence, so stream timestamp
     // freezes alone are not a reliable stuck signal during live playback.
-    // Once transfer is idle, restore the pre-bfcccde stream-time check so
-    // end-of-stream shutdown stays fast instead of waiting on low-speed decay.
+    // A frozen clock while data still flows is a wedged push. Once the transfer
+    // is idle the source simply ended: the idle-drain check below owns that
+    // case, reports it as a normal end, and fires on the same 10 s threshold,
+    // so end-of-stream shutdown stays just as fast.
     let push_bitrate_kbps = f32_from_atomic_bits(&FFMPEG_BITRATE_KBPS).unwrap_or(0.0);
     let cache_bitrate_kbps = f32_from_atomic_bits(&FFMPEG_CACHE_BITRATE_KBPS).unwrap_or(0.0);
     let transfer_idle = is_network_transfer_idle(
@@ -1151,7 +1160,7 @@ fn check_ffmpeg_stuck(timeout_secs: u64) -> Option<StuckReason> {
     );
     update_network_idle_tracking(transfer_idle);
 
-    let check_stream_time_frozen = !hls_cache_active || (push_active && transfer_idle);
+    let check_stream_time_frozen = frozen_clock_is_a_stall(hls_cache_active, transfer_idle);
 
     if check_stream_time_frozen {
         let last_stream_update = LAST_STREAM_TIME_UPDATE.load(Ordering::Relaxed);
@@ -4542,6 +4551,18 @@ mod tests {
 
     #[test]
     fn network_idle_direct_mode_uses_push_only() {
+        assert!(
+            frozen_clock_is_a_stall(false, false),
+            "data flowing: a real wedge"
+        );
+        assert!(
+            !frozen_clock_is_a_stall(true, false),
+            "cache mode never judges by clock"
+        );
+        assert!(
+            !frozen_clock_is_a_stall(false, true) && !frozen_clock_is_a_stall(true, true),
+            "an idle transfer is the source ending, not a stall"
+        );
         assert!(!is_network_transfer_idle(false, true, 500.0, 999.0));
         assert!(is_network_transfer_idle(false, true, 0.0, 999.0));
     }

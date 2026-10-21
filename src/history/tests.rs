@@ -1483,8 +1483,15 @@ fn sessions_gaps_cursor_and_neighbours() {
     let mut by_id = q(T0 - DAY, now);
     by_id.id = Some(first[1].id.clone());
     let one = query::sessions(&w.conn, &by_id, now).unwrap();
-    assert_eq!(one.prev_id.as_deref(), Some(first[2].id.as_str()));
-    assert_eq!(one.next_id.as_deref(), Some(first[0].id.as_str()));
+    assert_eq!(one.items.len(), 1, "one id reads one session");
+    // A channel segment lists every session it was relayed by in one call.
+    by_id.id = Some(format!("{},{}", first[1].id, first[0].id));
+    let both = query::sessions(&w.conn, &by_id, now).unwrap();
+    let mut ids: Vec<&str> = both.items.iter().map(|s| s.eid.as_str()).collect();
+    ids.sort_unstable();
+    let mut want = vec![first[0].id.as_str(), first[1].id.as_str()];
+    want.sort_unstable();
+    assert_eq!(ids, want);
 }
 
 #[test]
@@ -1898,6 +1905,17 @@ fn missing_live_key_logs_no_value_and_session_totals_stay_null() {
     });
     let text = logs.text();
     assert_eq!(text.matches("未取到 live_key").count(), 3, "{text}");
+    // The operator log stops at INFO: a missing key at the end of a live is
+    // normal, so the note stays a DEBUG diagnostic instead of a log row.
+    let (dispatch, quiet) = crate::logging::test_capture::subscriber(tracing::Level::INFO);
+    tracing::dispatcher::with_default(&dispatch, || {
+        super::note_live_key_unavailable("getinfo_no_key");
+    });
+    assert!(
+        !quiet.text().contains("未取到 live_key"),
+        "{}",
+        quiet.text()
+    );
     assert!(!text.contains("redacted") && !text.contains("up_session") && !text.contains("{"));
     // The session keeps no key and has NULL StopLiveData totals.
     let (mut w, _) = writer("no-key-null");
@@ -2065,7 +2083,8 @@ fn peer_body_must_be_a_valid_history_query() {
         Box::new(|q| q.platform = Some("XX".into())),
         Box::new(|q| q.metrics = vec!["revenue".into()]),
         Box::new(|q| q.tz_offset_min = 9999),
-        Box::new(|q| q.id = Some("x".repeat(300))),
+        Box::new(|q| q.id = Some("x".repeat(801))),
+        Box::new(|q| q.session = Some("x".repeat(801))),
         Box::new(|q| q.cursor = Some((0, String::new()))),
     ];
     for edit in &edits {
@@ -2924,6 +2943,17 @@ fn session_stats_and_online_peak_respect_session_and_range_boundaries() {
         !means.contains(&json!(800.0)),
         "a session query never includes its neighbour's samples"
     );
+    // One channel segment can be relayed by several sessions (interruption,
+    // restart); the chart then covers every member in one request.
+    let second = sessions(&w, T0 + 200).items[0].id.clone();
+    let mut both = q(T0, T0 + 200);
+    both.session = Some(format!(
+        "{first},{second}",
+        first = qq.session.as_deref().unwrap()
+    ));
+    let stats = query::render_stats(&query::stats(&w.conn, &both, "raw", None).unwrap());
+    let means = stats["series"]["bitrate"]["mean"].as_array().unwrap();
+    assert!(means.contains(&json!(100.0)) && means.contains(&json!(800.0)));
     let summary = query::summary(&w.conn, &q(T0 + 20, T0 + 100), "local", T0 + 200).unwrap();
     assert_eq!(
         summary.kpis.online_peak,
@@ -3537,7 +3567,9 @@ async fn cluster_merge_keeps_cut_fields_and_accepts_an_older_peer_without_them()
     cut(&mut w, T0 + 100, Some(1), V2_TEXT, 7);
     end(&mut w, 1, T0 + 105, EndReason::BiliStopped);
     let now = T0 + 1000;
-    // tokyo-1 is an older build: its session JSON has no end_* fields.
+    // tokyo-1 is an older build: its session JSON has no end_* fields, and it
+    // still sends the prev_id/next_id keys this build dropped. Extra keys must
+    // keep decoding, so a mixed cluster degrades instead of failing.
     let old_peer = json!({
         "items": [{
             "id": "tokyo-1:1:1", "eid": "tokyo-1:1:1", "node": "tokyo-1",
@@ -3558,7 +3590,7 @@ async fn cluster_merge_keeps_cut_fields_and_accepts_an_older_peer_without_them()
             "stuck": 0, "gaps": [], "median_bitrate_kbps": null, "bili": null,
             "end_cut_off": true, "end_detail": PLAIN_TEXT
         }],
-        "prev_id": null, "next_id": null, "next_cursor": null, "missing_nodes": []
+        "next_cursor": null, "missing_nodes": []
     });
     let peers = MockPeers(HashMap::from([
         ("tokyo-1".to_string(), Ok(old_peer)),

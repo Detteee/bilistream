@@ -200,8 +200,10 @@ fn getinfo_key_for_observation(
     room_key_or_note(reply)
 }
 
+/// Diagnostic only: the key is legitimately gone once the room stopped, so a
+/// miss is normal at the end of a live and must not reach the operator log.
 pub(crate) fn note_live_key_unavailable(reason: &str) {
-    tracing::info!("未取到 live_key (reason={reason})");
+    tracing::debug!("未取到 live_key（{reason}）");
 }
 
 pub(crate) fn room_key_or_note(reply: &serde_json::Value) -> Option<String> {
