@@ -133,6 +133,7 @@ pub(crate) async fn refresh_bilibili_status_cache_with_config(cfg: &Config) -> R
     crate::config::with_current_config(cfg, || {
         update_status_cache_with(|status| {
             status.bilibili.apply_live_status(&live);
+            status.bilibili.room = cfg.bililive.room.into();
             status.bilibili.enable_danmaku_command = cfg.bililive.enable_danmaku_command;
             if let Some(lock) = &room_lock {
                 status.bilibili.apply_room_lock(lock);

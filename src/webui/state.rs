@@ -50,6 +50,10 @@ pub struct PriorityChannelStatus {
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq)]
 pub struct BiliStatus {
+    /// The room this node pushes to. Lets the overview card link straight to
+    /// the live room instead of the UI having to ask the config endpoint.
+    #[serde(default)]
+    pub room: i64,
     pub is_live: bool,
     /// This node's publisher, independent of the shared Bilibili room state.
     #[serde(default)]

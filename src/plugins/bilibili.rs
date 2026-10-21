@@ -49,6 +49,28 @@ pub(crate) fn bili_plain_http_client() -> reqwest::Client {
     BILI_PLAIN_CLIENT.clone()
 }
 
+/// Maps a uid to its live room id.
+///
+/// Public read endpoint: it needs no cookie, so the setup wizard can call it
+/// right after the QR login has stored an account uid and skip asking the user
+/// for a room number they usually do not know by heart.
+pub async fn room_id_by_uid(uid: u64) -> Result<Option<i64>, Box<dyn Error>> {
+    let url = format!("https://api.live.bilibili.com/room/v2/Room/room_id_by_uid?uid={uid}");
+    let res: Value = bili_plain_http_client()
+        .get(url)
+        .header(
+            reqwest::header::USER_AGENT,
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+        )
+        .header(reqwest::header::REFERER, "https://live.bilibili.com/")
+        .send()
+        .await?
+        .json()
+        .await?;
+
+    Ok(res["data"]["room_id"].as_i64().filter(|room| *room > 0))
+}
+
 /// Shared (raw, retrying) client pair for credentialed live-room calls.
 ///
 /// The account cookies ride in an explicit `Cookie` header per request rather
@@ -954,7 +976,8 @@ pub(crate) async fn bili_change_cover_bytes(
             "Failed to update cover: {} (Response: {})",
             update_res["message"],
             serde_json::to_string_pretty(&update_res).unwrap_or_default()
-        ))?;
+        )
+        .into());
     }
 
     Ok(())
@@ -998,7 +1021,8 @@ pub async fn bili_update_area(cfg: &Config, area_id: u64) -> Result<(), Box<dyn 
             "Failed to update room area: {} (Response: {})",
             res["message"],
             serde_json::to_string_pretty(&res).unwrap_or_default()
-        ))?;
+        )
+        .into());
     }
 
     Ok(())

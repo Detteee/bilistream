@@ -1299,6 +1299,50 @@ input[type="checkbox"] {
   fill: currentColor;
 }
 
+/* The platform name is the way into the live room. Without a configured
+   channel the anchor has no href, so it reads as plain text and is skipped by
+   the tab order instead of being a link that goes nowhere. */
+.dashboard-card-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: inherit;
+  text-decoration: none;
+  border-radius: var(--r-xs);
+}
+
+.dashboard-card-link[href]:hover {
+  color: var(--brand);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.dashboard-card-link:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+}
+
+/* Sits on the title's baseline, not on a line of its own, and stays quiet
+   next to the name instead of borrowing the platform accent. */
+.dashboard-card-title .dashboard-card-link-icon {
+  width: 12px;
+  height: 12px;
+  flex: 0 0 12px;
+  color: inherit;
+  fill: none;
+  stroke: currentColor;
+  opacity: 0.55;
+}
+
+.dashboard-card-link:not([href]) .dashboard-card-link-icon {
+  display: none;
+}
+
+/* The header is the generous target; its own controls keep their own cursor. */
+.dashboard-card-header.is-linkable {
+  cursor: pointer;
+}
+
 .card-header-actions {
   display: inline-flex;
   align-items: center;

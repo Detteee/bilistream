@@ -1262,7 +1262,7 @@ fn departure_block(local: &LocalState, journal: &Journal) -> Option<DepartureBlo
     let hold_is_own_removal = local
         .hold
         .as_deref()
-        .is_some_and(|hold| journal.operations.get(hold).is_some_and(&own_removal));
+        .is_some_and(|hold| journal.operations.get(hold).is_some_and(own_removal));
     if local.reservation.is_some()
         || local.pairing.is_some()
         || (local.hold.is_some() && !hold_is_own_removal)

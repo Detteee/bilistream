@@ -2975,39 +2975,39 @@ pub async fn wait_ffmpeg_session(session: FfmpegSession) -> Option<std::process:
     loop {
         let mut supervisor = FFMPEG_SUPERVISOR.lock().await;
 
-        if let Some(process) = matching_process(&mut supervisor, session) {
-            // Check if process has exited without blocking
-            for child in &mut process.children {
-                match child.child.try_wait() {
-                    Ok(Some(status)) => {
-                        child.log.exited(&status);
-
-                        drop(supervisor);
-                        stop_ffmpeg_session(session).await;
-                        return Some(status);
-                    }
-                    Ok(None) => {}
-                    Err(e) => {
-                        tracing::error!(
-                            "{} 检查进程状态失败（pid {}）：{}",
-                            child.log,
-                            child.log.pid_label(),
-                            safe_diagnostic(&e.to_string())
-                        );
-                        drop(supervisor);
-                        stop_ffmpeg_session(session).await;
-                        return None;
-                    }
-                }
-            }
-
-            // Process is still running, release lock and wait a bit
-            drop(supervisor);
-            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-        } else {
+        let Some(process) = matching_process(&mut supervisor, session) else {
             // Process was removed (killed by stop_ffmpeg)
             return None;
+        };
+
+        // Check if process has exited without blocking
+        for child in &mut process.children {
+            match child.child.try_wait() {
+                Ok(Some(status)) => {
+                    child.log.exited(&status);
+
+                    drop(supervisor);
+                    stop_ffmpeg_session(session).await;
+                    return Some(status);
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    tracing::error!(
+                        "{} 检查进程状态失败（pid {}）：{}",
+                        child.log,
+                        child.log.pid_label(),
+                        safe_diagnostic(&e.to_string())
+                    );
+                    drop(supervisor);
+                    stop_ffmpeg_session(session).await;
+                    return None;
+                }
+            }
         }
+
+        // Process is still running, release lock and wait a bit
+        drop(supervisor);
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
     }
 }
 

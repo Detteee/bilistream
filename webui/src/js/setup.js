@@ -227,6 +227,26 @@ function goToStep(step) {
     loadAreasForSetup();
     loadChannelsForSetup();
   }
+
+  // Step 1 already logged the account in, so the room id is known server-side.
+  if (step === 2) prefillSetupRoom();
+}
+
+// The room number is an implementation detail of the logged-in account, so it is
+// detected instead of typed; an existing value (a retry, a manual edit) wins.
+async function prefillSetupRoom() {
+  const input = document.getElementById('setup-room');
+  if (!input || input.value.trim()) return;
+
+  try {
+    const room = (await getJson('/api/setup/bili-room'))?.data;
+    if (room > 0 && !input.value.trim()) {
+      input.value = String(room);
+      input.dataset.detected = 'true';
+    }
+  } catch (error) {
+    console.error('Failed to resolve the live room:', error);
+  }
 }
 function toggleRiotApiKey() {
   const checkbox = document.getElementById('setup-lol-monitor');

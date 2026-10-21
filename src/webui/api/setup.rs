@@ -602,6 +602,37 @@ pub async fn poll_login(
     }
 }
 
+/// Prefills the wizard's room field.
+///
+/// Step 1 already logged the account in, so the uid is on disk; the public
+/// lookup turns it into a room id. `None` means "still ask the user", which is
+/// the case for an account without a live room and for a failed request.
+pub async fn resolve_bili_room() -> Result<Json<ApiResponse<Option<i64>>>, StatusCode> {
+    let uid = load_config()
+        .await
+        .ok()
+        .and_then(|cfg| {
+            cfg.bililive
+                .credentials
+                .dede_user_id
+                .trim()
+                .parse::<u64>()
+                .ok()
+        })
+        .filter(|uid| *uid > 0);
+
+    let room = match uid {
+        Some(uid) => bilibili::room_id_by_uid(uid).await.unwrap_or(None),
+        None => None,
+    };
+
+    Ok(Json(ApiResponse {
+        success: true,
+        data: Some(room),
+        message: None,
+    }))
+}
+
 // Update check endpoint
 pub async fn check_updates() -> Result<Json<ApiResponse<updater::UpdateInfo>>, StatusCode> {
     match updater::check_for_updates().await {

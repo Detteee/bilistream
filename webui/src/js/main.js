@@ -2,6 +2,7 @@
 
 import { isDashboardVisible, showNotification } from './dom.js';
 import { initTooltips } from './tooltip.js';
+import { initPlatformCardLinks } from './platform-links.js';
 import { state, isViewActive, invalidateManagedData } from './state.js';
 import { ensureWebUiAccess, getJson, postJson } from './api.js';
 import { formatNetworkRate, formatSpeedRatio, formatFps } from './format.js';
@@ -234,6 +235,7 @@ function boot() {
   initClusterMembership();
   initNotifySettings();
   initTooltips();
+  initPlatformCardLinks();
 
   document.addEventListener('visibilitychange', () => {
     if (isDashboardVisible()) {

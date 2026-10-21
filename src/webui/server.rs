@@ -244,6 +244,7 @@ pub(crate) fn build_app(state: AppState, auth: std::sync::Arc<super::listen::Aut
         .route("/setup/login", post(api::trigger_login))
         .route("/setup/qrcode", get(api::get_qr_code))
         .route("/setup/poll-login", post(api::poll_login))
+        .route("/setup/bili-room", get(api::resolve_bili_room))
         .route("/update/check", get(api::check_updates))
         .route("/update/status", get(api::update_status))
         .route("/update/download", post(api::download_update))

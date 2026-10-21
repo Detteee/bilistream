@@ -1049,12 +1049,10 @@ impl BilibiliDanmakuClient {
                         Ok(Some(Ok(Message::Pong(_)))) => {
                             last_activity = Instant::now();
                         }
-                        Err(_) => {
-                            // Timeout occurred - check if connection is still alive
-                            if last_activity.elapsed() > connection_timeout {
-                                warn!("弹幕连接超时，已 {} 无活动", crate::logging::human_elapsed(connection_timeout));
-                                break;
-                            }
+                        // Timeout occurred - check if connection is still alive
+                        Err(_) if last_activity.elapsed() > connection_timeout => {
+                            warn!("弹幕连接超时，已 {} 无活动", crate::logging::human_elapsed(connection_timeout));
+                            break;
                         }
                         _ => {}
                     }

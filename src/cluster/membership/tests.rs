@@ -408,7 +408,7 @@ async fn durable_prepare_and_decision_survive_actual_store_reopen() {
     // A separate installation uses its own SQL worker/cache. Copying the logical
     // journal is NOT the test: drop the real Store before reopening the same WAL.
     let dir = b.dir.clone();
-    let Node { engine, dir: _, .. } = &b;
+    let Node { engine, .. } = &b;
     let _ = engine;
     // Coordinator crash is represented by constructing a new engine from the
     // current durable Store; the full drop/reopen path is tested separately below.

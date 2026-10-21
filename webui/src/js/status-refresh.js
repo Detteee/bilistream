@@ -18,6 +18,7 @@ import {
   isViewActive,
   state,
 } from './state.js';
+import { renderPlatformLinks } from './platform-links.js';
 import {
   isBiliNetworkLive,
   renderBiliNetworkPanel,
@@ -224,6 +225,7 @@ async function refreshStatus() {
 
     if (data.success && data.data) {
       renderStatusCards(data.data);
+      renderPlatformLinks(data.data);
       renderPlatformWarningHolds(data.data);
       renderPriorityChannelStatus(data.data.priority_channel);
     } else {
