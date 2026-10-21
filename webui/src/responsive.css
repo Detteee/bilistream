@@ -209,7 +209,11 @@
 @media (max-width: 480px) {
   .tabbar .tab svg { display: none; }
 }
-@media (max-width: 380px) {
+/* 430px, not 380px: the sixth tab (通知) needs the tighter padding from 430px
+   down. Measured at 390px with --sp-3 the bar was 28px wider than its box and
+   at 414px 4px wider; --sp-2 brings both to 0. 360px and 320px still scroll,
+   which the edge fade and scrollIntoView already handle. */
+@media (max-width: 430px) {
   .tabbar .tab { padding-inline: var(--sp-2); }
 }
 /* Edge fade only while content is clipped (data-overflow set by main.js). */

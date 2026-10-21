@@ -76,7 +76,7 @@ test('§17.8 switch hint follows active_push presence', () => {
   const e = els();
   renderLiveEventsInto(doc, e, { status: { quota: B, active_push: { last_result: 'ok' } }, statusAt: 0, now: 0 });
   assert.equal(e.help.textContent, LIVE_EVENTS_HINT_PUSH);
-  assert.equal(LIVE_EVENTS_HINT_PUSH, '优先主动推送；被限制时改用回复窗口或唤醒额度，故障提醒优先');
+  assert.equal(LIVE_EVENTS_HINT_PUSH, '优先主动推送；被限制时改用回复窗口或唤醒额度，故障通知优先');
   renderLiveEventsInto(doc, e, { status: { quota: B }, statusAt: 0, now: 0 });
   assert.equal(e.help.textContent, LIVE_EVENTS_HINT);
 });

@@ -320,6 +320,15 @@ async function main() {
       await command('browsingContext.setViewport', { context, viewport: { width, height: 900 }, devicePixelRatio: 1 });
       assert.equal(await evaluate('document.documentElement.scrollWidth <= innerWidth'), true, `credential settings overflow at ${width}`);
       assert.equal(await evaluate("[...document.querySelectorAll('.credential-heading')].every(h => !h.checkVisibility() || h.getBoundingClientRect().height < 48)"), true, `compact credential headings at ${width}`);
+      // 通知 reuses .credential-heading, so it needs its own pass: under the
+      // 系统设置 tab those three headings are hidden, and the assertion above
+      // would pass without checking any of them.
+      await evaluate("document.getElementById('tab-notify').click()");
+      await waitFor("document.getElementById('view-notify').classList.contains('is-active')");
+      assert.equal(await evaluate('document.documentElement.scrollWidth <= innerWidth'), true, `notify overflow at ${width}`);
+      assert.equal(await evaluate("[...document.querySelectorAll('#view-notify .credential-heading')].every(h => h.getBoundingClientRect().height < 48)"), true, `compact notify credential headings at ${width}`);
+      await evaluate("document.getElementById('tab-settings').click()");
+      await waitFor("document.getElementById('view-settings').classList.contains('is-active')");
     }
     await evaluate("document.getElementById('config-clear-yt-proxy').click()");
     await waitFor("!document.getElementById('save-system-config-btn').disabled && document.getElementById('config-clear-yt-proxy').hidden");

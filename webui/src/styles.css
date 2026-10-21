@@ -879,17 +879,30 @@
 }
 
 /* ==========================================================================
-   12a. Settings layout (multi-column panels)
+   12a. Settings layout (single-column panels)
    ========================================================================== */
 
-/* On wide windows, compact settings panels share rows instead of stacking. */
-#view-settings.is-active {
-  grid-template-columns: repeat(auto-fill, minmax(min(100%, 480px), 1fr));
-  align-items: start;
+/* Panels stack in a single column: each one is wide enough for its own
+   fields, so there is no full-width modifier and no column math to keep
+   in sync with the breakpoints. */
+
+/* A lone control in a full-width panel would stretch to ~1200px; cap the
+   field itself so the label and its input stay a readable measure. Cells
+   that are already narrow (the multi-column grids) are unaffected. */
+#view-settings .control-group > input,
+#view-settings .control-group > textarea,
+#view-settings .control-group > select {
+  max-width: 40rem;
 }
 
-.settings-panel--wide {
-  grid-column: 1 / -1;
+/* A grouped panel stacks several topics in one body, so a subsection heading
+   needs air above it -- except when it opens the body. */
+#view-settings > .panel > .panel__body > .subsection-title {
+  margin-top: var(--sp-5);
+}
+
+#view-settings > .panel > .panel__body > .subsection-title:first-child {
+  margin-top: 0;
 }
 
 #view-settings .settings-actions {
@@ -3534,6 +3547,35 @@ html.light-theme .analytics {
 .analytics .analytics-detail-dialog .cluster-node-meta-value[data-tone="danger"] { color: var(--danger); }
 .analytics .analytics-detail-dialog .cluster-node-meta-value[data-tone="warn"] { color: var(--warn); }
 .analytics .analytics-detail-dialog .analytics-detail-nav { padding: 0 var(--sp-4) var(--sp-4); }
+/* 场/段 (10-22): 段 tabs sit between the dialog header and the body, so the
+   channel chain of one Bilibili live is visible without leaving the dialog. */
+.analytics .analytics-detail-segments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-4) 0;
+}
+.analytics .analytics-segment {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  min-height: 44px;
+  padding: var(--sp-1) var(--sp-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--surface-3);
+  color: var(--text-mute);
+  font: inherit;
+  cursor: pointer;
+}
+.analytics .analytics-segment small { color: var(--text-mute); font-variant-numeric: tabular-nums; }
+.analytics .analytics-segment[data-active="true"] {
+  border-color: var(--brand);
+  background: color-mix(in srgb, var(--brand) 14%, var(--surface-3));
+  color: var(--text);
+}
+.analytics .analytics-segment:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+.analytics .analytics-detail-charts { display: grid; gap: var(--sp-3); }
 .analytics .analytics-detail-open { min-height: 44px; }
 .warning-hold-row .info-row-view {
   flex-wrap: wrap;

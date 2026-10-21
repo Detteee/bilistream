@@ -106,7 +106,7 @@ test('the settings page wires the card and sends the fields', async () => {
   assert.match(html, /中高风险 · 指定频道/);
   assert.match(html, /反复违规继续开播极易导致直播间被关闭。/);
   assert.match(html, /未勾选「未识别的原因」时/);
-  assert.match(html, /直播间锁定等不针对单个频道的限制也不会续播。/);
+  assert.match(html, /直播间锁定等平台限制始终不续播。/);
   assert.doesNotMatch(html, /识别规则/);
   const js = await readFile(new URL('../src/js/settings.js', import.meta.url), 'utf8');
   assert.match(js, /renderWarningHoldExempt\(config\)/);

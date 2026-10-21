@@ -1549,17 +1549,19 @@
       <!-- ========================== 系统设置 ========================== -->
       <section class="view" id="view-settings" role="tabpanel" aria-labelledby="tab-settings" tabindex="-1">
 
-        <section class="panel settings-panel--wide">
+        <section class="panel">
           <div class="panel__head">
             <h2 class="panel__title">
               <svg aria-hidden="true"><use href="#i-sliders" /></svg>
               基础设置
             </h2>
+            <span class="panel__sub">常规显示、监控与自动停播。</span>
           </div>
           <div class="panel__body">
+            <h3 class="subsection-title">显示与检测</h3>
             <div class="settings-grid">
               <div class="control-group">
-                <label class="toggle-label" title="仅控制仪表盘卡片是否显示，隐藏并不会停止监控。">
+                <label class="toggle-label" title="隐藏只影响仪表盘卡片，不影响监控。">
                   <span class="toggle-switch">
                     <input type="checkbox" id="config-show-twitch-checkbox">
                     <span class="toggle-slider"></span>
@@ -1568,7 +1570,7 @@
                 </label>
               </div>
               <div class="control-group">
-                <label class="toggle-label" title="仅控制卡片显示，隐藏不会停止监控">
+                <label class="toggle-label" title="隐藏只影响仪表盘卡片，不影响监控。">
                   <span class="toggle-switch">
                     <input type="checkbox" id="config-show-niconico-checkbox">
                     <span class="toggle-slider"></span>
@@ -1577,7 +1579,7 @@
                 </label>
               </div>
               <div class="control-group">
-                <label class="toggle-label" title="仅切换仪表盘卡片显示，不影响优先频道的监控和自动重启流。">
+                <label class="toggle-label" title="隐藏只影响仪表盘卡片，不影响监控。">
                   <span class="toggle-switch">
                     <input type="checkbox" id="config-show-priority-checkbox">
                     <span class="toggle-slider"></span>
@@ -1595,9 +1597,12 @@
                 </label>
               </div>
               <div class="control-group">
-                <label for="config-interval">检测间隔 (秒)</label>
+                <label for="config-interval">检测间隔 （秒）</label>
                 <input type="number" id="config-interval" min="10" max="300" placeholder="30">
               </div>
+            </div>
+            <h3 class="subsection-title">停播与自动化</h3>
+            <div class="settings-grid">
               <div class="control-group">
                 <label class="toggle-label" for="config-auto-stop-checkbox"
                   title="源直播结束后自动关闭B站直播间，避免房间长时间没有画面被判定为挂机/录播。">
@@ -1609,7 +1614,7 @@
                 </label>
               </div>
               <div class="control-group">
-                <label for="config-auto-stop-hours">满该时长立即停播 (小时)</label>
+                <label for="config-auto-stop-hours">满该时长立即停播 （小时）</label>
                 <input type="number" id="config-auto-stop-hours" min="1" max="168" placeholder="3">
                 <small class="settings-help-text">未满该时长时，源结束后等待一个检测间隔再停播。</small>
               </div>
@@ -1644,21 +1649,106 @@
           </div>
         </section>
 
-        <section class="panel settings-panel--wide">
+        <section class="panel">
+          <div class="panel__head">
+            <h2 class="panel__title">
+              <svg aria-hidden="true"><use href="#i-plug" /></svg>
+              平台设置
+            </h2>
+            <span class="panel__sub">各平台的会话、代理与解析选项。</span>
+          </div>
+          <div class="panel__body">
+            <div class="settings-grid">
+              <div class="control-group">
+                <label for="config-yt-cookies-browser">服务器浏览器（可选）</label>
+                <select id="config-yt-cookies-browser">
+                  <option value="">使用已保存的 Cookie</option>
+                  <option value="chrome">Chrome</option>
+                  <option value="firefox">Firefox</option>
+                  <option value="edge">Edge</option>
+                  <option value="safari">Safari</option>
+                  <option value="brave">Brave</option>
+                  <option value="opera">Opera</option>
+                  <option value="vivaldi">Vivaldi</option>
+                </select>
+                <small class="settings-help-text">选中后，会优先使用服务器上该浏览器的登录状态。</small>
+              </div>
+              <div class="control-group">
+                <label for="yt-cookie-upload">YouTube Cookie</label>
+                <p id="yt-cookie-status" class="settings-help-text" aria-live="polite">正在读取…</p>
+                <input type="file" id="yt-cookie-upload" accept=".txt,text/plain">
+                <details><summary>粘贴 Cookie</summary><textarea id="yt-cookie-paste" rows="4" spellcheck="false" autocomplete="off" aria-label="Netscape Cookie 内容"></textarea></details>
+                <div class="session-check-actions"><button type="button" id="yt-cookie-save" class="btn-primary">保存 Cookie</button><button type="button" id="yt-cookie-clear" class="btn-secondary">清除</button></div>
+                <small class="settings-help-text">支持 Netscape 格式，会自动保存并同步给 yt-dlp。</small>
+                <input type="hidden" id="config-yt-cookies-file" value="">
+              </div>
+              <div class="control-group">
+                <label for="config-yt-deno-path">YouTube Deno 路径 （可选）</label>
+                <input type="text" id="config-yt-deno-path" placeholder="Windows 默认路径可留空">
+                <small class="settings-help-text">用于解决 YouTube n challenge 验证的 Deno 路径。</small>
+              </div>
+              <div class="control-group">
+                <div class="credential-heading"><label for="config-yt-proxy">YouTube 代理地址 （可选）</label><div class="credential-state"><span id="config-clear-yt-proxy-status" class="sr-only" role="status">正在读取…</span><button type="button" id="config-clear-yt-proxy" class="btn-ghost compact-btn credential-clear" aria-label="清除已保存的YouTube 代理" disabled>清除</button></div></div>
+                <input type="text" autocomplete="off" spellcheck="false" id="config-yt-proxy" placeholder="http://127.0.0.1:port">
+              </div>
+              <div class="control-group settings-half-width">
+                <div class="credential-heading"><label for="config-tw-proxy">Twitch 代理地址 （可选）</label><div class="credential-state"><span id="config-clear-tw-proxy-status" class="sr-only" role="status">正在读取…</span><button type="button" id="config-clear-tw-proxy" class="btn-ghost compact-btn credential-clear" aria-label="清除已保存的Twitch 代理" disabled>清除</button></div></div>
+                <input type="text" autocomplete="off" spellcheck="false" id="config-tw-proxy" placeholder="http://127.0.0.1:port">
+              </div>
+
+
+              <div class="control-group settings-half-width">
+                <label for="config-tw-region">Twitch 代理区域</label>
+                <select id="config-tw-region">
+                  <option value="asl">asl - 亚洲 （luminous, 推荐）</option>
+                  <option value="eul">eul - 欧洲 （luminous, 推荐）</option>
+                  <option value="eu2l">eu2l - 欧洲 2 (luminous)</option>
+                  <option value="as">as - 亚洲 (TTV-LOL-PRO)</option>
+                  <option value="eu">eu - 欧洲 (TTV-LOL-PRO)</option>
+                  <option value="eu2">eu2 - 欧洲 2 (TTV-LOL-PRO)</option>
+                  <option value="eu3">eu3 - 欧洲 3 (TTV-LOL-PRO)</option>
+                  <option value="eu4">eu4 - 欧洲 4 (TTV-LOL-PRO)</option>
+                  <option value="eu5">eu5 - 欧洲 5 (TTV-LOL-PRO)</option>
+                  <option value="na">na - 北美 (TTV-LOL-PRO)</option>
+                  <option value="sa">sa - 南美 (TTV-LOL-PRO)</option>
+                  <option value="all">all - 全部代理</option>
+                  <option value="perf">perf - TTV-LOL-PRO 全部</option>
+                </select>
+              </div>
+              <section class="platform-session-settings" aria-labelledby="niconico-session-heading">
+                <div class="control-group">
+                  <div class="credential-heading"><label id="niconico-session-heading" for="config-nc-user-session">Niconico · user_session</label><div class="credential-state"><span id="config-nc-clear-session-status" class="sr-only" role="status">正在读取…</span><button type="button" id="config-nc-clear-session" class="btn-ghost compact-btn credential-clear" aria-label="清除已保存的Niconico 登录信息" disabled>清除</button></div></div>
+                  <div class="input-action-row"><input type="password" id="config-nc-user-session" autocomplete="new-password" placeholder="仅填写 user_session 的值"><button id="check-nico-session" class="btn-secondary" type="button">检测可用性</button></div>
+                  <small id="niconico-session-status" class="settings-help-text" role="status">尚未检测</small>
+                </div>
+                <div class="session-actions">
+                  <label class="toggle-label" title="仅检测登录是否仍然有效，不会延长登录期限；网络失败不代表登录失效。"><span class="toggle-switch"><input type="checkbox" id="config-nc-session-check"><span class="toggle-slider"></span></span><span>每日检测可用性</span></label>
+                </div>
+              <div class="control-group session-proxy">
+                <div class="credential-heading"><label for="config-nc-proxy">Niconico 代理地址 （可选）</label><div class="credential-state"><span id="config-clear-nc-proxy-status" class="sr-only" role="status">正在读取…</span><button type="button" id="config-clear-nc-proxy" class="btn-ghost compact-btn credential-clear" aria-label="清除已保存的Niconico 代理" disabled>清除</button></div></div>
+                <input type="text" autocomplete="off" spellcheck="false" id="config-nc-proxy" title="使用 HTTP 代理；Clash 可用 mixed 端口" placeholder="http://127.0.0.1:7890">
+              </div>
+              </section>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel">
           <div class="panel__head">
             <h2 class="panel__title">
               <svg aria-hidden="true"><use href="#i-key" /></svg>
               API 密钥
             </h2>
+            <span class="panel__sub">第三方接口凭据，按平台填写。</span>
           </div>
           <div class="panel__body">
             <div class="settings-keys">
               <div class="control-group">
-                <div class="credential-heading"><label for="config-holodex-key">Holodex API Key (可选)</label><div class="credential-state"><a href="https://holodex.net/login" target="_blank" rel="noopener noreferrer" class="settings-help-link" aria-label="获取 holodex API Key">获取</a><span id="config-clear-holodex-key-status" class="sr-only" role="status">正在读取…</span><button type="button" id="config-clear-holodex-key" class="btn-ghost compact-btn credential-clear" aria-label="清除已保存的Holodex API Key" disabled>清除</button></div></div>
+                <div class="credential-heading"><label for="config-holodex-key">Holodex API Key （可选）</label><div class="credential-state"><a href="https://holodex.net/login" target="_blank" rel="noopener noreferrer" class="settings-help-link" aria-label="获取 holodex API Key">获取</a><span id="config-clear-holodex-key-status" class="sr-only" role="status">正在读取…</span><button type="button" id="config-clear-holodex-key" class="btn-ghost compact-btn credential-clear" aria-label="清除已保存的Holodex API Key" disabled>清除</button></div></div>
                 <input type="password" autocomplete="new-password" id="config-holodex-key" placeholder="补充 Twitch 等外部直播、游戏分类和其他频道的安排">
               </div>
               <div class="control-group">
-                <div class="credential-heading"><label for="config-youtube-api-key">YouTube Data API Key (可选)</label><div class="credential-state"><a href="https://console.cloud.google.com/apis/library/youtube.googleapis.com" target="_blank" rel="noopener noreferrer" class="settings-help-link" aria-label="获取 youtube API Key">获取</a><span id="config-clear-youtube-key-status" class="sr-only" role="status">正在读取…</span><button type="button" id="config-clear-youtube-key" class="btn-ghost compact-btn credential-clear" aria-label="清除已保存的YouTube Data API Key" disabled>清除</button></div></div>
+                <div class="credential-heading"><label for="config-youtube-api-key">YouTube Data API Key （可选）</label><div class="credential-state"><a href="https://console.cloud.google.com/apis/library/youtube.googleapis.com" target="_blank" rel="noopener noreferrer" class="settings-help-link" aria-label="获取 youtube API Key">获取</a><span id="config-clear-youtube-key-status" class="sr-only" role="status">正在读取…</span><button type="button" id="config-clear-youtube-key" class="btn-ghost compact-btn credential-clear" aria-label="清除已保存的YouTube Data API Key" disabled>清除</button></div></div>
                 <textarea autocomplete="new-password" id="config-youtube-api-key" title="每行填写一个 Key，可使用多个项目的配额" class="settings-mono-textarea" rows="3"
                   placeholder="用 YouTube 官方数据发现直播并校正开播状态（每行一个 key）"></textarea>
               </div>
@@ -1668,7 +1758,7 @@
               <div class="control-group settings-websub">
                 <div class="settings-inline-pair">
                   <div>
-                    <label for="config-websub-callback-url">WebSub 回调地址 (可选)</label>
+                    <label for="config-websub-callback-url">WebSub 回调地址 （可选）</label>
                     <input type="text" id="config-websub-callback-url"
                       placeholder="https://yt.example.com/websub/youtube">
                   </div>
@@ -1708,131 +1798,20 @@
                 </details>
               </div>
               <div id="config-lol-interval-group" class="settings-dependent-group settings-dependent-spaced">
-                <label for="config-lol-interval">LoL 监控间隔 (分钟)</label>
+                <label for="config-lol-interval">LoL 监控间隔 （分钟）</label>
                 <input type="number" id="config-lol-interval" min="1" max="60" placeholder="1">
               </div>
             </div>
           </div>
         </section>
 
-        <section class="panel settings-panel--wide">
-          <div class="panel__head">
-            <h2 class="panel__title">
-              <svg aria-hidden="true"><use href="#i-plug" /></svg>
-              平台设置
-            </h2>
-          </div>
-          <div class="panel__body">
-            <div class="settings-grid">
-              <div class="control-group">
-                <label for="config-yt-cookies-browser">服务器浏览器（可选）</label>
-                <select id="config-yt-cookies-browser">
-                  <option value="">使用已保存的 Cookie</option>
-                  <option value="chrome">Chrome</option>
-                  <option value="firefox">Firefox</option>
-                  <option value="edge">Edge</option>
-                  <option value="safari">Safari</option>
-                  <option value="brave">Brave</option>
-                  <option value="opera">Opera</option>
-                  <option value="vivaldi">Vivaldi</option>
-                </select>
-                <small class="settings-help-text">选中后，会优先使用服务器上该浏览器的登录状态。</small>
-              </div>
-              <div class="control-group">
-                <label for="yt-cookie-upload">YouTube Cookie</label>
-                <p id="yt-cookie-status" class="settings-help-text" aria-live="polite">正在读取…</p>
-                <input type="file" id="yt-cookie-upload" accept=".txt,text/plain">
-                <details><summary>粘贴 Cookie</summary><textarea id="yt-cookie-paste" rows="4" spellcheck="false" autocomplete="off" aria-label="Netscape Cookie 内容"></textarea></details>
-                <div class="session-check-actions"><button type="button" id="yt-cookie-save" class="btn-primary">保存 Cookie</button><button type="button" id="yt-cookie-clear" class="btn-secondary">清除</button></div>
-                <small class="settings-help-text">支持 Netscape 格式，会自动保存并同步给 yt-dlp。</small>
-                <input type="hidden" id="config-yt-cookies-file" value="">
-              </div>
-              <div class="control-group">
-                <label for="config-yt-deno-path">YouTube Deno 路径 (可选)</label>
-                <input type="text" id="config-yt-deno-path" placeholder="Windows 默认路径可留空">
-                <small class="settings-help-text">用于解决 YouTube n challenge 验证的 Deno 路径。</small>
-              </div>
-              <div class="control-group">
-                <div class="credential-heading"><label for="config-yt-proxy">YouTube 代理地址 (可选)</label><div class="credential-state"><span id="config-clear-yt-proxy-status" class="sr-only" role="status">正在读取…</span><button type="button" id="config-clear-yt-proxy" class="btn-ghost compact-btn credential-clear" aria-label="清除已保存的YouTube 代理" disabled>清除</button></div></div>
-                <input type="text" autocomplete="off" spellcheck="false" id="config-yt-proxy" placeholder="http://127.0.0.1:port">
-              </div>
-              <div class="control-group settings-half-width">
-                <div class="credential-heading"><label for="config-tw-proxy">Twitch 代理地址 (可选)</label><div class="credential-state"><span id="config-clear-tw-proxy-status" class="sr-only" role="status">正在读取…</span><button type="button" id="config-clear-tw-proxy" class="btn-ghost compact-btn credential-clear" aria-label="清除已保存的Twitch 代理" disabled>清除</button></div></div>
-                <input type="text" autocomplete="off" spellcheck="false" id="config-tw-proxy" placeholder="http://127.0.0.1:port">
-              </div>
-
-
-              <div class="control-group settings-half-width">
-                <label for="config-tw-region">Twitch 代理区域</label>
-                <select id="config-tw-region">
-                  <option value="asl">asl - 亚洲 (luminous, 推荐)</option>
-                  <option value="eul">eul - 欧洲 (luminous, 推荐)</option>
-                  <option value="eu2l">eu2l - 欧洲 2 (luminous)</option>
-                  <option value="as">as - 亚洲 (TTV-LOL-PRO)</option>
-                  <option value="eu">eu - 欧洲 (TTV-LOL-PRO)</option>
-                  <option value="eu2">eu2 - 欧洲 2 (TTV-LOL-PRO)</option>
-                  <option value="eu3">eu3 - 欧洲 3 (TTV-LOL-PRO)</option>
-                  <option value="eu4">eu4 - 欧洲 4 (TTV-LOL-PRO)</option>
-                  <option value="eu5">eu5 - 欧洲 5 (TTV-LOL-PRO)</option>
-                  <option value="na">na - 北美 (TTV-LOL-PRO)</option>
-                  <option value="sa">sa - 南美 (TTV-LOL-PRO)</option>
-                  <option value="all">all - 全部代理</option>
-                  <option value="perf">perf - TTV-LOL-PRO 全部</option>
-                </select>
-              </div>
-              <section class="platform-session-settings" aria-labelledby="niconico-session-heading">
-                <div class="control-group">
-                  <div class="credential-heading"><label id="niconico-session-heading" for="config-nc-user-session">Niconico · user_session</label><div class="credential-state"><span id="config-nc-clear-session-status" class="sr-only" role="status">正在读取…</span><button type="button" id="config-nc-clear-session" class="btn-ghost compact-btn credential-clear" aria-label="清除已保存的Niconico 登录信息" disabled>清除</button></div></div>
-                  <div class="input-action-row"><input type="password" id="config-nc-user-session" autocomplete="new-password" placeholder="仅填写 user_session 的值"><button id="check-nico-session" class="btn-secondary" type="button">检测可用性</button></div>
-                  <small id="niconico-session-status" class="settings-help-text" role="status">尚未检测</small>
-                </div>
-                <div class="session-actions">
-                  <label class="toggle-label" title="仅检测登录是否仍然有效，不会延长登录期限；网络失败不代表登录失效。"><span class="toggle-switch"><input type="checkbox" id="config-nc-session-check"><span class="toggle-slider"></span></span><span>每日检测可用性</span></label>
-                </div>
-              <div class="control-group session-proxy">
-                <div class="credential-heading"><label for="config-nc-proxy">Niconico 代理地址 (可选)</label><div class="credential-state"><span id="config-clear-nc-proxy-status" class="sr-only" role="status">正在读取…</span><button type="button" id="config-clear-nc-proxy" class="btn-ghost compact-btn credential-clear" aria-label="清除已保存的Niconico 代理" disabled>清除</button></div></div>
-                <input type="text" autocomplete="off" spellcheck="false" id="config-nc-proxy" title="使用 HTTP 代理；Clash 可用 mixed 端口" placeholder="http://127.0.0.1:7890">
-              </div>
-              </section>
-            </div>
-          </div>
-        </section>
-
-        <section class="panel" aria-labelledby="panel-security-title">
-          <div class="panel__head"><h2 class="panel__title" id="panel-security-title">安全</h2></div>
-          <div class="panel__body">
-            <p id="panel-password-status" class="settings-help-text" role="status">正在读取密码状态…</p>
-            <p class="settings-help-text">远程访问需要设置面板密码。更改或清除密码后，所有登录都会退出。</p>
-            <div class="settings-grid">
-              <div id="panel-password-current-group" class="control-group hidden"><label for="panel-password-current">当前密码</label><input id="panel-password-current" type="password" autocomplete="current-password" aria-describedby="panel-password-error"></div>
-              <div class="control-group"><label for="panel-password-new">新密码</label><input id="panel-password-new" type="password" autocomplete="new-password" aria-describedby="panel-password-error" disabled></div>
-            </div>
-            <div class="session-actions panel-security-actions">
-              <button id="panel-password-save" type="button" class="btn-primary" disabled>设置密码</button>
-              <button id="panel-password-clear" type="button" class="btn-secondary hidden" disabled>清除密码</button>
-            </div>
-            <p id="panel-password-clear-hint" class="settings-help-text hidden">远程监听时不能清除密码；请先停止服务并以本机监听地址重启。</p>
-            <p id="panel-password-error" class="settings-help-text" role="status" aria-live="polite"></p>
-          </div>
-        </section>
-
-        <section class="panel">
-          <div class="panel__head"><h2 class="panel__title">数据与备份</h2></div>
-          <div class="panel__body">
-            <p id="storage-state" class="settings-help-text" aria-live="polite"></p>
-            <div class="settings-grid">
-              <div class="control-group"><label for="storage-backup-password">备份密码</label><input type="password" id="storage-backup-password" autocomplete="new-password" placeholder="至少 12 个字符"><button type="button" id="storage-backup" class="btn-secondary">下载加密备份</button></div>
-              <details class="control-group"><summary>恢复备份</summary><input type="file" id="storage-restore-file" accept=".backup" aria-label="加密备份文件"><input type="password" id="storage-restore-password" autocomplete="off" placeholder="备份密码" aria-label="恢复备份密码"><button type="button" id="storage-restore" class="btn-secondary">恢复</button><small class="settings-help-text">仅能恢复到尚未完成配置的新安装。</small></details>
-            </div>
-          </div>
-        </section>
-
-        <section class="panel settings-panel--wide cluster-settings-section" id="cluster-settings" aria-labelledby="cluster-settings-title">
+        <section class="panel cluster-settings-section" id="cluster-settings" aria-labelledby="cluster-settings-title">
           <div class="panel__head">
             <h2 class="panel__title" id="cluster-settings-title">
               <svg aria-hidden="true"><use href="#i-servers" /></svg>
               集群节点
             </h2>
+            <span class="panel__sub">节点地址、凭据与公开状态页来源。</span>
           </div>
           <div class="panel__body">
             <div class="cluster-membership" id="cluster-membership">
@@ -1847,7 +1826,7 @@
                 <button id="cluster-create-btn" class="btn-primary" type="button">新建集群</button>
                 <button id="cluster-prepare-join-btn" class="btn-secondary" type="button">准备加入</button>
               </div>
-              <small class="settings-help-text hidden" id="cluster-membership-setup-hint">使用下方「本节点」的 ID、名称、地址和优先级。地址必须是证书有效的 HTTPS，或本机回环的认证隧道。准备加入会停止本节点的转播，直到加入完成。</small>
+              <small class="settings-help-text hidden" id="cluster-membership-setup-hint">地址须为证书有效的 HTTPS 或本机回环隧道。准备加入会暂停本节点转播，完成后恢复。</small>
               <div class="session-actions cluster-membership-leave hidden" id="cluster-membership-leave">
                 <button id="cluster-leave-btn" class="btn-secondary" type="button">退出集群</button>
               </div>
@@ -1907,15 +1886,15 @@
                 </div>
                 <div class="cluster-settings-fields cluster-settings-fields-compact">
                   <div class="control-group">
-                    <label for="config-cluster-heartbeat">心跳间隔 (秒)</label>
+                    <label for="config-cluster-heartbeat">心跳间隔 （秒）</label>
                     <input type="number" id="config-cluster-heartbeat" min="1" placeholder="5">
                   </div>
                   <div class="control-group">
-                    <label for="config-cluster-failover-timeout">故障超时 (秒)</label>
+                    <label for="config-cluster-failover-timeout">故障超时 （秒）</label>
                     <input type="number" id="config-cluster-failover-timeout" min="1" placeholder="15">
                   </div>
                   <div class="control-group">
-                    <label for="config-cluster-lease-ttl">活跃状态有效期 (秒)</label>
+                    <label for="config-cluster-lease-ttl">活跃状态有效期 （秒）</label>
                     <input type="number" id="config-cluster-lease-ttl" min="1" placeholder="20"
                       aria-describedby="cluster-lease-ttl-hint">
                     <small class="settings-help-text" id="cluster-lease-ttl-hint">仅作状态标记，不影响故障切换。</small>
@@ -1942,7 +1921,7 @@
                   <button id="cluster-add-btn" type="button" class="btn-secondary cluster-settings-add-btn">添加节点</button>
                 </div>
               </div>
-              <small class="settings-help-text">目标节点需先在它的面板点击「准备加入」。密码只用于这一次验证，不会保存。添加期间所有节点暂停转播，所有现有节点必须在线。</small>
+              <small class="settings-help-text">目标节点需先点「准备加入」。密码只用于本次验证，不会保存。添加期间所有节点暂停转播。</small>
               <p id="cluster-add-error" class="settings-help-text cluster-membership-error" role="status" aria-live="polite"></p>
             </div>
 
@@ -1950,8 +1929,14 @@
           </div>
         </section>
 
-        <section class="panel settings-panel--wide" id="public-status-settings">
-          <div class="panel__head"><h2 class="panel__title">公开状态页</h2></div>
+        <section aria-labelledby="public-status-title" class="panel" id="public-status-settings">
+          <div class="panel__head">
+            <h2 class="panel__title" id="public-status-title">
+              <svg aria-hidden="true"><use href="#i-area" /></svg>
+              公开状态页
+            </h2>
+            <span class="panel__sub">对外展示节点与频道状态。</span>
+          </div>
           <div class="panel__body cluster-public-status">
               <p class="settings-help-text">单机可用，默认端口 23234。</p>
               <div class="cluster-public-status-grid">
@@ -1991,14 +1976,35 @@
             </div>
         </section>
 
-        <section class="panel">
+        <section class="panel" id="advanced-settings" aria-labelledby="advanced-settings-title">
           <div class="panel__head">
-            <h2 class="panel__title">
-              <svg aria-hidden="true"><use href="#i-shield" /></svg>
-              防撞车设置
+            <h2 class="panel__title" id="advanced-settings-title">
+              <svg aria-hidden="true"><use href="#i-gauge" /></svg>
+              高级
             </h2>
+            <span class="panel__sub">安全、备份与低频的续播规则。</span>
           </div>
           <div class="panel__body">
+            <h3 class="subsection-title" id="panel-security-title">安全</h3>
+            <p id="panel-password-status" class="settings-help-text" role="status">正在读取密码状态…</p>
+            <p class="settings-help-text">远程访问需要设置面板密码。更改或清除密码后，所有登录都会退出。</p>
+            <div class="settings-grid">
+              <div id="panel-password-current-group" class="control-group hidden"><label for="panel-password-current">当前密码</label><input id="panel-password-current" type="password" autocomplete="current-password" aria-describedby="panel-password-error"></div>
+              <div class="control-group"><label for="panel-password-new">新密码</label><input id="panel-password-new" type="password" autocomplete="new-password" aria-describedby="panel-password-error" disabled></div>
+            </div>
+            <div class="session-actions panel-security-actions">
+              <button id="panel-password-save" type="button" class="btn-primary" disabled>设置密码</button>
+              <button id="panel-password-clear" type="button" class="btn-secondary hidden" disabled>清除密码</button>
+            </div>
+            <p id="panel-password-clear-hint" class="settings-help-text hidden">远程监听时不能清除密码；请先停止服务并以本机监听地址重启。</p>
+            <p id="panel-password-error" class="settings-help-text" role="status" aria-live="polite"></p>
+            <h3 class="subsection-title">数据与备份</h3>
+            <p id="storage-state" class="settings-help-text" aria-live="polite"></p>
+            <div class="settings-grid">
+              <div class="control-group"><label for="storage-backup-password">备份密码</label><input type="password" id="storage-backup-password" autocomplete="new-password" placeholder="至少 12 个字符"><button type="button" id="storage-backup" class="btn-secondary">下载加密备份</button></div>
+              <details class="control-group"><summary>恢复备份</summary><input type="file" id="storage-restore-file" accept=".backup" aria-label="加密备份文件"><input type="password" id="storage-restore-password" autocomplete="off" placeholder="备份密码" aria-label="恢复备份密码"><button type="button" id="storage-restore" class="btn-secondary">恢复</button><small class="settings-help-text">仅能恢复到尚未完成配置的新安装。</small></details>
+            </div>
+            <h3 class="subsection-title">防撞车设置</h3>
             <label class="toggle-label">
               <span class="toggle-switch">
                 <input type="checkbox" id="config-anti-collision-checkbox">
@@ -2028,21 +2034,11 @@
                 <div class="anti-collision-empty">加载中…</div>
               </div>
             </div>
-          </div>
-        </section>
-
-        <section class="panel">
-          <div class="panel__head">
-            <h2 class="panel__title">
-              <svg aria-hidden="true"><use href="#i-ban" /></svg>
-              禁用关键词
-            </h2>
-          </div>
-          <div class="panel__body">
+            <h3 class="subsection-title">禁用关键词</h3>
             <div class="control-group banned-keyword-field">
               <label class="settings-field-label" for="streaming-banned-keywords">
                 转播禁用关键词
-                <small class="settings-field-help">包含这些关键词的直播将不会被转播（每行填写一个关键词）</small>
+                <small class="settings-help-text">包含这些关键词的直播将不会被转播（每行填写一个关键词）</small>
               </label>
               <textarea id="streaming-banned-keywords" class="settings-mono-textarea" rows="6"
                 placeholder="watchalong&#10;watchparty&#10;asmr"></textarea>
@@ -2051,78 +2047,69 @@
             <div class="control-group">
               <label class="settings-field-label" for="danmaku-banned-keywords">
                 弹幕命令禁用关键词
-                <small class="settings-field-help">包含这些关键词的直播会禁用弹幕命令（每行填写一个关键词）</small>
+                <small class="settings-help-text">包含这些关键词的直播会禁用弹幕命令（每行填写一个关键词）</small>
               </label>
               <textarea id="danmaku-banned-keywords" class="settings-mono-textarea" rows="8"
                 placeholder="watchalong&#10;talk&#10;freechat"></textarea>
             </div>
-          </div>
-        </section>
+            <h3 class="subsection-title" id="warning-exempt-title">违规后可续播频道</h3>
+            <div class="warning-exempt-section" id="warning-exempt-section">
+              <p class="settings-help-text warning-exempt-risk" data-tone="warn">
+                B站 警告或切断后默认暂停，需手动恢复。低风险可应用到全部频道，中高风险只对指定频道生效。
+                <strong>反复违规继续开播极易导致直播间被关闭。</strong>
+              </p>
 
-        <section class="panel settings-panel--wide warning-exempt-section" id="warning-exempt-section"
-          aria-labelledby="warning-exempt-title">
-          <div class="panel__head">
-            <h2 class="panel__title" id="warning-exempt-title">
-              <svg aria-hidden="true"><use href="#i-shield" /></svg>
-              违规后可续播频道
-            </h2>
-          </div>
-          <div class="panel__body">
-            <p class="settings-help-text warning-exempt-risk" data-tone="warn">
-              B站 警告/切断后默认暂停转播并等待手动恢复。低风险可以应用到全部频道，中高风险只需为指定频道开启；其他情况仍然暂停。
-              <strong>反复违规继续开播极易导致直播间被关闭。</strong>
-            </p>
-
-            <div class="warning-exempt-group">
-              <div class="warning-exempt-group-head">
-                <h3 class="warning-exempt-subtitle">低风险 · 挂机/录播等消极直播</h3>
-                <span class="risk-tag risk-tag--low">低风险</span>
-              </div>
-              <label class="toggle-label warning-exempt-switch" for="warning-exempt-all-low-risk">
-                <span class="toggle-switch">
-                  <input type="checkbox" id="warning-exempt-all-low-risk">
-                  <span class="toggle-slider"></span>
-                </span>
-                <span>应用到全部频道</span>
-              </label>
-              <small class="settings-help-text">开启后，所有频道遇到挂机/录播判定都会在下一轮监控自动恢复，不需要逐个添加频道。</small>
-            </div>
-
-            <div class="warning-exempt-group">
-              <div class="warning-exempt-group-head">
-                <h3 class="warning-exempt-subtitle">中高风险 · 指定频道</h3>
-                <span class="risk-tag risk-tag--warn">中风险</span>
-                <span class="risk-tag risk-tag--danger">高风险</span>
-              </div>
-              <small class="settings-help-text">只有下面列出的频道会在勾选的中高风险原因下自动恢复；未列出的频道继续暂停。</small>
-              <div class="warning-exempt-reasons" id="warning-exempt-reasons"></div>
-              <small class="settings-help-text warning-exempt-danger">此类违规继续开播极易导致直播间被关闭。</small>
-              <ul class="warning-exempt-list" id="warning-exempt-list" aria-label="中高风险指定频道"></ul>
-              <p class="settings-help-text warning-exempt-empty" id="warning-exempt-empty">还没有指定频道。</p>
-              <details class="channel-picker warning-exempt-picker" id="warning-exempt-picker">
-                <summary class="btn-secondary" id="warning-exempt-picker-toggle" aria-controls="warning-exempt-picker-content">
-                  <span>选择频道</span>
-                  <span class="channel-picker__chevron" aria-hidden="true">
-                    <svg class="channel-picker__chevron-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                      stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                      <polyline points="6 9 12 15 18 9"></polyline>
-                    </svg>
-                  </span>
-                  <span class="channel-picker__ripples" aria-hidden="true"></span>
-                </summary>
-                <div class="channel-picker__content warning-exempt-picker-content" id="warning-exempt-picker-content">
-                  <div class="control-group">
-                    <label for="warning-exempt-search">搜索频道名称</label>
-                    <input type="search" id="warning-exempt-search" placeholder="输入名称筛选（可选）" autocomplete="off"
-                      aria-controls="warning-exempt-results" aria-describedby="warning-exempt-results-count">
-                  </div>
-                  <small class="settings-help-text" id="warning-exempt-results-count" role="status"></small>
-                  <ul class="warning-exempt-results" id="warning-exempt-results" role="group" aria-labelledby="warning-exempt-picker-toggle"></ul>
+              <div class="warning-exempt-group">
+                <div class="warning-exempt-group-head">
+                  <h3 class="warning-exempt-subtitle">低风险 · 挂机/录播等消极直播</h3>
+                  <span class="risk-tag risk-tag--low">低风险</span>
                 </div>
-              </details>
-            </div>
+                <label class="toggle-label warning-exempt-switch" for="warning-exempt-all-low-risk">
+                  <span class="toggle-switch">
+                    <input type="checkbox" id="warning-exempt-all-low-risk">
+                    <span class="toggle-slider"></span>
+                  </span>
+                  <span>应用到全部频道</span>
+                </label>
+                <small class="settings-help-text">开启后，所有频道遇到挂机或录播判定都会在下一轮监控自动恢复。</small>
+              </div>
 
-            <small class="settings-help-text">未勾选「未识别的原因」时，未识别文案、没有原因或遮罩警示一律暂停；直播间锁定等不针对单个频道的限制也不会续播。</small>
+              <div class="warning-exempt-group">
+                <div class="warning-exempt-group-head">
+                  <h3 class="warning-exempt-subtitle">中高风险 · 指定频道</h3>
+                  <span class="risk-tag risk-tag--warn">中风险</span>
+                  <span class="risk-tag risk-tag--danger">高风险</span>
+                </div>
+                <small class="settings-help-text">只有下面列出的频道会在勾选的中高风险原因下自动恢复；未列出的频道继续暂停。</small>
+                <div class="warning-exempt-reasons" id="warning-exempt-reasons"></div>
+                <small class="settings-help-text warning-exempt-danger">此类违规继续开播极易导致直播间被关闭。</small>
+                <ul class="warning-exempt-list" id="warning-exempt-list" aria-label="中高风险指定频道"></ul>
+                <p class="settings-help-text warning-exempt-empty" id="warning-exempt-empty">还没有指定频道。</p>
+                <details class="channel-picker warning-exempt-picker" id="warning-exempt-picker">
+                  <summary class="btn-secondary" id="warning-exempt-picker-toggle" aria-controls="warning-exempt-picker-content">
+                    <span>选择频道</span>
+                    <span class="channel-picker__chevron" aria-hidden="true">
+                      <svg class="channel-picker__chevron-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                        stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                        <polyline points="6 9 12 15 18 9"></polyline>
+                      </svg>
+                    </span>
+                    <span class="channel-picker__ripples" aria-hidden="true"></span>
+                  </summary>
+                  <div class="channel-picker__content warning-exempt-picker-content" id="warning-exempt-picker-content">
+                    <div class="control-group">
+                      <label for="warning-exempt-search">搜索频道名称</label>
+                      <input type="search" id="warning-exempt-search" placeholder="输入名称筛选（可选）" autocomplete="off"
+                        aria-controls="warning-exempt-results" aria-describedby="warning-exempt-results-count">
+                    </div>
+                    <small class="settings-help-text" id="warning-exempt-results-count" role="status"></small>
+                    <ul class="warning-exempt-results" id="warning-exempt-results" role="group" aria-labelledby="warning-exempt-picker-toggle"></ul>
+                  </div>
+                </details>
+              </div>
+
+              <small class="settings-help-text">未勾选「未识别的原因」时，未识别或没有原因的直播一律暂停。直播间锁定等平台限制始终不续播。</small>
+            </div>
           </div>
         </section>
 
@@ -2444,7 +2431,7 @@
                   <input type="checkbox" id="notify-live-events" aria-describedby="notify-live-events-help notify-wakeup-budget" checked disabled>
                   <span>本直播间开播/下播</span>
                 </label>
-                <small class="settings-help-text" id="notify-live-events-help">占用 QQ 发送额度，故障提醒优先</small>
+                <small class="settings-help-text" id="notify-live-events-help">占用 QQ 发送额度，故障通知优先</small>
                 <small class="settings-help-text is-invalid" id="notify-live-events-error" role="alert" hidden></small>
                 <small class="settings-help-text" id="notify-live-events-owner" hidden></small>
                 <p class="settings-help-text notify-budget" id="notify-wakeup-budget" data-tone="muted" aria-live="off">
@@ -2498,25 +2485,25 @@
                 <h3 class="subsection-title" id="notify-noise-title">减少重复通知</h3>
                 <div class="cluster-settings-fields notify-noise-fields">
                   <div class="control-group">
-                    <label for="notify-confirm-secs">故障确认 (秒)</label>
+                    <label for="notify-confirm-secs">故障确认 （秒）</label>
                     <input type="number" id="notify-confirm-secs" min="0" max="600" step="1" placeholder="60"
                       aria-describedby="notify-confirm-help">
                     <small class="settings-help-text" id="notify-confirm-help" data-help="异常持续达到该时长后才发送">异常持续达到该时长后才发送</small>
                   </div>
                   <div class="control-group">
-                    <label for="notify-recovery-secs">恢复确认 (秒)</label>
+                    <label for="notify-recovery-secs">恢复确认 （秒）</label>
                     <input type="number" id="notify-recovery-secs" min="0" max="1800" step="1" placeholder="30"
                       aria-describedby="notify-recovery-help">
                     <small class="settings-help-text" id="notify-recovery-help" data-help="恢复正常达到该时长后才发送「已恢复」">恢复正常达到该时长后才发送「已恢复」</small>
                   </div>
                   <div class="control-group">
-                    <label for="notify-cooldown-mins">重复通知冷却 (分钟)</label>
+                    <label for="notify-cooldown-mins">重复通知冷却 （分钟）</label>
                     <input type="number" id="notify-cooldown-mins" min="1" max="1440" step="1" placeholder="30"
                       aria-describedby="notify-cooldown-help">
                     <small class="settings-help-text" id="notify-cooldown-help" data-help="同一节点同一问题的最短间隔">同一节点同一问题的最短间隔</small>
                   </div>
                   <div class="control-group">
-                    <label for="notify-critical-cooldown-mins">严重事件冷却 (分钟)</label>
+                    <label for="notify-critical-cooldown-mins">严重事件冷却 （分钟）</label>
                     <input type="number" id="notify-critical-cooldown-mins" min="1" max="1440" step="1" placeholder="10"
                       aria-describedby="notify-critical-cooldown-help">
                     <small class="settings-help-text" id="notify-critical-cooldown-help" data-help="节点故障、故障转移等">节点故障、故障转移等</small>

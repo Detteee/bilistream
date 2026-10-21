@@ -773,8 +773,8 @@ export function reuseRows(rows, cache, { labelOf = rowLabel, sigOf = nodeSignatu
   return { elements, cache: next };
 }
 
-export const LIVE_EVENTS_HINT = '占用 QQ 发送额度，故障提醒优先';
-export const LIVE_EVENTS_HINT_PUSH = '优先主动推送；被限制时改用回复窗口或唤醒额度，故障提醒优先';
+export const LIVE_EVENTS_HINT = '占用 QQ 发送额度，故障通知优先';
+export const LIVE_EVENTS_HINT_PUSH = '优先主动推送；被限制时改用回复窗口或唤醒额度，故障通知优先';
 
 // §17.4 上次发送 text for a skipped notice. The pending note is separate.
 export function skippedRow(outcome, localNode = '') {
