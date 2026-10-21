@@ -1561,12 +1561,17 @@
 
   /* The desktop columns use width:1%; inside a card that would shrink every
      identity cell, so each keeps its intrinsic width here. The message needs the
-     type selector too, or `.log-row td` would keep it inline. */
+     type selector too, or `.log-row td` would keep it inline. Cell borders go:
+     the row itself draws the single separator, otherwise the message cell would
+     add a second rule a few pixels above it. */
+  .log-row td {
+    border: 0;
+  }
+
   .log-row td:not(.log-cell--message) {
     display: inline;
     width: auto;
     padding: 0;
-    border: 0;
   }
 
   .log-row td:not(.log-cell--message):not(:empty) {
