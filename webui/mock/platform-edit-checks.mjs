@@ -12,7 +12,27 @@ export async function checkPlatformEditors({ base, evaluate, waitFor }) {
   }
 
   const platforms = { yt: 'youtube', tw: 'twitch', nc: 'niconico' };
-  const fields = { channel: 'channel', area: 'area', quality: 'quality' };
+
+  // Saving a chosen value must go through and repaint the row with the label
+  // the select was showing when it closed.
+  for (const { prefix, kind } of rows) {
+    const container = `document.getElementById('${prefix}-${kind}-edit-container')`;
+    const select = `document.getElementById('${prefix}-${kind}-edit-select')`;
+    const span = `document.getElementById('${prefix}-${kind === 'channel' ? 'channel-name' : kind}')`;
+    const shown = await evaluate(`${span}.textContent`);
+    await evaluate(`document.getElementById('${prefix}-${kind}-edit-btn').click()`);
+    await waitFor(`!${container}.classList.contains('hidden') && ${select}.options.length > 1`);
+
+    const before = (await writes()).length;
+    await evaluate(`${select}.selectedIndex = 1; ${select}.dispatchEvent(new Event('change', { bubbles: true }))`);
+    await evaluate(`document.getElementById('${prefix}-${kind}-save-btn').click()`);
+    await waitFor(`(async () => (await (await fetch('/mock/writes')).json()).length > ${before})()`);
+
+    const write = (await writes()).slice(before).find((row) => row.path === '/api/channel');
+    assert.ok(write, `${prefix}/${kind} resaves its current value`);
+    await waitFor(`${container}.classList.contains('hidden')`);
+    assert.equal(await evaluate(`${span}.textContent`), shown, `${prefix}/${kind} echo keeps its label`);
+  }
 
   for (const { prefix, kind } of rows) {
     const container = `document.getElementById('${prefix}-${kind}-edit-container')`;
