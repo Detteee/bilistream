@@ -9,7 +9,7 @@
 
 use super::event::{EventKind, Severity};
 use super::format::{duration_text, month_day, short_time, utc8_time, RenderContext, MAX_CHARS};
-use super::ledger::{NotifyLedger, ACTIVE_PER_DAY};
+use super::ledger::{IncidentMark, NotifyLedger, ACTIVE_PER_DAY};
 use super::observer::{ClusterDigest, NodeSlot};
 use super::sink::{PassiveTarget, PASSIVE_MAX_REPLIES, PASSIVE_WINDOW_SECS};
 
@@ -18,6 +18,8 @@ pub const MIN_GAP_SECS: u64 = 3;
 pub const MAX_PER_HOUR: usize = 20;
 const MAX_NODES: usize = 6;
 const MAX_ENTRIES: usize = 5;
+/// A row's subject (node or channel name) keeps the node column's budget.
+const SUBJECT_COLS: usize = super::format::NODE_COLS;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Cmd {
@@ -91,6 +93,10 @@ pub struct View<'a> {
     pub open: Vec<OpenEntry>,
     pub passive: Option<&'a PassiveTarget>,
     pub live: Vec<StatusChannel>,
+    /// The resolved watch list. A channel's episode leaves one mark per linked
+    /// account beside the channel's own, so the event reply needs the groups
+    /// to name the channel once instead of repeating it per account.
+    pub watch: &'a [super::live::ResolvedWatchChannel],
     pub gateway_online: bool,
     /// A membership change paused execution (not a fault; Clerk N6 keeps it
     /// apart from a node's drain).
@@ -316,30 +322,17 @@ fn events(view: &View<'_>) -> String {
             ));
         }
     }
-    let mut recent: Vec<_> = view
-        .ledger
-        .incidents
-        .iter()
-        .filter(|mark| view.now.saturating_sub(mark.notified_at) <= 86_400)
-        .collect();
-    recent.sort_by_key(|mark| std::cmp::Reverse(mark.notified_at));
+    let recent = recent_entries(view);
     if !recent.is_empty() {
         lines.push("最近 24 小时已发送：".to_string());
-        for mark in recent.iter().take(MAX_ENTRIES) {
-            let mut parts = mark.key.splitn(3, ':');
-            let kind = parts.next().and_then(EventKind::from_key);
-            let node = parts.next().unwrap_or_default();
-            let title = kind.map(|k| k.title()).unwrap_or("通知");
-            let subject = if kind == Some(EventKind::StreamLive) {
-                ctx.value(mark.key.splitn(3, ':').nth(2).unwrap_or_default(), 20)
-            } else {
-                ctx.node_name(node)
-            };
+        for entry in recent.iter().take(MAX_ENTRIES) {
             let mut line = format!(
-                "· {title} {subject} · {} 发送",
-                short_time(mark.notified_at, view.now)
+                "· {} {} · {} 发送",
+                entry.title,
+                entry.subject,
+                short_time(entry.at, view.now)
             );
-            if let Some(at) = mark.resolved_at.filter(|at| *at >= mark.notified_at) {
+            if let Some(at) = entry.resolved_at {
                 line.push_str(&format!("，{} 恢复", short_time(at, view.now)));
             }
             lines.push(line);
@@ -350,6 +343,74 @@ fn events(view: &View<'_>) -> String {
         lines.push(format!("另有 {pending} 条通知未送达"));
     }
     cut(lines)
+}
+
+/// One line of 最近 24 小时已发送. A watched channel's episode leaves a mark for
+/// the channel plus one per linked account, so those marks are one line: the
+/// channel's name and the newest notification time of the group.
+struct RecentEntry {
+    /// The watched channel's ledger key, or the mark's own key for everything
+    /// else, so the marks of one episode meet here.
+    group: String,
+    title: &'static str,
+    subject: String,
+    at: u64,
+    resolved_at: Option<u64>,
+}
+
+fn recent_entries(view: &View<'_>) -> Vec<RecentEntry> {
+    let channels: Vec<(String, &str, Vec<String>)> = view
+        .watch
+        .iter()
+        .map(|channel| (channel.key(), channel.name.as_str(), channel.episode_keys()))
+        .collect();
+    let mut marks: Vec<&IncidentMark> = view
+        .ledger
+        .incidents
+        .iter()
+        .filter(|mark| view.now.saturating_sub(mark.notified_at) <= 86_400)
+        .collect();
+    marks.sort_by_key(|mark| std::cmp::Reverse(mark.notified_at));
+    let mut entries: Vec<RecentEntry> = Vec::new();
+    for mark in marks {
+        let mut parts = mark.key.splitn(3, ':');
+        let kind = parts.next().and_then(EventKind::from_key);
+        let node = parts.next().unwrap_or_default();
+        let variant = parts.next().unwrap_or_default();
+        let resolved_at = mark.resolved_at.filter(|at| *at >= mark.notified_at);
+        let watched = channels
+            .iter()
+            .find(|(_, _, keys)| keys.iter().any(|key| key == &mark.key));
+        let (group, subject) = match (kind, watched) {
+            (Some(EventKind::StreamLive), Some((group, name, _))) => {
+                (group.clone(), view.ctx.value(name, SUBJECT_COLS))
+            }
+            (Some(EventKind::StreamLive), None) => {
+                (mark.key.clone(), view.ctx.value(variant, SUBJECT_COLS))
+            }
+            _ => (mark.key.clone(), view.ctx.node_name(node)),
+        };
+        let title = kind.map_or("通知", |kind| kind.title());
+        match entries.iter_mut().find(|entry| entry.group == group) {
+            Some(entry) => {
+                if mark.notified_at > entry.at {
+                    entry.at = mark.notified_at;
+                    entry.resolved_at = resolved_at;
+                } else if mark.notified_at == entry.at {
+                    // The episode's marks resolve together; keep the latest.
+                    entry.resolved_at = entry.resolved_at.max(resolved_at);
+                }
+            }
+            None => entries.push(RecentEntry {
+                group,
+                title,
+                subject,
+                at: mark.notified_at,
+                resolved_at,
+            }),
+        }
+    }
+    entries
 }
 
 fn quota(view: &View<'_>) -> String {
@@ -427,6 +488,7 @@ mod tests {
                 name: "主频道".into(),
                 platforms: vec!["youtube".into()],
             }],
+            watch: &[],
             gateway_online: true,
             membership_paused: false,
         }
@@ -545,6 +607,58 @@ mod tests {
     }
 
     #[test]
+    fn one_live_episode_is_one_event_line() {
+        // 2026-10-22: Kamito (YouTube + Twitch) and 橘ひなの (YouTube) each went
+        // live once, but the ledger holds a mark per linked account beside the
+        // channel mark, so the reply listed one episode three times and twice.
+        let now = 1_791_702_240;
+        let ctx = RenderContext {
+            reporter: "jp".into(),
+            ..Default::default()
+        };
+        let digest = ClusterDigest {
+            enabled: true,
+            owner: Some("jp".into()),
+            nodes: vec![NodeSlot {
+                id: "jp".into(),
+                healthy: true,
+                fresh: true,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let watch = vec![
+            super::super::live::ResolvedWatchChannel {
+                kind: "configured",
+                name: "Kamito".into(),
+                accounts: vec![
+                    ("youtube", "UC_kamito".into()),
+                    ("twitch", "kamito_jp".into()),
+                ],
+            },
+            super::super::live::ResolvedWatchChannel {
+                kind: "configured",
+                name: "橘ひなの".into(),
+                accounts: vec![("youtube", "UC_hinano".into())],
+            },
+        ];
+        let mut ledger = NotifyLedger::default();
+        for key in watch.iter().flat_map(|channel| channel.episode_keys()) {
+            ledger.record_notified(&key, now - 3_600);
+        }
+        let mut v = view(&ctx, &digest, &ledger, None);
+        v.open.clear();
+        v.watch = &watch;
+        let text = reply(Cmd::Event, &v);
+        assert_eq!(text.matches("· 开播 Kamito · ").count(), 1, "{text}");
+        assert_eq!(text.matches("· 开播 橘ひなの · ").count(), 1, "{text}");
+        assert!(!text.contains("UC_"), "{text}");
+        assert!(!text.contains("kamito_jp"), "{text}");
+        assert!(!text.contains("configured:"), "{text}");
+        assert_eq!(text.matches("· 开播 ").count(), 2, "{text}");
+    }
+
+    #[test]
     fn a_calm_status_names_live_channels_and_skips_raw_ids() {
         let mut names = std::collections::HashMap::new();
         names.insert("ca".into(), "CA".into());
@@ -649,6 +763,7 @@ mod tests {
             open: Vec::new(),
             passive: None,
             live: Vec::new(),
+            watch: &[],
             gateway_online: true,
             membership_paused: false,
         };

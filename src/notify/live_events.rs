@@ -43,7 +43,10 @@ pub const CODE_NO_PERMISSION: i64 = 40034105;
 pub const CODE_RATE_LIMITED: i64 = 40034100;
 /// Passive reply window closed (Addendum E item 3).
 pub const PASSIVE_CLOSED_CODES: [i64; 3] = [40034005, 304103, 40034128];
-const TITLE_CHARS: usize = 40;
+/// The live title is carried whole: YouTube caps a title at 100 characters,
+/// so 200 columns covers the longest one, and the 500-character message cap
+/// still bounds the notice.
+const TITLE_CHARS: usize = 200;
 const NAME_CHARS: usize = 40;
 /// Bilibili's 警告/切断 reason after 结束原因; the same cap as the history detail.
 const REASON_CHARS: usize = 160;

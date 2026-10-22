@@ -1947,6 +1947,7 @@ impl Worker {
                 open,
                 passive: Some(&target),
                 live: live_names,
+                watch: &self.watch_channels,
                 gateway_online: self.gateway_state.0 == "online",
                 membership_paused: self.was_membership_blocked,
             },

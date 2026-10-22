@@ -736,6 +736,24 @@ fn texts_carry_no_links_or_revenue() {
     );
 }
 
+#[test]
+fn the_start_notice_carries_the_whole_live_title() {
+    // The notice title is the topic plus the live title, and YouTube allows a
+    // 100-character title; the old 40-column budget cut it mid-title.
+    let title =
+        "League_of_Legends 【#LTK】無限(ﾊｰﾌ)日！練習練習練習練習！！【 ぶいすぽっ！ / 千燈ゆうひ 】";
+    let mut ledger = NotifyLedger {
+        local: "a".into(),
+        ..Default::default()
+    };
+    let mut source = info("YT:UC1");
+    source.title = title.into();
+    ledger.live.source(&source, NOW);
+    let text = render(LiveEventKey::start(), &ledger.live.broadcast, false, "a");
+    assert!(text.contains(title), "{text}");
+    assert!(!text.contains('…'), "{text}");
+}
+
 /// M1 (rule 17): an unknown definite 4xx on the active send is not a
 /// fallback trigger; it counts toward the 3 attempts in 2 minutes first.
 #[tokio::test]

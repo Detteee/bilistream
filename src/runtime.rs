@@ -665,9 +665,9 @@ fn end_danmaku_text(channel_name: &str, commands_enabled: bool) -> String {
 fn log_selected_stream(identity: &FfmpegStreamIdentity, title: Option<&str>, priority: bool) {
     let title = safe_text(title.unwrap_or("无标题"), 80);
     if priority {
-        tracing::info!("{identity} - {title}（优先频道）");
+        tracing::info!("{identity} · {title}（优先频道）");
     } else {
-        tracing::info!("{identity} - {title}");
+        tracing::info!("{identity} · {title}");
     }
 }
 
