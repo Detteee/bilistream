@@ -200,16 +200,31 @@ pub async fn push_all(
     Ok(PushReport { acked, failed })
 }
 
-/// Pull once from every member and keep the greatest copy. Returns whether
-/// the local record changed.
+/// Pull from every member until the membership revision moves, keeping the
+/// greatest copy. Returns whether the local record changed.
 pub async fn pull_all(store: &Store, link: &dyn PeerLink) -> io::Result<bool> {
     let (revision, members) = link.members()?;
     let mut changed = false;
     for node in members {
-        if let Ok(copy) = link.pull(revision, &node).await {
+        // One unreachable member must not stop the others, but it must also
+        // not vanish: the next pass is ten minutes away.
+        let copy = match link.pull(revision, &node).await {
+            Ok(copy) => copy,
+            // The revision moved, so every remaining pull would fail alike.
+            Err(LinkError::MembershipChanged) => {
+                tracing::debug!("QQ 通知管理员 openid 拉取中止：成员版本已变化；下一轮重读成员");
+                break;
+            }
+            Err(error) => {
+                tracing::debug!("QQ 通知管理员 openid 副本拉取失败：{node}；{error:?}");
+                continue;
+            }
+        };
+        match store::accept_copy(store, &copy) {
+            Ok(outcome) => changed |= outcome.applied,
             // An invalid copy from one member does not stop the others.
-            if let Ok(outcome) = store::accept_copy(store, &copy) {
-                changed |= outcome.applied;
+            Err(error) => {
+                tracing::warn!("QQ 通知管理员 openid 副本被拒：{node}；{:?}", error.kind())
             }
         }
     }
@@ -912,7 +927,7 @@ pub fn spawn_pull(store: Arc<Store>, local: String) {
             // The error is local (membership read, store, changing revision):
             // peers render as `Ok(false)`. Without this the pull silently
             // waits for the next 10-minute pass.
-            Err(error) => tracing::warn!("QQ 通知管理员 openid 拉取失败 ({:?})", error.kind()),
+            Err(error) => tracing::warn!("QQ 通知管理员 openid 拉取失败：{:?}", error.kind()),
         }
     });
 }

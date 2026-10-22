@@ -8,6 +8,8 @@ use crate::notify::store::{
     accept_copy, export_copy, load_openid, write_openid, CopyState, OpenidChange, OpenidWrite,
 };
 use crate::notify::test_support::{fast_policy, MemCluster, TestStore};
+use async_trait::async_trait;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 const OPENID: &str = "E4F0A1B2C3D4E5F60718293A4B5C6D7E";
@@ -920,4 +922,31 @@ fn the_forward_warn_line_carries_only_route_node_kind_and_status() {
     // L1: an upstream gateway status (e.g. Cloudflare 524) is logged.
     assert!(text.contains("kind=unreachable status=524"), "{text}");
     assert!(!text.contains("http"), "{text}");
+}
+
+/// A moved membership revision fails every remaining pull alike, so one round
+/// must stop at the first `MembershipChanged` instead of walking the rest.
+struct MovingRevision(AtomicUsize);
+
+#[async_trait]
+impl PeerLink for MovingRevision {
+    fn members(&self) -> io::Result<(u64, Vec<String>)> {
+        Ok((7, vec!["a".into(), "b".into(), "c".into()]))
+    }
+
+    async fn push(&self, _: u64, _: &str, _: &OpenidCopy) -> Result<PushAck, LinkError> {
+        unreachable!("a pull round never pushes")
+    }
+
+    async fn pull(&self, _: u64, _: &str) -> Result<OpenidCopy, LinkError> {
+        self.0.fetch_add(1, Ordering::AcqRel);
+        Err(LinkError::MembershipChanged)
+    }
+}
+
+#[tokio::test]
+async fn a_moved_revision_stops_the_pull_round_early() {
+    let link = MovingRevision(AtomicUsize::new(0));
+    assert!(!pull_all(&temp().1, &link).await.unwrap());
+    assert_eq!(link.0.load(Ordering::Acquire), 1, "版本一变即收手");
 }
