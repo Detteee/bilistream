@@ -4,7 +4,7 @@ use super::config::{
 };
 use super::ApiResponse;
 use crate::cluster::{monitored_config_version, sync_monitored_config_after_change};
-use crate::config::load_config;
+use crate::config::{load_config, Config};
 use crate::logging::safe_text;
 use crate::plugins::set_config_updated;
 use crate::plugins::twitch::channel_id_from_url;
@@ -108,6 +108,26 @@ fn twitch_channel_id(
                 .and_then(channel_id_from_url)
         })
         .or_else(|| lookup_twitch_id_from_channels(channels_json, &payload.channel_id))
+}
+
+/// Saves the edited config or returns the refusal the browser renders. The
+/// three platform branches share one wording, so a failed save reads the same
+/// whichever handler it came from.
+async fn save_stream_switch_config(cfg: &mut Config) -> Result<(), ApiResponse<()>> {
+    match crate::config::save_config(cfg).await {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            tracing::error!(
+                "监听目标配置保存失败：{}",
+                crate::logging::safe_diagnostic(&error.to_string())
+            );
+            Err(ApiResponse {
+                success: false,
+                data: None,
+                message: Some(format!("配置保存失败：{error}")),
+            })
+        }
+    }
 }
 
 pub async fn switch_stream(
@@ -240,16 +260,8 @@ pub async fn switch_stream(
             cfg.niconico.area_v2 = area_id;
         }
 
-        if let Err(e) = crate::config::save_config(&mut cfg).await {
-            tracing::error!(
-                "监听目标配置保存失败：{}",
-                crate::logging::safe_diagnostic(&e.to_string())
-            );
-            return Ok(ApiResponse {
-                success: false,
-                data: None,
-                message: Some(format!("配置保存失败：{}", e)),
-            });
+        if let Err(refusal) = save_stream_switch_config(&mut cfg).await {
+            return Ok(refusal);
         }
 
         tracing::info!(
@@ -338,16 +350,8 @@ pub async fn switch_stream(
             cfg.twitch.area_v2 = area_id;
         }
 
-        if let Err(e) = crate::config::save_config(&mut cfg).await {
-            tracing::error!(
-                "监听目标配置保存失败：{}",
-                crate::logging::safe_diagnostic(&e.to_string())
-            );
-            return Ok(ApiResponse {
-                success: false,
-                data: None,
-                message: Some(format!("配置保存失败：{}", e)),
-            });
+        if let Err(refusal) = save_stream_switch_config(&mut cfg).await {
+            return Ok(refusal);
         }
 
         tracing::info!(
@@ -420,16 +424,8 @@ pub async fn switch_stream(
     }
 
     // Save config as JSON
-    if let Err(e) = crate::config::save_config(&mut cfg).await {
-        tracing::error!(
-            "监听目标配置保存失败：{}",
-            crate::logging::safe_diagnostic(&e.to_string())
-        );
-        return Ok(ApiResponse {
-            success: false,
-            data: None,
-            message: Some(format!("配置保存失败：{}", e)),
-        });
+    if let Err(refusal) = save_stream_switch_config(&mut cfg).await {
+        return Ok(refusal);
     }
 
     tracing::info!(
