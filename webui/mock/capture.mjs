@@ -8,6 +8,7 @@ import assert from 'node:assert/strict';
 import { createMockServer } from './server.mjs';
 import { checkPanelPasswords } from './password-checks.mjs';
 import { checkClusterMembership } from './membership-checks.mjs';
+import { checkPlatformEditors } from './platform-edit-checks.mjs';
 import { checkStreamActions } from './stream-action-checks.mjs';
 import { checkNotifyWatch } from './notify-watch-checks.mjs';
 // Owner-decided record fixtures (log wording ratchet): session numbers fuse
@@ -84,6 +85,7 @@ async function main() {
       await writeFile(path, Buffer.from(data, 'base64'));
     };
     await checkStreamActions({ base, context, command, evaluate, waitFor });
+    await checkPlatformEditors({ base, evaluate, waitFor });
     assert.equal(await evaluate("document.querySelector('.card[data-platform=\"cluster\"]').classList.contains('hidden')"), true);
     assert.equal(await evaluate("getComputedStyle(document.querySelector('.dashboard')).gridTemplateColumns.split(' ').length"), 3);
     await capture(join(captureDir, 'screenshot_of_webui.png'));
@@ -469,7 +471,10 @@ async function main() {
     const broadcastChecks = JSON.parse(await evaluate(`(async () => {
       const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
       const until = async (check, name) => { for (let n = 0; n < 240; n++) { if (check()) return; await pause(50); } throw new Error('analytics did not settle at ' + (typeof name === 'function' ? name() : name)); };
-      const select = document.getElementById('analytics-aud-session');
+      // renderAudience re-renders the list and restores the previous selection by
+      // matching option text, so a pick can land on a fresh <option>: read the
+      // live element every time instead of holding the one from the first render.
+      const options = () => [...document.getElementById('analytics-aud-session').options];
       const dialog = document.getElementById('analytics-detail');
       const body = document.getElementById('analytics-detail-body');
       const rows = () => [...body.querySelectorAll('.cluster-node-meta-row')].map(r => r.textContent.replace(/\s+/g, ' ').trim());
@@ -496,21 +501,32 @@ async function main() {
         paging: !!document.getElementById('analytics-detail-prev') || !!document.getElementById('analytics-detail-next'),
       });
       const pick = (text, skip = 0) => {
-        const option = [...select.options].filter(o => o.textContent.includes(text))[skip];
-        select.value = option.value;
-        select.dispatchEvent(new Event('change', { bubbles: true }));
+        const target = document.getElementById('analytics-aud-session');
+        const option = options().filter(o => o.textContent.includes(text))[skip];
+        if (!option) return false;
+        target.value = option.value;
+        target.dispatchEvent(new Event('change', { bubbles: true }));
+        return true;
       };
       const open = () => document.getElementById('analytics-aud-detail').click();
+      const close = () => document.getElementById('analytics-detail-close').click();
       // A 场 that kept one channel but restarted on another node: one 段, still marked.
-      // The live 003 场 is listed first; the restarted, finished one is second.
-      pick('示例频道 003', 1);
-      open();
-      await until(() => dialog.open && rows().length > 0, 'single open');
-      await until(() => body.querySelectorAll('.analytics-uplot').length === 2, 'single charts');
-      const alone = state();
-      document.getElementById('analytics-detail-close').click();
+      // Which of 003's sessions the fixture restarted is not fixed, and a 中断 is only
+      // drawn inside the selected 场 — so open 003's sessions until one shows 段 only
+      // via its 中断 count, i.e. no channel switch and no 段 count.
+      let alone = null;
+      for (let skip = 0; !alone && pick('示例频道 003', skip); skip++) {
+        open();
+        await until(() => dialog.open && rows().length > 0, 'single open ' + skip);
+        await until(() => body.querySelectorAll('.analytics-uplot').length === 2, 'single charts ' + skip);
+        const seen = state();
+        close();
+        const chain = seen.rows.find(row => row.startsWith('频道')) || '';
+        if (!chain.includes('示例频道 002') && chain.includes('次中断')) alone = seen;
+      }
+      if (!alone) throw new Error('no 003 场 with a restart gap');
       // A 场 that switched channel stays one page: one chart pair, marked once.
-      pick('示例频道 002 示例频道 001');
+      pick('示例频道 003 示例频道 002');
       open();
       await until(() => dialog.open && rows().length > 0, 'broadcast open');
       await until(() => body.querySelectorAll('.analytics-uplot').length === 2, 'broadcast charts');
@@ -525,11 +541,12 @@ async function main() {
     assert.equal(broadcastChecks.alone.charts, 2, 'both charts mount for a single-段 场');
     assert.equal(broadcastChecks.alone.tabStrip, false, 'the 段 tab strip is gone');
     assert.equal(broadcastChecks.alone.paging, false, 'the 段 paging buttons are gone');
-    assert.ok(broadcastChecks.alone.rows.some(row => row.includes('2 次中断')), 'a restart-only 场 counts its 中断 without a 段');
-    assert.ok(!broadcastChecks.alone.rows.some(row => row.includes('段')), 'one channel means no 段 count');
+    assert.ok(broadcastChecks.alone.rows.some(row => row.includes('次中断')), 'a restart-only 场 counts its 中断 without a 段');
+    const aloneRow = broadcastChecks.alone.rows.find(row => row.startsWith('频道')) || '';
+    assert.ok(!/\d+ 段/.test(aloneRow), `one channel means no 段 count: ${aloneRow}`);
     assert.ok(broadcastChecks.alone.marks > 20, 'the 中断 mark draws even without a channel switch');
     assert.equal(broadcastChecks.both.charts, 2, 'a switched 场 still renders one chart pair');
-    assert.ok(broadcastChecks.both.rows.some(row => row.includes('示例频道 002 → 示例频道 001')), `the 频道 row chains every 段: ${broadcastChecks.both.rows[0]}`);
+    assert.ok(broadcastChecks.both.rows.some(row => row.includes('示例频道 003 → 示例频道 002')), `the 频道 row chains every 段: ${broadcastChecks.both.rows[0]}`);
     assert.ok(broadcastChecks.both.rows.some(row => row.includes('2 段 · 1 次中断')), `the 段 count rides on the 频道 row: ${broadcastChecks.both.rows[0]}`);
     assert.ok(broadcastChecks.both.marks > 20, `the 中断 mark draws on the canvas: ${broadcastChecks.both.marks} px`);
     assert.ok(broadcastChecks.stats.some(url => url.includes('session=') && url.includes(',')), 'both 段 arrive from one stitched stats query');

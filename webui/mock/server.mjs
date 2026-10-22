@@ -251,6 +251,13 @@ export function createMockServer() {
           for (const event of events) event.end();
           return send({ success: true });
         }
+        if (path === '/api/channel') {
+          // The dashboard's inline editors: channel, area and quality.
+          if (!['youtube', 'twitch', 'niconico'].includes(patch.platform)) return send({ success: false, message: '未知平台' }, 400);
+          const field = patch.channel_id ? '频道' : patch.area_id ? '分区' : patch.quality ? '画质' : null;
+          if (!field) return send({ success: false, message: '未知配置项' }, 400);
+          return send({ success: true, message: `示例${field}已更新` });
+        }
         if (path === '/api/youtube/cookies') {
           if (patch.expected_revision !== cookieRevision) return send({ success: false, message: 'Cookie 已更新' }, 409);
           cookieCount = req.method === 'DELETE' ? 0 : (patch.content || '').split('\n').filter(line => line && !line.startsWith('#')).length;
@@ -429,7 +436,7 @@ export function createMockServer() {
       }
       if (path === '/api/banned-keywords') return send({ streaming_banned_keywords: [], danmaku_banned_keywords: [] });
       if (path === '/api/areas') return send({ areas: [{ id: 235, name: '其他单机' }, { id: 329, name: '无畏契约' }] });
-      if (path === '/api/channels') return send({ channels: [{ name: '示例频道 001', platforms: { youtube: 'UC1111111111111111111111' } }, { name: '示例频道 002', platforms: { twitch: 'demo_games' } }, { name: '示例频道 003', platforms: { youtube: 'UC3333333333333333333333' } }] });
+      if (path === '/api/channels') return send({ channels: [{ name: '示例频道 001', platforms: { youtube: 'UC1111111111111111111111' } }, { name: '示例频道 002', platforms: { twitch: 'demo_games' } }, { name: '示例频道 003', platforms: { youtube: 'UC3333333333333333333333', niconico: 'co3333333' } }] });
       if (path === '/api/youtube/keys') return send(ok({ configured: true, budget_per_key: 9000, remaining_fraction: .78, resets_at: '2026-09-30T07:00:00Z', keys: [{ fingerprint: 'demo…a', used: 2480, state: 'usable' }, { fingerprint: 'demo…b', used: 1480, state: 'usable' }], playlist: { on: true, interval_secs: 180, rss_enabled: config.youtube_rss_enabled, rss_down: false, stretch: 1, websub_slowed: true }, websub: { verified: 24, pending: 0, failed: 0, healthy: true, listening: 3151, last_push: '2026-09-29T04:00:00Z' } }));
       if (path === '/api/holodex/streams' && streamActions) return send({ success: true, source: 'favorites', data: streamActions.rows });
       if (path === '/api/holodex/streams') return send({ success: true, source: 'channels', data: [

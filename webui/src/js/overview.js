@@ -25,9 +25,10 @@ import { openCropConfig, clearCropConfig } from './crop.js';
 import { bindDialog } from './dialog.js';
 import { saveBooleanToggle } from './toggle-save.js';
 import { initWarningControls, msSinceLastStatusRefresh, refreshNetworkStatus, refreshStatus, schedulePlatformTitleRowCenters } from './status-refresh.js';
-import { QUALITY_MAPPINGS, formatHlsCacheStatus, getQualityDisplayText } from './format.js';
+import { MISSING, QUALITY_MAPPINGS, formatHlsCacheStatus, getQualityDisplayText } from './format.js';
 
 import { setNcChannelDisplay } from './status-cards.js';
+import { PLATFORM_EDIT_ROWS, channelEditPayload, fieldEditIds } from './platform-edit-model.js';
 import { STREAM_LIST_STATUS_STATE_CLASSES, addHolodexChannelToCache, applyStreamListConfig, applyStreamListSectionVisibility, closeHolodexLoginModal, confirmHolodexAddChannel, createHolodexAddChannelControls, createHolodexChannelAddIcon, createHolodexChannelAddedIndicator, createStreamActionButton, createStreamSvg, createStreamCard, cropAndSwitchToStream, getHolodexChannelPhotoUrl, getHolodexChannelUrl, hideStreamListStatus, streamListKeepAliveCheckMs, streamListKeepAliveDue, streamListState, holodexStreamHasConfiguredChannel, initStreamListFold, initHolodexLoginModalControls, isStreamListPanelOpen, loadHolodexAuthStatus, logoutHolodexJwt, markHolodexChannelAdded, maybeLoadStreamList, openHolodexLogin, openHolodexLoginModal, readHolodexAddChannelData, readStreamActionData, refreshChannelsData, refreshStreamList, renderStreamListCards, saveHolodexApiKey, saveHolodexJwt, setHolodexAddChannelButtonsDisabled, setHolodexAddChannelConfirmVisible, setStreamListCollapsed, setStreamListStatus, startStreamListDurationTicker, stopStreamListDurationTicker, testHolodexApiKey, toggleHolodexFavoritesMode, toggleStreamListFold, toggleHolodexSkipJwtVerify, updateHolodexAuthBar, updateHolodexLoginButton, updateHolodexModalHint } from './stream-list.js';
 
 let statusRefreshInterval = 60000; // Default 60 seconds
@@ -95,33 +96,7 @@ function initDashboardControls() {
   document
     .getElementById('bili-danmaku-command-toggle')
     ?.addEventListener('change', toggleDanmakuCommand);
-  document
-    .getElementById('yt-channel-edit-btn')
-    ?.addEventListener('click', toggleYtChannelEdit);
-  document
-    .getElementById('yt-channel-save-btn')
-    ?.addEventListener('click', saveYtChannelEdit);
-  document
-    .getElementById('yt-channel-cancel-btn')
-    ?.addEventListener('click', cancelYtChannelEdit);
-  document
-    .getElementById('yt-area-edit-btn')
-    ?.addEventListener('click', toggleYtAreaEdit);
-  document
-    .getElementById('yt-area-save-btn')
-    ?.addEventListener('click', saveYtAreaEdit);
-  document
-    .getElementById('yt-area-cancel-btn')
-    ?.addEventListener('click', cancelYtAreaEdit);
-  document
-    .getElementById('yt-quality-edit-btn')
-    ?.addEventListener('click', toggleYtQualityEdit);
-  document
-    .getElementById('yt-quality-save-btn')
-    ?.addEventListener('click', saveYtQualityEdit);
-  document
-    .getElementById('yt-quality-cancel-btn')
-    ?.addEventListener('click', cancelYtQualityEdit);
+  bindFieldEditRows();
   document
     .getElementById('yt-crop-edit-btn')
     ?.addEventListener('click', () => openCropConfig('youtube'));
@@ -141,33 +116,6 @@ function initDashboardControls() {
     .getElementById('yt-hls-cache-enabled')
     ?.addEventListener('change', event => setHlsCacheLatencyInputState('yt', event.currentTarget.checked));
   document
-    .getElementById('tw-channel-edit-btn')
-    ?.addEventListener('click', toggleTwChannelEdit);
-  document
-    .getElementById('tw-channel-save-btn')
-    ?.addEventListener('click', saveTwChannelEdit);
-  document
-    .getElementById('tw-channel-cancel-btn')
-    ?.addEventListener('click', cancelTwChannelEdit);
-  document
-    .getElementById('tw-area-edit-btn')
-    ?.addEventListener('click', toggleTwAreaEdit);
-  document
-    .getElementById('tw-area-save-btn')
-    ?.addEventListener('click', saveTwAreaEdit);
-  document
-    .getElementById('tw-area-cancel-btn')
-    ?.addEventListener('click', cancelTwAreaEdit);
-  document
-    .getElementById('tw-quality-edit-btn')
-    ?.addEventListener('click', toggleTwQualityEdit);
-  document
-    .getElementById('tw-quality-save-btn')
-    ?.addEventListener('click', saveTwQualityEdit);
-  document
-    .getElementById('tw-quality-cancel-btn')
-    ?.addEventListener('click', cancelTwQualityEdit);
-  document
     .getElementById('tw-crop-edit-btn')
     ?.addEventListener('click', () => openCropConfig('twitch'));
   document
@@ -185,33 +133,6 @@ function initDashboardControls() {
   document
     .getElementById('tw-hls-cache-enabled')
     ?.addEventListener('change', event => setHlsCacheLatencyInputState('tw', event.currentTarget.checked));
-  document
-    .getElementById('nc-channel-edit-btn')
-    ?.addEventListener('click', toggleNcChannelEdit);
-  document
-    .getElementById('nc-channel-save-btn')
-    ?.addEventListener('click', saveNcChannelEdit);
-  document
-    .getElementById('nc-channel-cancel-btn')
-    ?.addEventListener('click', cancelNcChannelEdit);
-  document
-    .getElementById('nc-area-edit-btn')
-    ?.addEventListener('click', toggleNcAreaEdit);
-  document
-    .getElementById('nc-area-save-btn')
-    ?.addEventListener('click', saveNcAreaEdit);
-  document
-    .getElementById('nc-area-cancel-btn')
-    ?.addEventListener('click', cancelNcAreaEdit);
-  document
-    .getElementById('nc-quality-edit-btn')
-    ?.addEventListener('click', toggleNcQualityEdit);
-  document
-    .getElementById('nc-quality-save-btn')
-    ?.addEventListener('click', saveNcQualityEdit);
-  document
-    .getElementById('nc-quality-cancel-btn')
-    ?.addEventListener('click', cancelNcQualityEdit);
   document
     .getElementById('nc-crop-edit-btn')
     ?.addEventListener('click', () => openCropConfig('niconico'));
@@ -855,414 +776,95 @@ function cancelTitleEdit() {
 
   hideInfoRowEdit(titleSpan, editContainer);
 }
-// YouTube channel editing functions
-function toggleYtChannelEdit() {
-  const channelSpan = document.getElementById('yt-channel-name');
-  const editContainer = document.getElementById('yt-channel-edit-container');
-  const editSelect = document.getElementById('yt-channel-edit-select');
+// Platform row editors: channel, area and quality, one row per platform.
+// The three platforms differ only by DOM prefix, platform key and how a value is
+// read back, so the flow — open the row, fill the options, preselect the current
+// value, save, echo — is written once and parameterised.
 
-  showInfoRowEdit(channelSpan, editContainer);
-
-  // Load channels if not already loaded
-  if (!state.channelsData) {
-    loadChannelData().then(() => {
-      populateYtChannelEditSelect();
-    });
-  } else {
-    populateYtChannelEditSelect();
-  }
-
-  editSelect.focus();
+function fieldEditDom(row) {
+  const ids = fieldEditIds(row);
+  return {
+    span: document.getElementById(ids.span),
+    container: document.getElementById(ids.container),
+    select: document.getElementById(ids.select)
+  };
 }
-function populateYtChannelEditSelect() {
-  const editSelect = document.getElementById('yt-channel-edit-select');
-  editSelect.replaceChildren(createSelectOption('', '选择频道…'));
-  appendPlatformChannelOptions(editSelect, 'youtube');
+function closeFieldEdit(row) {
+  const dom = fieldEditDom(row);
+  hideInfoRowEdit(dom.span, dom.container);
 }
-function cancelYtChannelEdit() {
-  const channelSpan = document.getElementById('yt-channel-name');
-  const editContainer = document.getElementById('yt-channel-edit-container');
-
-  hideInfoRowEdit(channelSpan, editContainer);
-}
-async function saveYtChannelEdit() {
-  const editSelect = document.getElementById('yt-channel-edit-select');
-  const selectedValue = editSelect.value;
-
-  if (!selectedValue) {
-    showNotification('请选择频道', 'error');
+async function commitFieldEdit(row, payload, { failText, okText, echo }) {
+  const data = await postChannelUpdate({ platform: row.platform, ...payload });
+  if (!data.success) {
+    showNotification(data.message || failText, 'error');
     return;
   }
 
-  try {
-    const channelInfo = JSON.parse(selectedValue);
-    const data = await postChannelUpdate({
-      platform: 'youtube',
-      channel_id: channelInfo.id,
-      channel_name: channelInfo.name
-    });
-
-    if (!data.success) {
-      showNotification(data.message || 'YouTube频道更新失败', 'error');
-      return;
-    }
-
-    showNotification(data.message || 'YouTube频道已更新', 'success');
-    cancelYtChannelEdit();
-    // Refresh status immediately to show updated info
-    refreshStatus();
-  } catch (error) {
-    showNotification('更新失败：' + error.message, 'error');
-  }
+  showNotification(data.message || okText, 'success');
+  closeFieldEdit(row);
+  echo?.();
+  refreshStatus();
 }
-// YouTube area editing functions
-function toggleYtAreaEdit() {
-  const areaSpan = document.getElementById('yt-area');
-  const editContainer = document.getElementById('yt-area-edit-container');
-  const editSelect = document.getElementById('yt-area-edit-select');
-
-  showInfoRowEdit(areaSpan, editContainer);
-
-  // Load areas if not already loaded
-  if (!state.areasData) {
-    loadChannelData().then(() => {
-      populateYtAreaEditSelect();
-    });
-  } else {
-    populateYtAreaEditSelect();
-  }
-
-  editSelect.focus();
+function fillChannelSelect(select, platform) {
+  select.replaceChildren(createSelectOption('', '选择频道…'));
+  appendPlatformChannelOptions(select, platform);
 }
-function populateYtAreaEditSelect() {
-  const editSelect = document.getElementById('yt-area-edit-select');
-  editSelect.replaceChildren(createAreaOption('', '选择分区…'));
-
+function fillAreaSelect(select) {
+  select.replaceChildren(createAreaOption('', '选择分区…'));
   if (state.areasData && state.areasData.areas) {
-    appendAreaOptions(editSelect, state.areasData.areas);
+    appendAreaOptions(select, state.areasData.areas);
   }
 }
-function cancelYtAreaEdit() {
-  const areaSpan = document.getElementById('yt-area');
-  const editContainer = document.getElementById('yt-area-edit-container');
-
-  hideInfoRowEdit(areaSpan, editContainer);
-}
-async function saveYtAreaEdit() {
-  const editSelect = document.getElementById('yt-area-edit-select');
-  const areaId = parseInteger(editSelect.value, 0);
-
-  if (!areaId) {
-    showNotification('请选择分区', 'error');
-    return;
-  }
-
-  try {
-    const data = await postChannelUpdate({
-      platform: 'youtube',
-      area_id: areaId
-    });
-
-    if (!data.success) {
-      showNotification(data.message || 'YouTube配置分区更新失败', 'error');
-      return;
-    }
-
-    showNotification(data.message || 'YouTube配置分区已更新', 'success');
-    cancelYtAreaEdit();
-    // Refresh status immediately to show updated info
-    refreshStatus();
-  } catch (error) {
-    showNotification('更新失败：' + error.message, 'error');
-  }
-}
-// YouTube quality editing functions
-function toggleYtQualityEdit() {
-  const qualitySpan = document.getElementById('yt-quality');
-  const editContainer = document.getElementById('yt-quality-edit-container');
-  const editSelect = document.getElementById('yt-quality-edit-select');
-
-  showInfoRowEdit(qualitySpan, editContainer);
-
-  // Populate quality options for YouTube
-  populateQualityOptions(editSelect, 'youtube');
-
-  // Set current quality as selected - convert display text back to technical value
-  const currentDisplayText = qualitySpan.textContent;
-  if (currentDisplayText && currentDisplayText !== '-') {
-    const technicalValue = getTechnicalQualityValue(currentDisplayText, 'youtube');
-    editSelect.value = technicalValue;
-  }
-
-  editSelect.focus();
-}
-function cancelYtQualityEdit() {
-  const qualitySpan = document.getElementById('yt-quality');
-  const editContainer = document.getElementById('yt-quality-edit-container');
-
-  hideInfoRowEdit(qualitySpan, editContainer);
-}
-async function saveYtQualityEdit() {
-  const editSelect = document.getElementById('yt-quality-edit-select');
-  const quality = editSelect.value;
-
-  if (!quality) {
-    showNotification('请选择画质', 'error');
-    return;
-  }
-
-  try {
-    const data = await postChannelUpdate({
-      platform: 'youtube',
-      quality // Send technical value to server
-    });
-
-    if (!data.success) {
-      showNotification(data.message || 'YouTube画质更新失败', 'error');
-      return;
-    }
-
-    showNotification(data.message || 'YouTube画质已更新', 'success');
-    cancelYtQualityEdit();
-    // Update the display immediately with display text
-    document.getElementById('yt-quality').textContent = getQualityDisplayText(quality, 'youtube');
-    // Refresh status to get updated info
-    refreshStatus();
-  } catch (error) {
-    showNotification('更新失败：' + error.message, 'error');
-  }
-}
-// Twitch quality editing functions
-function toggleTwQualityEdit() {
-  const qualitySpan = document.getElementById('tw-quality');
-  const editContainer = document.getElementById('tw-quality-edit-container');
-  const editSelect = document.getElementById('tw-quality-edit-select');
-
-  showInfoRowEdit(qualitySpan, editContainer);
-
-  // Populate quality options for Twitch
-  populateQualityOptions(editSelect, 'twitch');
-
-  // Set current quality as selected - convert display text back to technical value
-  const currentDisplayText = qualitySpan.textContent;
-  if (currentDisplayText && currentDisplayText !== '-') {
-    const technicalValue = getTechnicalQualityValue(currentDisplayText, 'twitch');
-    editSelect.value = technicalValue;
-  }
-
-  editSelect.focus();
-}
-function cancelTwQualityEdit() {
-  const qualitySpan = document.getElementById('tw-quality');
-  const editContainer = document.getElementById('tw-quality-edit-container');
-
-  hideInfoRowEdit(qualitySpan, editContainer);
-}
-async function saveTwQualityEdit() {
-  const editSelect = document.getElementById('tw-quality-edit-select');
-  const quality = editSelect.value;
-
-  if (!quality) {
-    showNotification('请选择画质', 'error');
-    return;
-  }
-
-  try {
-    const data = await postChannelUpdate({
-      platform: 'twitch',
-      quality // Send technical value to server
-    });
-
-    if (!data.success) {
-      showNotification(data.message || 'Twitch画质更新失败', 'error');
-      return;
-    }
-
-    showNotification(data.message || 'Twitch画质已更新', 'success');
-    cancelTwQualityEdit();
-    // Update the display immediately with display text
-    document.getElementById('tw-quality').textContent = getQualityDisplayText(quality, 'twitch');
-    // Refresh status to get updated info
-    refreshStatus();
-  } catch (error) {
-    showNotification('更新失败：' + error.message, 'error');
-  }
-}
-// Twitch channel editing functions
-function toggleTwChannelEdit() {
-  const channelSpan = document.getElementById('tw-channel-name');
-  const editContainer = document.getElementById('tw-channel-edit-container');
-  const editSelect = document.getElementById('tw-channel-edit-select');
-
-  showInfoRowEdit(channelSpan, editContainer);
-
-  // Load channels if not already loaded
-  if (!state.channelsData) {
-    loadChannelData().then(() => {
-      populateTwChannelEditSelect();
-    });
-  } else {
-    populateTwChannelEditSelect();
-  }
-
-  editSelect.focus();
-}
-function populateTwChannelEditSelect() {
-  const editSelect = document.getElementById('tw-channel-edit-select');
-  editSelect.replaceChildren(createSelectOption('', '选择频道…'));
-  appendPlatformChannelOptions(editSelect, 'twitch');
-}
-function cancelTwChannelEdit() {
-  const channelSpan = document.getElementById('tw-channel-name');
-  const editContainer = document.getElementById('tw-channel-edit-container');
-
-  hideInfoRowEdit(channelSpan, editContainer);
-}
-async function saveTwChannelEdit() {
-  const editSelect = document.getElementById('tw-channel-edit-select');
-  const selectedValue = editSelect.value;
-
-  if (!selectedValue) {
-    showNotification('请选择频道', 'error');
-    return;
-  }
-
-  try {
-    const channelInfo = JSON.parse(selectedValue);
-    const data = await postChannelUpdate({
-      platform: 'twitch',
-      channel_id: channelInfo.id,
-      channel_name: channelInfo.name
-    });
-
-    if (!data.success) {
-      showNotification(data.message || 'Twitch频道更新失败', 'error');
-      return;
-    }
-
-    showNotification(data.message || 'Twitch频道已更新', 'success');
-    cancelTwChannelEdit();
-    // Refresh status immediately to show updated info
-    refreshStatus();
-  } catch (error) {
-    showNotification('更新失败：' + error.message, 'error');
-  }
-}
-// Twitch area editing functions
-function toggleTwAreaEdit() {
-  const areaSpan = document.getElementById('tw-area');
-  const editContainer = document.getElementById('tw-area-edit-container');
-  const editSelect = document.getElementById('tw-area-edit-select');
-
-  showInfoRowEdit(areaSpan, editContainer);
-
-  // Load areas if not already loaded
-  if (!state.areasData) {
-    loadChannelData().then(() => {
-      populateTwAreaEditSelect();
-    });
-  } else {
-    populateTwAreaEditSelect();
-  }
-
-  editSelect.focus();
-}
-function populateTwAreaEditSelect() {
-  const editSelect = document.getElementById('tw-area-edit-select');
-  editSelect.replaceChildren(createAreaOption('', '选择分区…'));
-
-  if (state.areasData && state.areasData.areas) {
-    appendAreaOptions(editSelect, state.areasData.areas);
-  }
-}
-function cancelTwAreaEdit() {
-  const areaSpan = document.getElementById('tw-area');
-  const editContainer = document.getElementById('tw-area-edit-container');
-
-  hideInfoRowEdit(areaSpan, editContainer);
-}
-async function saveTwAreaEdit() {
-  const editSelect = document.getElementById('tw-area-edit-select');
-  const areaId = parseInteger(editSelect.value, 0);
-
-  if (!areaId) {
-    showNotification('请选择分区', 'error');
-    return;
-  }
-
-  try {
-    const data = await postChannelUpdate({
-      platform: 'twitch',
-      area_id: areaId
-    });
-
-    if (!data.success) {
-      showNotification(data.message || 'Twitch配置分区更新失败', 'error');
-      return;
-    }
-
-    showNotification(data.message || 'Twitch配置分区已更新', 'success');
-    cancelTwAreaEdit();
-    // Refresh status immediately to show updated info
-    refreshStatus();
-  } catch (error) {
-    showNotification('更新失败：' + error.message, 'error');
-  }
-}
-async function toggleNcChannelEdit() {
-  const channelSpan = document.getElementById('nc-channel-name');
-  const editContainer = document.getElementById('nc-channel-edit-container');
-  const editSelect = document.getElementById('nc-channel-edit-select');
-
-  showInfoRowEdit(channelSpan, editContainer);
-
-  try {
-    state.channelsData = await getJson('/api/channels');
-  } catch (error) {
-    showNotification('加载频道列表失败：' + error.message, 'error');
-    return;
-  }
-
-  populateNcChannelEditSelect();
-  editSelect.focus();
-}
-function populateNcChannelEditSelect() {
-  const editSelect = document.getElementById('nc-channel-edit-select');
-  editSelect.replaceChildren(createSelectOption('', '选择频道…'));
-  appendPlatformChannelOptions(editSelect, 'niconico');
-
-  const channelSpan = document.getElementById('nc-channel-name');
-  const currentId = (channelSpan?.dataset.channelId || '').trim();
-  const currentName = (channelSpan?.textContent || '').trim();
-  for (const option of editSelect.options) {
+function preselectNcChannel(select, span) {
+  const currentId = (span?.dataset.channelId || '').trim();
+  const currentName = (span?.textContent || '').trim();
+  for (const option of select.options) {
     if (!option.value) continue;
     try {
       const info = JSON.parse(option.value);
       if (
-        (currentId && currentId !== '-' && info.id === currentId)
-        || (currentName && currentName !== '-' && info.name === currentName)
+        (currentId && currentId !== MISSING && info.id === currentId)
+        || (currentName && currentName !== MISSING && info.name === currentName)
       ) {
-        editSelect.value = option.value;
+        select.value = option.value;
         break;
       }
-    } catch (_error) {
+    } catch {
       // Skip malformed option values from older cached channel lists.
     }
   }
 
-  if (editSelect.options.length <= 1) {
+  if (select.options.length <= 1) {
     showNotification('没有可选择的 Niconico 频道。请先在频道配置中填写 Niconico 频道ID 和转播标题。', 'error');
   }
 }
-function cancelNcChannelEdit() {
-  const channelSpan = document.getElementById('nc-channel-name');
-  const editContainer = document.getElementById('nc-channel-edit-container');
+function openChannelRow(row) {
+  const dom = fieldEditDom(row);
+  showInfoRowEdit(dom.span, dom.container);
 
-  hideInfoRowEdit(channelSpan, editContainer);
+  if (row.platform === 'niconico') {
+    // Niconico keeps its own list rather than the shared channel cache, so read
+    // it fresh — a channel added in another tab should show up here.
+    getJson('/api/channels')
+      .then((data) => {
+        state.channelsData = data;
+        fillChannelSelect(dom.select, row.platform);
+        preselectNcChannel(dom.select, dom.span);
+      })
+      .catch((error) => {
+        showNotification('加载频道列表失败：' + error.message, 'error');
+      });
+  } else if (state.channelsData) {
+    fillChannelSelect(dom.select, row.platform);
+  } else {
+    loadChannelData().then(() => fillChannelSelect(dom.select, row.platform));
+  }
+
+  dom.select?.focus();
 }
-async function saveNcChannelEdit() {
-  const editSelect = document.getElementById('nc-channel-edit-select');
-  const selectedValue = editSelect.value;
+async function saveChannelRow(row) {
+  const dom = fieldEditDom(row);
+  const selectedValue = dom.select?.value || '';
 
   if (!selectedValue) {
     showNotification('请选择频道', 'error');
@@ -1270,107 +872,39 @@ async function saveNcChannelEdit() {
   }
 
   try {
-    const channelInfo = JSON.parse(selectedValue);
-    const data = await postChannelUpdate({
-      platform: 'niconico',
-      channel_id: channelInfo.id,
-      channel_name: channelInfo.name
-    });
-
-    if (!data.success) {
-      showNotification(data.message || 'Niconico频道更新失败', 'error');
-      return;
-    }
-
-    showNotification(data.message || 'Niconico频道已更新', 'success');
-    cancelNcChannelEdit();
-    setNcChannelDisplay(channelInfo.name, channelInfo.id);
-    refreshStatus();
+    const payload = channelEditPayload(selectedValue);
+    await commitFieldEdit(
+      row,
+      payload,
+      {
+        failText: `${row.label}频道更新失败`,
+        okText: `${row.label}频道已更新`,
+        echo: () => {
+          if (row.platform === 'niconico') {
+            setNcChannelDisplay(payload.channel_name, payload.channel_id);
+          }
+        }
+      }
+    );
   } catch (error) {
     showNotification('更新失败：' + error.message, 'error');
   }
 }
-function toggleNcQualityEdit() {
-  const qualitySpan = document.getElementById('nc-quality');
-  const editContainer = document.getElementById('nc-quality-edit-container');
-  const editSelect = document.getElementById('nc-quality-edit-select');
+function openAreaRow(row) {
+  const dom = fieldEditDom(row);
+  showInfoRowEdit(dom.span, dom.container);
 
-  showInfoRowEdit(qualitySpan, editContainer);
-  populateQualityOptions(editSelect, 'niconico');
-
-  const currentDisplayText = qualitySpan.textContent;
-  if (currentDisplayText && currentDisplayText !== '-') {
-    editSelect.value = getTechnicalQualityValue(currentDisplayText, 'niconico');
-  }
-
-  editSelect.focus();
-}
-function cancelNcQualityEdit() {
-  hideInfoRowEdit(
-    document.getElementById('nc-quality'),
-    document.getElementById('nc-quality-edit-container')
-  );
-}
-async function saveNcQualityEdit() {
-  const quality = document.getElementById('nc-quality-edit-select').value;
-
-  if (!quality) {
-    showNotification('请选择画质', 'error');
-    return;
-  }
-
-  try {
-    const data = await postChannelUpdate({
-      platform: 'niconico',
-      quality
-    });
-
-    if (!data.success) {
-      showNotification(data.message || 'Niconico画质更新失败', 'error');
-      return;
-    }
-
-    showNotification(data.message || 'Niconico画质已更新', 'success');
-    cancelNcQualityEdit();
-    document.getElementById('nc-quality').textContent = getQualityDisplayText(quality, 'niconico');
-    refreshStatus();
-  } catch (error) {
-    showNotification('更新失败：' + error.message, 'error');
-  }
-}
-function toggleNcAreaEdit() {
-  const areaSpan = document.getElementById('nc-area');
-  const editContainer = document.getElementById('nc-area-edit-container');
-  const editSelect = document.getElementById('nc-area-edit-select');
-
-  showInfoRowEdit(areaSpan, editContainer);
-
-  if (!state.areasData) {
-    loadChannelData().then(() => {
-      populateNcAreaEditSelect();
-    });
+  if (state.areasData) {
+    fillAreaSelect(dom.select);
   } else {
-    populateNcAreaEditSelect();
+    loadChannelData().then(() => fillAreaSelect(dom.select));
   }
 
-  editSelect.focus();
+  dom.select?.focus();
 }
-function populateNcAreaEditSelect() {
-  const editSelect = document.getElementById('nc-area-edit-select');
-  editSelect.replaceChildren(createAreaOption('', '选择分区…'));
-
-  if (state.areasData && state.areasData.areas) {
-    appendAreaOptions(editSelect, state.areasData.areas);
-  }
-}
-function cancelNcAreaEdit() {
-  hideInfoRowEdit(
-    document.getElementById('nc-area'),
-    document.getElementById('nc-area-edit-container')
-  );
-}
-async function saveNcAreaEdit() {
-  const areaId = parseInteger(document.getElementById('nc-area-edit-select').value, 0);
+async function saveAreaRow(row) {
+  const dom = fieldEditDom(row);
+  const areaId = parseInteger(dom.select?.value, 0);
 
   if (!areaId) {
     showNotification('请选择分区', 'error');
@@ -1378,21 +912,69 @@ async function saveNcAreaEdit() {
   }
 
   try {
-    const data = await postChannelUpdate({
-      platform: 'niconico',
-      area_id: areaId
-    });
-
-    if (!data.success) {
-      showNotification(data.message || 'Niconico配置分区更新失败', 'error');
-      return;
-    }
-
-    showNotification(data.message || 'Niconico配置分区已更新', 'success');
-    cancelNcAreaEdit();
-    refreshStatus();
+    await commitFieldEdit(
+      row,
+      { area_id: areaId },
+      { failText: `${row.label}配置分区更新失败`, okText: `${row.label}配置分区已更新` }
+    );
   } catch (error) {
     showNotification('更新失败：' + error.message, 'error');
+  }
+}
+function openQualityRow(row) {
+  const dom = fieldEditDom(row);
+  showInfoRowEdit(dom.span, dom.container);
+  populateQualityOptions(dom.select, row.platform);
+
+  // The row shows a display label; the select wants the technical value.
+  const currentDisplayText = dom.span?.textContent;
+  if (dom.select && currentDisplayText && currentDisplayText !== MISSING) {
+    dom.select.value = getTechnicalQualityValue(currentDisplayText, row.platform);
+  }
+
+  dom.select?.focus();
+}
+async function saveQualityRow(row) {
+  const dom = fieldEditDom(row);
+  const quality = dom.select?.value || '';
+
+  if (!quality) {
+    showNotification('请选择画质', 'error');
+    return;
+  }
+
+  try {
+    await commitFieldEdit(
+      row,
+      { quality },
+      {
+        failText: `${row.label}画质更新失败`,
+        okText: `${row.label}画质已更新`,
+        echo: () => {
+          if (dom.span) {
+            dom.span.textContent = getQualityDisplayText(quality, row.platform);
+          }
+        }
+      }
+    );
+  } catch (error) {
+    showNotification('更新失败：' + error.message, 'error');
+  }
+}
+const FIELD_EDIT_OPENERS = { channel: openChannelRow, area: openAreaRow, quality: openQualityRow };
+const FIELD_EDIT_SAVERS = { channel: saveChannelRow, area: saveAreaRow, quality: saveQualityRow };
+function bindFieldEditRows() {
+  for (const row of PLATFORM_EDIT_ROWS) {
+    const ids = fieldEditIds(row);
+    document
+      .getElementById(ids.editButton)
+      ?.addEventListener('click', () => FIELD_EDIT_OPENERS[row.kind](row));
+    document
+      .getElementById(ids.saveButton)
+      ?.addEventListener('click', () => FIELD_EDIT_SAVERS[row.kind](row));
+    document
+      .getElementById(ids.cancelButton)
+      ?.addEventListener('click', () => closeFieldEdit(row));
   }
 }
 // Area editing functions
@@ -1731,28 +1313,6 @@ export {
   handleTitleEditKeydown,
   toggleTitleEdit,
   cancelTitleEdit,
-  toggleYtChannelEdit,
-  populateYtChannelEditSelect,
-  cancelYtChannelEdit,
-  saveYtChannelEdit,
-  toggleYtAreaEdit,
-  populateYtAreaEditSelect,
-  cancelYtAreaEdit,
-  saveYtAreaEdit,
-  toggleYtQualityEdit,
-  cancelYtQualityEdit,
-  saveYtQualityEdit,
-  toggleTwQualityEdit,
-  cancelTwQualityEdit,
-  saveTwQualityEdit,
-  toggleTwChannelEdit,
-  populateTwChannelEditSelect,
-  cancelTwChannelEdit,
-  saveTwChannelEdit,
-  toggleTwAreaEdit,
-  populateTwAreaEditSelect,
-  cancelTwAreaEdit,
-  saveTwAreaEdit,
   toggleAreaEdit,
   populateAreaEditSelect,
   cancelAreaEdit,
