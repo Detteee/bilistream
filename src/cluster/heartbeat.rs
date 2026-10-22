@@ -24,8 +24,11 @@ use crate::plugins::{
 };
 use axum::body::Bytes;
 use futures_util::future::join_all;
+use futures_util::FutureExt;
 use std::collections::hash_map::DefaultHasher;
+use std::future::Future;
 use std::hash::{Hash, Hasher};
+use std::panic::AssertUnwindSafe;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -471,6 +474,92 @@ fn stop_handoff_report(current: &mut Option<Arc<AutomaticHandoffLog>>, cfg: &Con
     }
 }
 
+/// Restart backoff for one supervised cluster loop. A loop that ran this long
+/// before panicking counts as healthy, so the next restart starts over at the
+/// minimum instead of inheriting a stale penalty.
+#[derive(Clone, Copy)]
+pub(super) struct SupervisePolicy {
+    pub(super) min: Duration,
+    pub(super) max: Duration,
+    pub(super) healthy_run: Duration,
+}
+
+const CLUSTER_SUPERVISE: SupervisePolicy = SupervisePolicy {
+    min: Duration::from_secs(5),
+    max: Duration::from_secs(300),
+    healthy_run: Duration::from_secs(600),
+};
+
+/// Keeps a cluster loop alive across panics. These four loops are the node's
+/// entire cluster duty, so a finished task would silently stop heartbeats,
+/// self-checks or the YouTube index until the process restarted, and peers
+/// would see this node go stale with nothing but a stderr backtrace to say why.
+async fn supervise_loop<F, Fut>(name: &str, run: F)
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = ()>,
+{
+    supervise_loop_with(name, CLUSTER_SUPERVISE, run).await;
+}
+
+pub(super) async fn supervise_loop_with<F, Fut>(name: &str, policy: SupervisePolicy, mut run: F)
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = ()>,
+{
+    let mut backoff = policy.min;
+    loop {
+        let started = Instant::now();
+        match AssertUnwindSafe(run()).catch_unwind().await {
+            Ok(()) => return,
+            Err(payload) => {
+                if started.elapsed() >= policy.healthy_run {
+                    backoff = policy.min;
+                }
+                tracing::error!(
+                    "集群{name}任务异常退出：{}；{} 秒后重启",
+                    panic_message(payload.as_ref()),
+                    backoff.as_secs()
+                );
+                tokio::time::sleep(backoff).await;
+                backoff = (backoff * 2).min(policy.max);
+            }
+        }
+    }
+}
+
+/// Panic text for the log stream. The runtime's default hook already prints it
+/// to stderr; this repeats it where the operator looks, already sanitized.
+fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
+    let text = payload
+        .downcast_ref::<&str>()
+        .map(|text| (*text).to_string())
+        .or_else(|| payload.downcast_ref::<String>().cloned())
+        .unwrap_or_default();
+    safe_diagnostic(&text)
+}
+
+/// An in-flight latch that clears on drop, including while a panicking task
+/// unwinds. Clearing it at the end of the task body instead would leave the
+/// latch set for the life of the process, silently disabling the guarded
+/// recovery path with only a debug line to show for it.
+pub(super) struct InFlight(&'static AtomicBool);
+
+impl InFlight {
+    pub(super) fn claim(latch: &'static AtomicBool) -> Option<Self> {
+        latch
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .ok()
+            .map(|_| Self(latch))
+    }
+}
+
+impl Drop for InFlight {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
+}
+
 pub struct ClusterWorker {
     heartbeat: tokio::task::JoinHandle<()>,
     self_check: tokio::task::JoinHandle<()>,
@@ -490,7 +579,7 @@ impl Drop for ClusterWorker {
 pub fn start_cluster_worker() -> ClusterWorker {
     super::sync::mark_process_started();
     super::fencing::start_execution_fence_watchdog();
-    let heartbeat = tokio::spawn(async {
+    let heartbeat = tokio::spawn(supervise_loop("心跳", || async {
         let mut handoff_report = None;
         loop {
             let cycle_started = Instant::now();
@@ -541,14 +630,17 @@ pub fn start_cluster_worker() -> ClusterWorker {
             ))
             .await;
         }
-    });
+    }));
     // Self-check latency cannot delay heartbeats to healthy peers, and neither
     // can YouTube index fetches or the owner's Google calls.
     ClusterWorker {
         heartbeat,
-        self_check: tokio::spawn(super::self_check::run_self_checks()),
-        external_api: tokio::spawn(super::external_api::run_external_api_checks()),
-        yt_index: tokio::spawn(super::yt_index::run_yt_index()),
+        self_check: tokio::spawn(supervise_loop("自检", super::self_check::run_self_checks)),
+        external_api: tokio::spawn(supervise_loop(
+            "外网检测",
+            super::external_api::run_external_api_checks,
+        )),
+        yt_index: tokio::spawn(supervise_loop("索引", super::yt_index::run_yt_index)),
     }
 }
 
@@ -664,13 +756,10 @@ fn schedule_auto_owner_transition(
         return;
     }
 
-    if AUTO_TRANSITION_IN_FLIGHT
-        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-        .is_err()
-    {
+    let Some(in_flight) = InFlight::claim(&AUTO_TRANSITION_IN_FLIGHT) else {
         tracing::debug!("Cluster owner transition already in progress");
         return;
-    }
+    };
 
     let preserve_source_drain = status
         .nodes
@@ -683,6 +772,7 @@ fn schedule_auto_owner_transition(
     let report = Arc::clone(report);
     report.begin_attempt(&view, now);
     tokio::spawn(async move {
+        let _in_flight = in_flight;
         let progress_report = Arc::clone(&report);
         let progress_cfg = cfg.clone();
         let observer: HandoffObserver = Arc::new(move |progress| {
@@ -692,7 +782,7 @@ fn schedule_auto_owner_transition(
                 Instant::now(),
             );
         });
-        let result = super::sync::finalize_cluster_node_switch_observed(
+        let result = match AssertUnwindSafe(super::sync::finalize_cluster_node_switch_observed(
             &cfg,
             &status,
             &previous_owner,
@@ -700,10 +790,20 @@ fn schedule_auto_owner_transition(
             preserve_source_drain,
             true,
             Some(observer),
-        )
-        .await;
+        ))
+        .catch_unwind()
+        .await
+        {
+            Ok(result) => result,
+            Err(payload) => {
+                tracing::error!(
+                    "集群自动交接任务异常退出：{}；本轮按未完成处理",
+                    panic_message(payload.as_ref())
+                );
+                Err("自动交接任务异常退出".to_string())
+            }
+        };
         report.finish(&result, &HandoffView::current(&cfg), Instant::now());
-        AUTO_TRANSITION_IN_FLIGHT.store(false, Ordering::Release);
     });
 }
 
@@ -712,17 +812,24 @@ static DEMOTION_RETRY_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
 /// Off the heartbeat path: a timeout to a dead source must not delay
 /// heartbeats to healthy peers.
 fn schedule_unconfirmed_demotion(cfg: &Config) {
-    if cluster_state_read().unconfirmed_demotion.is_none()
-        || DEMOTION_RETRY_IN_FLIGHT
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .is_err()
-    {
+    if cluster_state_read().unconfirmed_demotion.is_none() {
         return;
     }
+    let Some(in_flight) = InFlight::claim(&DEMOTION_RETRY_IN_FLIGHT) else {
+        return;
+    };
     let cfg = cfg.clone();
     tokio::spawn(async move {
-        retry_unconfirmed_demotion(&cfg).await;
-        DEMOTION_RETRY_IN_FLIGHT.store(false, Ordering::Release);
+        let _in_flight = in_flight;
+        if let Err(payload) = AssertUnwindSafe(retry_unconfirmed_demotion(&cfg))
+            .catch_unwind()
+            .await
+        {
+            tracing::error!(
+                "集群欠交接重试任务异常退出：{}；等待下一轮心跳重试",
+                panic_message(payload.as_ref())
+            );
+        }
     });
 }
 

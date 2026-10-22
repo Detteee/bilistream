@@ -2,7 +2,8 @@ use super::*;
 use crate::config::Config;
 use crate::test_support::config;
 use std::collections::HashMap;
-use std::sync::{Mutex, MutexGuard};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 static CLUSTER_STATE_TEST_LOCK: Mutex<()> = Mutex::new(());
@@ -2765,4 +2766,50 @@ fn peer_settings_payloads_never_carry_the_niconico_cookie_file() {
     ))
     .unwrap();
     assert!(!settings.contains("niconico"));
+}
+
+#[tokio::test]
+async fn a_panicked_cluster_loop_restarts_instead_of_stopping() {
+    let runs = Arc::new(AtomicUsize::new(0));
+    let seen = Arc::clone(&runs);
+    let policy = heartbeat::SupervisePolicy {
+        min: Duration::from_millis(1),
+        max: Duration::from_millis(2),
+        healthy_run: Duration::from_secs(600),
+    };
+    heartbeat::supervise_loop_with("测试", policy, move || {
+        let seen = Arc::clone(&seen);
+        async move {
+            if seen.fetch_add(1, Ordering::AcqRel) == 0 {
+                panic!("第一轮任务异常");
+            }
+        }
+    })
+    .await;
+    assert_eq!(
+        runs.load(Ordering::Acquire),
+        2,
+        "一轮 panic 之后循环必须继续，而不是静默退出"
+    );
+}
+
+#[test]
+fn an_in_flight_latch_clears_while_its_holder_unwinds() {
+    static LATCH: AtomicBool = AtomicBool::new(false);
+    let held = heartbeat::InFlight::claim(&LATCH);
+    assert!(held.is_some(), "首个任务占位成功");
+    assert!(
+        heartbeat::InFlight::claim(&LATCH).is_none(),
+        "第二个任务必须等待在途任务"
+    );
+    let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _held = held;
+        panic!("任务在占位期间异常");
+    }));
+    assert!(unwound.is_err());
+    assert!(!LATCH.load(Ordering::Acquire), "异常退出必须清空占位");
+    assert!(
+        heartbeat::InFlight::claim(&LATCH).is_some(),
+        "清空后恢复路径必须能再次启动"
+    );
 }
