@@ -7,6 +7,7 @@ pub use super::holodex::{
 use super::stream_item::StreamItem;
 use super::subprocess::{configure_no_window, executable_command};
 use crate::config::load_config;
+use crate::logging::safe_diagnostic;
 use crate::plugins::source_status::SourceStatus;
 use chrono::{DateTime, Local};
 use regex::Regex;
@@ -1070,9 +1071,11 @@ async fn get_status_with_yt_dlp(
         if strict && !yt_dlp_says_offline(&stderr) {
             // Network, 429/5xx, bot check or anything else: not a statement
             // that the channel is offline.
+            // Raw stderr is capped, redacted and single-lined before it can
+            // reach a log record or the operator's status line.
             return Err(format!(
                 "yt-dlp error is not an offline statement: {}",
-                stderr.trim()
+                safe_diagnostic(&stderr)
             )
             .into());
         }

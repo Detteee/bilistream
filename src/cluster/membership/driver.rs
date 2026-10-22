@@ -180,18 +180,13 @@ impl Runtime {
     /// worker or an operator retry.
     pub fn spawn_driver(&self, id: String) {
         let key = format!("{}|{id}", self.membership.store().data_dir().display());
-        if !running()
-            .lock()
-            .is_ok_and(|mut set| set.insert(key.clone()))
-        {
+        if !running_guard().insert(key.clone()) {
             return;
         }
         let this = self.clone();
         tokio::spawn(async move {
             let result = this.drive(&id).await;
-            if let Ok(mut set) = running().lock() {
-                set.remove(&key);
-            }
+            running_guard().remove(&key);
             if let Err(error) = result {
                 tracing::warn!("成员操作 {id} 暂停：{error}");
                 let message = error.to_string();
@@ -1188,6 +1183,15 @@ fn running() -> &'static Mutex<HashSet<String>> {
     RUNNING.get_or_init(Default::default)
 }
 
+/// The running set is advisory bookkeeping, so a panicked driver must not lock
+/// the coordinator out of every later operation: recover the poisoned guard
+/// instead of treating it as fatal.
+fn running_guard() -> std::sync::MutexGuard<'static, HashSet<String>> {
+    running()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 fn process_fence_waits() -> Arc<Mutex<HashMap<String, tokio::time::Instant>>> {
     static WAITS: std::sync::OnceLock<Arc<Mutex<HashMap<String, tokio::time::Instant>>>> =
         std::sync::OnceLock::new();
@@ -1277,14 +1281,38 @@ impl Drop for RecoveryWorker {
 pub fn start_recovery_worker() -> RecoveryWorker {
     RecoveryWorker(tokio::spawn(async {
         loop {
-            if let Ok(runtime) = Runtime::process() {
-                if runtime.membership.identity().is_ok() {
-                    if let Err(error) = runtime.recover().await {
-                        tracing::debug!("成员操作恢复检查失败：{error}");
+            match Runtime::process() {
+                // Normal before the admin server owns the runtime.
+                Err(error) => tracing::debug!("成员操作恢复跳过：运行时尚未就绪；{error}"),
+                Ok(runtime) => match runtime.membership.identity() {
+                    Err(error) => tracing::warn!("成员操作恢复跳过：本地节点身份不可用；{error}"),
+                    Ok(_) => {
+                        if let Err(error) = runtime.recover().await {
+                            tracing::debug!("成员操作恢复检查失败：{error}");
+                        }
                     }
-                }
+                },
             }
             tokio::time::sleep(Duration::from_secs(20)).await;
         }
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A panicked driver used to poison the coordinator's running set, which
+    /// then silently refused every later operation for the life of the process.
+    #[test]
+    fn a_poisoned_running_set_still_admits_the_next_driver() {
+        let unwound = std::panic::catch_unwind(|| {
+            let _held = running().lock().unwrap();
+            panic!("持有运行集时异常");
+        });
+        assert!(unwound.is_err());
+        assert!(running().is_poisoned());
+        assert!(running_guard().insert("恢复后仍可登记".into()));
+        assert!(running_guard().remove("恢复后仍可登记"));
+    }
 }
