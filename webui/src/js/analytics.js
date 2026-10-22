@@ -359,7 +359,7 @@ function renderHours(summary, r) {
   }
   const label = x => (b.bucket === 'day' ? formatMonthDay(x.start) : `${formatMonthDay(x.start)} ${formatClockShort(x.start)}`);
   const fig = el('figure', 'analytics-chart');
-  fig.append(bars, legend, dataTable(['时段', 'YouTube (小时)', 'Twitch (小时)', 'Niconico (小时)'],
+  fig.append(bars, legend, dataTable(['时段', 'YouTube（小时）', 'Twitch（小时）', 'Niconico（小时）'],
     buckets.map(x => [label(x), formatHours(x.live_secs?.YT), formatHours(x.live_secs?.TW), formatHours(x.live_secs?.NC)])));
   setBody('hours', fig);
   markLoaded('hours');
@@ -725,7 +725,7 @@ function renderCalendar(summary) {
   const scaleItem = el('li');
   const scale = el('span', 'analytics-heat-scale');
   scale.title = '当天推流时长，从 0 小时到 24 小时';
-  scaleItem.append(document.createTextNode('0小时'), scale, document.createTextNode('24小时'));
+  scaleItem.append(document.createTextNode('0 小时'), scale, document.createTextNode('24 小时'));
   legend.append(scaleItem);
   for (const [label, attrs] of [['有异常', { fail: '' }], ['未记录', { gap: '' }]]) {
     const li = el('li');
@@ -735,7 +735,7 @@ function renderCalendar(summary) {
     legend.append(li);
   }
   const fig = el('figure', 'analytics-chart');
-  fig.append(wrap, legend, dataTable(['日期', '推流时长 (小时)', '异常'], days.map(d => [formatMonthDay(d.day), formatHours(d.live_secs), formatCount(d.failures)])));
+  fig.append(wrap, legend, dataTable(['日期', '推流时长（小时）', '异常'], days.map(d => [formatMonthDay(d.day), formatHours(d.live_secs), formatCount(d.failures)])));
   setBody('calendar', fig);
   markLoaded('calendar');
 }

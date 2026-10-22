@@ -2409,7 +2409,8 @@
                     <small class="settings-help-text" id="notify-bind-help">需先保存 AppID 和 AppSecret。配对码 5 分钟内有效，请在发送节点上绑定。</small>
                   </div>
                 </div>
-                <small class="settings-help-text" id="notify-app-secret-help">AppSecret 和管理员 openid 加密保存，不写入备份，保存后不再显示。openid 会自动同步到所有集群节点；AppSecret 需要在每个节点分别填写。</small>
+                <!-- 文案由 notify-state.js 的 APPSECRET_HELP_SYNC 提供，此处留空以免两处并存 -->
+                <small class="settings-help-text" id="notify-app-secret-help"></small>
               </section>
 
               <section class="notify-section" aria-labelledby="notify-status-title">
@@ -2543,7 +2544,7 @@
                   </span>
                   <span>回复管理员的只读指令</span>
                 </label>
-                <small class="settings-help-text" id="notify-commands-help">在 QQ 向机器人发送 status、event、quota 或 help 可查询，只回复已绑定的管理员，不会改变任何设置。管理员发来的任何消息都会刷新回复窗口。</small>
+                <small class="settings-help-text" id="notify-commands-help">QQ 发 status、event、quota 或 help 可查询；仅回已绑定管理员，不改设置，管理员消息会刷新窗口。</small>
               </section>
 
               <details class="disclosure notify-section notify-advanced" id="notify-advanced">

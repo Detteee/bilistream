@@ -9,6 +9,8 @@ export function localHourOffset(date = new Date()) {
   return Math.round(-date.getTimezoneOffset() / 60);
 }
 
+// Mirrors `MISSING` in format.js: same glyph, kept as a literal because this
+// chunk must not import an app module.
 export const DASH = '--';
 
 const countFmt = new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 0 });

@@ -1,9 +1,14 @@
 // format.js — pure formatters shared by the dashboard, the cluster panel and
 // the status cards. Nothing here touches the DOM.
 
+// The one missing-value glyph. The analytics chunk cannot import this module
+// without making esbuild emit a third shared chunk, so `analytics-format.js`
+// repeats the same literal as `DASH`; both must change together.
+export const MISSING = '--';
+
 export function formatNetworkRate(kbps) {
   if (!Number.isFinite(kbps) || kbps <= 0) {
-    return '-';
+    return MISSING;
   }
   if (kbps >= 1000) {
     return `${(kbps / 1000).toFixed(2)} Mb/s`;
@@ -12,12 +17,12 @@ export function formatNetworkRate(kbps) {
 }
 
 export function formatSpeedRatio(value) {
-  return Number.isFinite(value) && value > 0 ? `${value.toFixed(2)}x` : '-';
+  return Number.isFinite(value) && value > 0 ? `${value.toFixed(2)}x` : MISSING;
 }
 
 export function formatStreamTime(secs) {
   if (!Number.isFinite(secs) || secs < 0) {
-    return '-';
+    return MISSING;
   }
   const totalSec = Math.floor(secs);
   const h = Math.floor(totalSec / 3600);
@@ -31,13 +36,13 @@ export function formatStreamTime(secs) {
 
 export function formatFps(value) {
   if (!Number.isFinite(value) || value < 0) {
-    return '-';
+    return MISSING;
   }
   return value >= 100 ? `${Math.round(value)}` : value.toFixed(1);
 }
 
 export function formatFrameCount(value) {
-  return Number.isFinite(value) && value >= 0 ? Math.round(value).toLocaleString() : '-';
+  return Number.isFinite(value) && value >= 0 ? Math.round(value).toLocaleString() : MISSING;
 }
 
 export function formatHlsCacheStatus(enabled, latencySecs) {
@@ -145,7 +150,7 @@ export function asBitrateHistory(values) {
 }
 
 export function formatAreaText(areaName, areaId) {
-  return areaName ? `${areaName} (${areaId})` : (areaId || '-');
+  return areaName ? `${areaName} (${areaId})` : (areaId || MISSING);
 }
 
 // YouTube Data API key pool (/api/youtube/keys) for the settings view.
@@ -291,7 +296,7 @@ export function formatGoliveSummary(playlist, rows) {
 
 export function formatCount(value) {
   if (!Number.isFinite(value) || value < 0) {
-    return '-';
+    return MISSING;
   }
   return Math.round(value).toLocaleString('zh-CN');
 }
@@ -310,11 +315,11 @@ export function biliRoomStats(source) {
 
 export function formatLiveDuration(unixSeconds) {
   if (!Number.isFinite(unixSeconds) || unixSeconds <= 0) {
-    return '-';
+    return MISSING;
   }
   const start = new Date(unixSeconds * 1000);
   if (Number.isNaN(start.getTime())) {
-    return '-';
+    return MISSING;
   }
   const elapsedSec = Math.max(0, Math.floor((Date.now() - start.getTime()) / 1000));
   return formatStreamTime(elapsedSec);

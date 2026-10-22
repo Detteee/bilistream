@@ -120,3 +120,15 @@ test('B1: push-ok uptime 2 小时 0 分钟 → 2 小时 3 分钟 after 185 s cha
   assert.equal(at(later), '已连接 · 2 小时 3 分钟');
   assert.notEqual(nodeSignature(dotRow(at(later))), before);
 });
+
+test('N19: the missing-value glyph is one literal in both formatter modules', async () => {
+  // The analytics chunk cannot import format.js (build.mjs rejects the third
+  // shared chunk), so the glyph is copied — a test is what keeps the copies equal.
+  const app = await import('../src/js/format.js');
+  const chunk = await import('../src/js/analytics-format.js');
+  assert.equal(app.MISSING, '--');
+  assert.equal(chunk.DASH, app.MISSING);
+  const formatSrc = await src('js/format.js');
+  assert.doesNotMatch(formatSrc, /return '-';/);
+  assert.match(await src('js/analytics-format.js'), /Mirrors `MISSING` in format\.js/);
+});
