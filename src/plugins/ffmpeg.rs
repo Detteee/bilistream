@@ -1731,20 +1731,29 @@ fn unix_time_millis_from(time: std::time::SystemTime) -> u64 {
         .unwrap_or(0)
 }
 
-fn update_network_counters(role: FfmpegStatsRole, bitrate_kbps: f32) {
-    let now = now_millis();
-    let (bitrate, total, last_sample) = match role {
+/// The bitrate, total-bytes and last-sample atomics behind one ffmpeg role.
+/// Cache and push counters are separate so a cache pass never pollutes the
+/// pushed bitrate the operator sees.
+fn stats_cell(
+    role: FfmpegStatsRole,
+) -> (&'static AtomicU32, &'static AtomicU64, &'static AtomicU64) {
+    match role {
         FfmpegStatsRole::Cache => (
-            &*FFMPEG_CACHE_BITRATE_KBPS,
-            &*FFMPEG_CACHE_TOTAL_BYTES,
-            &*FFMPEG_CACHE_LAST_SAMPLE_MS,
+            &FFMPEG_CACHE_BITRATE_KBPS,
+            &FFMPEG_CACHE_TOTAL_BYTES,
+            &FFMPEG_CACHE_LAST_SAMPLE_MS,
         ),
         FfmpegStatsRole::Push => (
-            &*FFMPEG_BITRATE_KBPS,
-            &*FFMPEG_TOTAL_BYTES,
-            &*FFMPEG_LAST_SAMPLE_MS,
+            &FFMPEG_BITRATE_KBPS,
+            &FFMPEG_TOTAL_BYTES,
+            &FFMPEG_LAST_SAMPLE_MS,
         ),
-    };
+    }
+}
+
+fn update_network_counters(role: FfmpegStatsRole, bitrate_kbps: f32) {
+    let now = now_millis();
+    let (bitrate, total, last_sample) = stats_cell(role);
 
     bitrate.store(bitrate_kbps.to_bits(), Ordering::Relaxed);
     let previous = last_sample.swap(now, Ordering::Relaxed);
@@ -1768,18 +1777,7 @@ fn update_network_counters_from_total_bytes(
     total_bytes: u64,
 ) -> Option<f32> {
     let now = now_millis();
-    let (bitrate, total, last_sample) = match role {
-        FfmpegStatsRole::Cache => (
-            &*FFMPEG_CACHE_BITRATE_KBPS,
-            &*FFMPEG_CACHE_TOTAL_BYTES,
-            &*FFMPEG_CACHE_LAST_SAMPLE_MS,
-        ),
-        FfmpegStatsRole::Push => (
-            &*FFMPEG_BITRATE_KBPS,
-            &*FFMPEG_TOTAL_BYTES,
-            &*FFMPEG_LAST_SAMPLE_MS,
-        ),
-    };
+    let (bitrate, total, last_sample) = stats_cell(role);
 
     let previous_bitrate = f32_from_atomic_bits(bitrate);
     let previous_total = total.load(Ordering::Relaxed);
@@ -1825,18 +1823,7 @@ fn update_network_counters_from_bytes(
     delta_bytes: u64,
 ) {
     let now = now_millis();
-    let (bitrate, total, last_sample) = match role {
-        FfmpegStatsRole::Cache => (
-            &*FFMPEG_CACHE_BITRATE_KBPS,
-            &*FFMPEG_CACHE_TOTAL_BYTES,
-            &*FFMPEG_CACHE_LAST_SAMPLE_MS,
-        ),
-        FfmpegStatsRole::Push => (
-            &*FFMPEG_BITRATE_KBPS,
-            &*FFMPEG_TOTAL_BYTES,
-            &*FFMPEG_LAST_SAMPLE_MS,
-        ),
-    };
+    let (bitrate, total, last_sample) = stats_cell(role);
 
     if let Some(kbps) = bitrate_kbps {
         bitrate.store(kbps.to_bits(), Ordering::Relaxed);
