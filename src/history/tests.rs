@@ -257,6 +257,38 @@ fn new_file_is_incremental_vacuum_and_corrupt_file_is_recreated() {
     assert!(path.with_extension("sqlite.corrupt").exists());
 }
 
+/// A corrupt main file used to take the `-wal` with it: `remove_file` on both
+/// sidecars, so whatever the WAL still held was gone. When the WAL survives the
+/// failed open — here the header is intact and the damage is inside the pages —
+/// it now moves beside the aside instead of being deleted.
+#[test]
+fn a_corrupt_file_keeps_its_wal_beside_the_aside() {
+    let path = crash_left_wal(
+        "corrupt-wal",
+        true,
+        "PRAGMA user_version=6;",
+        "INSERT INTO meta(key,value) VALUES ('synthetic_wal_row','1');",
+        false,
+    );
+    let wal = path.with_file_name("history.sqlite-wal");
+    let frames = std::fs::read(&wal).unwrap();
+    // Header intact, pages missing: `quick_check` fails while the WAL is
+    // still a valid log for the file.
+    let bytes = std::fs::read(&path).unwrap();
+    std::fs::write(&path, &bytes[..4096]).unwrap();
+    let conn = schema::open_rw(&path).unwrap();
+    let version: i64 = conn
+        .query_row("PRAGMA user_version", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(version, schema::SCHEMA_VERSION);
+    let aside = path.with_file_name("history.sqlite.corrupt");
+    assert_eq!(std::fs::read(&aside).unwrap(), &bytes[..4096]);
+    assert_eq!(
+        std::fs::read(path.with_file_name("history.sqlite.corrupt-wal")).unwrap(),
+        frames
+    );
+}
+
 #[test]
 fn read_path_indexes_exist_after_migration() {
     let dir = tmp("indexes");
@@ -278,13 +310,13 @@ fn read_path_indexes_exist_after_migration() {
 }
 
 #[test]
-fn a_fresh_database_is_v7_without_the_dead_rollup_table() {
-    let dir = tmp("fresh-v7");
+fn a_fresh_database_is_v8_without_the_dead_rollup_table() {
+    let dir = tmp("fresh-v8");
     let conn = schema::open_rw(&dir.join("history.sqlite")).unwrap();
     let version: i64 = conn
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(version, 7);
+    assert_eq!(version, 8);
     for table in ["samples_1h", "bili_lives_v6"] {
         let count: i64 = conn
             .query_row(
@@ -446,18 +478,18 @@ fn the_v6_fixture_is_what_28a20792_wrote() {
 }
 
 #[test]
-fn a_fresh_v7_database_has_exactly_the_schema_of_a_bumped_28a20792_v6() {
+fn a_fresh_v8_database_has_exactly_the_schema_of_a_bumped_28a20792_v6() {
     let fresh = schema::open_rw(&tmp("fresh-shape").join("history.sqlite")).unwrap();
     let bumped = schema::open_rw(&v6_fixture("bumped-shape")).unwrap();
     let (fresh, bumped) = (schema_shape(&fresh), schema_shape(&bumped));
     assert!(fresh.iter().any(|row| row.contains("sample_frames")));
-    assert!(fresh.contains(&"user_version=[\"Integer(7)\"]".to_string()));
+    assert!(fresh.contains(&"user_version=[\"Integer(8)\"]".to_string()));
     assert!(fresh.contains(&"auto_vacuum=[\"Integer(2)\"]".to_string()));
     assert_eq!(fresh, bumped);
 }
 
 #[test]
-fn the_v6_to_v7_bump_changes_only_user_version() {
+fn the_v6_to_v8_bump_adds_the_prune_index_and_keeps_every_row() {
     let path = v6_fixture("bump-rows");
     let before = contents(&rusqlite::Connection::open(&path).unwrap());
     assert!(before.len() > 30, "{} rows", before.len());
@@ -466,10 +498,66 @@ fn the_v6_to_v7_bump_changes_only_user_version() {
     let version: i64 = conn
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(version, 7);
+    assert_eq!(version, 8);
+    let indexed: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM sqlite_master WHERE type='index' AND name='bili_lives_room_started'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(indexed, 1);
     drop(conn);
-    // Reopening a v7 file is a no-op too.
+    // Reopening a v8 file is a no-op too.
     assert_eq!(contents(&schema::open_rw(&path).unwrap()), before);
+}
+
+/// v0.8.0 shipped v7 files, which are the v6 schema with a different
+/// `user_version`. They take the same in-place path: index added, no row touched.
+#[test]
+fn a_shipped_v7_file_gains_the_prune_index_without_rewriting_rows() {
+    let path = v6_fixture("v7-upgrade");
+    {
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.pragma_update(None, "user_version", 7).unwrap();
+    }
+    let before = contents(&rusqlite::Connection::open(&path).unwrap());
+    let conn = schema::open_rw(&path).unwrap();
+    assert_eq!(contents(&conn), before);
+    let version: i64 = conn
+        .query_row("PRAGMA user_version", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(version, 8);
+    let indexed: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM sqlite_master WHERE type='index' AND name='bili_lives_room_started'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(indexed, 1);
+}
+
+/// The prune's per-row question is "did a newer live start in this room?".
+/// Without the v8 index SQLite answers it with a full scan of `bili_lives` for
+/// every candidate row: 760 ms at 20k rows on the writer connection, inside the
+/// maintenance transaction. The index makes it a covering seek (13 ms).
+#[test]
+fn the_prune_asks_about_newer_lives_through_an_index() {
+    let conn = schema::open_rw(&tmp("prune-plan").join("history.sqlite")).unwrap();
+    let plan = rows(
+        &conn,
+        "EXPLAIN QUERY PLAN SELECT b.live_key,coalesce(b.ended_at,b.started_at) FROM bili_lives b
+         WHERE NOT EXISTS(SELECT 1 FROM sessions s WHERE s.live_key=b.live_key AND s.ended_at IS NULL)
+         AND (b.ended_at IS NOT NULL OR EXISTS(SELECT 1 FROM bili_lives n WHERE n.room=b.room AND n.started_at>b.started_at))
+         ORDER BY coalesce(b.ended_at,b.started_at),b.live_key LIMIT 500",
+    )
+    .join("\n");
+    assert!(
+        plan.contains("SEARCH n USING COVERING INDEX bili_lives_room_started"),
+        "{plan}"
+    );
+    assert!(!plan.contains("SCAN n"), "{plan}");
 }
 
 #[test]
@@ -566,11 +654,12 @@ fn version_zero_with_tables_is_refused_and_left_untouched() {
 }
 
 #[test]
-fn a_version_newer_than_seven_is_refused_and_left_untouched() {
+fn a_version_newer_than_this_build_is_refused_and_left_untouched() {
     let path = v6_fixture("refuse-v8");
     {
         let conn = rusqlite::Connection::open(&path).unwrap();
-        conn.pragma_update(None, "user_version", 8).unwrap();
+        conn.pragma_update(None, "user_version", schema::SCHEMA_VERSION + 1)
+            .unwrap();
         conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))
             .unwrap();
     }
@@ -688,7 +777,8 @@ fn a_refused_file_with_a_crash_left_wal_is_left_byte_identical() {
         false,
     );
     assert_refused_with_wal(&path, "没有版本号", false);
-    let path = crash_left_wal("refuse-wal-v8", true, "PRAGMA user_version=8;", tail, true);
+    let newer = format!("PRAGMA user_version={};", schema::SCHEMA_VERSION + 1);
+    let path = crash_left_wal("refuse-wal-newer", true, &newer, tail, true);
     assert_refused_with_wal(&path, "较新", true);
 }
 
@@ -707,7 +797,7 @@ fn a_v6_file_with_a_crash_left_wal_upgrades_with_the_wal_applied() {
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 7);
+        assert_eq!(version, 8);
         let got = contents(&conn);
         assert!(got.iter().any(|row| row.contains("synthetic_wal_row")));
         assert_eq!(got, expected);

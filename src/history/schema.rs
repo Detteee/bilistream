@@ -4,14 +4,14 @@
 use rusqlite::{Connection, OpenFlags};
 use std::path::{Path, PathBuf};
 
-pub(crate) const SCHEMA_VERSION: i64 = 7;
+pub(crate) const SCHEMA_VERSION: i64 = 8;
 
-/// The only older version this build opens: 28a20792's v6. v7 is the same
-/// schema as v6 (the bump only marks the baseline), so a v6 file is upgraded by
-/// setting `user_version` alone, without rewriting any row.
+/// Older versions this build opens: 28a20792's v6 and the shipped v7. Both
+/// upgrade by adding the v8 prune index and setting `user_version`; no row is
+/// rewritten, so an interrupted upgrade cannot lose history.
 const UPGRADABLE_VERSION: i64 = 6;
 
-/// The v7 schema: the `sqlite_master` SQL of a v6 database built by
+/// The v8 schema: the `sqlite_master` SQL of a v6 database built by
 /// 28a20792's V1..V6 chain, verbatim and in creation order. Statements
 /// rewritten by `ALTER TABLE` keep the text SQLite stored for them (the added
 /// columns appended in place, the renamed `"bili_lives"` quoted). The guard
@@ -22,7 +22,11 @@ const UPGRADABLE_VERSION: i64 = 6;
 /// as NULL and reconstructed exactly from sum/count. Sample `session_id` 0
 /// means unknown, never a real `sessions.id`; `legacy_unattributed_before`
 /// marks where such rows (kept from pre-v2 data) end and is still read.
-const V7_BASELINE: &str = r#"
+///
+/// `bili_lives_room_started` is v8: the prune asks, per row, whether a newer
+/// live started in the same room, and without it that question is a full scan
+/// of `bili_lives` per candidate row.
+const V8_BASELINE: &str = r#"
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL) WITHOUT ROWID;
 CREATE TABLE boots (
   boot_id INTEGER PRIMARY KEY, node TEXT NOT NULL, started_at INTEGER NOT NULL,
@@ -177,6 +181,7 @@ CREATE TABLE "bili_lives" (
   live_time_secs INTEGER, add_fans INTEGER, danmu_num INTEGER,
   watched_count INTEGER, new_fans_club INTEGER, max_online INTEGER) WITHOUT ROWID;
 CREATE INDEX bili_lives_end ON bili_lives(ended_at);
+CREATE INDEX bili_lives_room_started ON bili_lives(room, started_at);
 INSERT INTO meta(key,value) VALUES ('legacy_unattributed_before','0'),('session_id_highwater','0');
 "#;
 
@@ -194,20 +199,34 @@ pub(crate) fn open_rw(path: &Path) -> rusqlite::Result<Connection> {
         Ok(conn) => Ok(conn),
         Err(error) if is_corrupt(&error) => {
             let aside = corrupt_name(path);
-            let _ = std::fs::remove_file(&aside);
-            std::fs::rename(path, &aside).map_err(|_| {
-                rusqlite::Error::SqliteFailure(
-                    rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_CANTOPEN),
-                    Some("无法保留损坏的统计数据库".into()),
-                )
-            })?;
-            for ext in ["-wal", "-shm"] {
-                let _ = std::fs::remove_file(path.with_file_name(format!(
-                    "{}{ext}",
-                    path.file_name().unwrap_or_default().to_string_lossy()
-                )));
+            // A stale aside from an earlier corruption must not block this one.
+            if let Err(error) = std::fs::remove_file(&aside) {
+                if error.kind() != std::io::ErrorKind::NotFound {
+                    return Err(cannot_keep(&error));
+                }
             }
-            tracing::warn!("统计数据库损坏，已改名保留并重新创建");
+            std::fs::rename(path, &aside).map_err(|error| cannot_keep(&error))?;
+            // The `-wal` may hold the newest rows of a database whose main file
+            // is damaged, so it is kept beside the aside rather than deleted;
+            // `-shm` goes with it because SQLite rebuilds it from the WAL.
+            for ext in ["-wal", "-shm"] {
+                let from = with_suffix(path, ext);
+                if !from.exists() {
+                    continue;
+                }
+                let to = with_suffix(&aside, ext);
+                let _ = std::fs::remove_file(&to);
+                if let Err(error) = std::fs::rename(&from, &to) {
+                    tracing::warn!(
+                        "统计数据库旁路文件无法保留：{}",
+                        crate::logging::safe_diagnostic(&error.to_string())
+                    );
+                }
+            }
+            tracing::warn!(
+                "统计数据库损坏，已改名保留为 {} 并重新创建",
+                aside.display()
+            );
             open_rw_once(path)
         }
         Err(error) => Err(error),
@@ -216,6 +235,19 @@ pub(crate) fn open_rw(path: &Path) -> rusqlite::Result<Connection> {
 
 fn corrupt_name(path: &Path) -> PathBuf {
     path.with_extension("sqlite.corrupt")
+}
+
+/// `history.sqlite` + `-wal` → `history.sqlite-wal`, never `with_extension`.
+fn with_suffix(path: &Path, suffix: &str) -> PathBuf {
+    let name = path.file_name().unwrap_or_default().to_string_lossy();
+    path.with_file_name(format!("{name}{suffix}"))
+}
+
+fn cannot_keep(error: &std::io::Error) -> rusqlite::Error {
+    rusqlite::Error::SqliteFailure(
+        rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_CANTOPEN),
+        Some(format!("无法保留损坏的统计数据库：{error}")),
+    )
 }
 
 fn is_corrupt(error: &rusqlite::Error) -> bool {
@@ -274,10 +306,10 @@ fn refusal(version: i64, has_schema: bool) -> Option<rusqlite::Error> {
         0 if has_schema => Some(refuse(
             "统计数据库没有版本号，无法识别；请删除该统计数据库后重新创建".into(),
         )),
-        0 | UPGRADABLE_VERSION | SCHEMA_VERSION => None,
+        0 | UPGRADABLE_VERSION | 7 | SCHEMA_VERSION => None,
         v if v > SCHEMA_VERSION => Some(refuse("统计数据库版本较新".into())),
         v => Some(refuse(format!(
-            "统计数据库版本过旧 (v{v})，本版本只能升级 v6；请先用上一版本打开一次完成升级，或删除该统计数据库后重新创建"
+            "统计数据库版本过旧 (v{v})，本版本只能升级 v6 与 v7；请先用上一版本打开一次完成升级，或删除该统计数据库后重新创建"
         ))),
     }
 }
@@ -317,7 +349,12 @@ fn open_rw_once(path: &Path) -> rusqlite::Result<Connection> {
     if version < SCHEMA_VERSION {
         let tx = conn.unchecked_transaction()?;
         if version == 0 {
-            tx.execute_batch(V7_BASELINE)?;
+            tx.execute_batch(V8_BASELINE)?;
+        } else if version < 8 {
+            tx.execute_batch(
+                "CREATE INDEX IF NOT EXISTS bili_lives_room_started \
+                 ON bili_lives(room, started_at);",
+            )?;
         }
         tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         tx.commit()?;
